@@ -257,6 +257,68 @@ export interface LaunchSession {
   errorSummary: string | null;
 }
 
+export type CrashCauseKind =
+  | "outOfMemory"
+  | "modConflict"
+  | "javaRuntime"
+  | "nativeCrash"
+  | "launcherInterrupted"
+  | "unknown";
+
+export type CrashEvidenceKind =
+  | "gameOutput"
+  | "gameLog"
+  | "gameCrashReport"
+  | "nativeCrash"
+  | "launcherLog"
+  | "launchScript"
+  | "environment";
+
+export interface CrashEvidenceItem {
+  kind: CrashEvidenceKind;
+  bundleName: string;
+  originalBytes: number;
+  includedBytes: number;
+  truncated: boolean;
+}
+
+export interface CrashReport {
+  schemaVersion: number;
+  id: string;
+  launchSessionId: string;
+  instanceId: string;
+  createdAtUnixSeconds: number;
+  cause: CrashCauseKind;
+  title: string;
+  summary: string;
+  recommendations: string[];
+  evidence: CrashEvidenceItem[];
+  redactionSummary: string[];
+}
+
+export interface DiagnosticExportFile {
+  bundleName: string;
+  includedBytes: number;
+  truncated: boolean;
+}
+
+export interface DiagnosticExportPreview {
+  id: string;
+  reportId: string;
+  suggestedFileName: string;
+  files: DiagnosticExportFile[];
+  totalBytes: number;
+  maximumEvidenceBytes: number;
+  redactions: string[];
+}
+
+export interface DiagnosticExportResult {
+  reportId: string;
+  archivePath: string;
+  archiveBytes: number;
+  fileCount: number;
+}
+
 export interface MoyuRuntime {
   getBootstrapState(): Promise<BootstrapState>;
   completeOnboarding(selection: OnboardingSelection): Promise<void>;
@@ -283,6 +345,9 @@ export interface MoyuRuntime {
   startInstance(instanceId: string): Promise<LaunchSession>;
   stopInstance(instanceId: string): Promise<void>;
   listLaunchSessions(): Promise<LaunchSession[]>;
+  listCrashReports(): Promise<CrashReport[]>;
+  previewDiagnosticExport(reportId: string): Promise<DiagnosticExportPreview>;
+  confirmDiagnosticExport(previewId: string): Promise<DiagnosticExportResult>;
   minimizeWindow(): Promise<void>;
   toggleMaximizeWindow(): Promise<void>;
   closeWindow(): Promise<void>;
@@ -292,11 +357,13 @@ const BROWSER_STORAGE_KEY = "moyumax.browser.onboarding";
 const BROWSER_TASKS_KEY = "moyumax.browser.installTasks";
 const BROWSER_INSTANCES_KEY = "moyumax.browser.instances";
 const BROWSER_LAUNCH_SESSIONS_KEY = "moyumax.browser.launchSessions";
+const BROWSER_CRASH_REPORTS_KEY = "moyumax.browser.crashReports";
 const BROWSER_CONTENT_TASKS_KEY = "moyumax.browser.contentTasks";
 const BROWSER_INSTALLED_CONTENT_KEY = "moyumax.browser.installedContent";
 const BROWSER_MODRINTH_OFFLINE_KEY = "moyumax.browser.modrinthOffline";
 const browserPreviews = new Map<string, InstallSelection>();
 const browserContentPreviews = new Map<string, ContentInstallPlan>();
+const browserDiagnosticPreviews = new Map<string, string>();
 
 export function createRuntime(): MoyuRuntime {
   return Reflect.has(window, "__TAURI_INTERNALS__")
@@ -347,6 +414,11 @@ function createTauriRuntime(): MoyuRuntime {
     stopInstance: (instanceId) => invoke<void>("stop_instance", { instanceId }),
     listLaunchSessions: () =>
       invoke<LaunchSession[]>("list_launch_sessions"),
+    listCrashReports: () => invoke<CrashReport[]>("list_crash_reports"),
+    previewDiagnosticExport: (reportId) =>
+      invoke<DiagnosticExportPreview>("preview_diagnostic_export", { reportId }),
+    confirmDiagnosticExport: (previewId) =>
+      invoke<DiagnosticExportResult>("confirm_diagnostic_export", { previewId }),
     minimizeWindow: () => currentWindow.minimize(),
     toggleMaximizeWindow: () => currentWindow.toggleMaximize(),
     closeWindow: () => currentWindow.close(),
@@ -662,6 +734,49 @@ function createBrowserRuntime(): MoyuRuntime {
     async listLaunchSessions() {
       return browserLaunchSessions();
     },
+    async listCrashReports() {
+      return browserCrashReports();
+    },
+    async previewDiagnosticExport(reportId) {
+      const report = browserCrashReports().find((candidate) => candidate.id === reportId);
+      if (!report) throw new Error("崩溃报告不存在");
+      const id = crypto.randomUUID();
+      browserDiagnosticPreviews.set(id, reportId);
+      const files: DiagnosticExportFile[] = [
+        { bundleName: "manifest.json", includedBytes: 1024, truncated: false },
+        { bundleName: "report.json", includedBytes: 2048, truncated: false },
+        ...report.evidence.map((item) => ({
+          bundleName: item.bundleName,
+          includedBytes: item.includedBytes,
+          truncated: item.truncated,
+        })),
+      ].sort((left, right) => left.bundleName.localeCompare(right.bundleName));
+      return {
+        id,
+        reportId,
+        suggestedFileName: `MoyuMax-diagnostics-${reportId}.zip`,
+        files,
+        totalBytes: files.reduce((total, file) => total + file.includedBytes, 0),
+        maximumEvidenceBytes: 512 * 1024,
+        redactions: report.redactionSummary,
+      };
+    },
+    async confirmDiagnosticExport(previewId) {
+      const reportId = browserDiagnosticPreviews.get(previewId);
+      if (!reportId) throw new Error("诊断导出预览已失效，请重新查看文件清单");
+      const previewReport = browserCrashReports().find((report) => report.id === reportId);
+      if (!previewReport) throw new Error("崩溃报告不存在");
+      browserDiagnosticPreviews.delete(previewId);
+      return {
+        reportId,
+        archivePath: `D:\\MoyuMax\\data\\diagnostics\\exports\\MoyuMax-diagnostics-${reportId}.zip`,
+        archiveBytes: previewReport.evidence.reduce(
+          (total, evidence) => total + evidence.includedBytes,
+          3072,
+        ),
+        fileCount: previewReport.evidence.length + 2,
+      };
+    },
     async minimizeWindow() {},
     async toggleMaximizeWindow() {},
     async closeWindow() {},
@@ -714,6 +829,11 @@ function browserInstances(): ManagedInstance[] {
 function browserLaunchSessions(): LaunchSession[] {
   const serialized = window.localStorage.getItem(BROWSER_LAUNCH_SESSIONS_KEY);
   return serialized ? (JSON.parse(serialized) as LaunchSession[]) : [];
+}
+
+function browserCrashReports(): CrashReport[] {
+  const serialized = window.localStorage.getItem(BROWSER_CRASH_REPORTS_KEY);
+  return serialized ? (JSON.parse(serialized) as CrashReport[]) : [];
 }
 
 function browserVersionCatalog(): VersionCatalog {

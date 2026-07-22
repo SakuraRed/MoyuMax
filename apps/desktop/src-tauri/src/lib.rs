@@ -6,9 +6,10 @@ use std::{
 
 use moyumax_core::{
     AppService, BootstrapState, ContentExecutor, ContentInstallPlan, ContentInstallTask,
-    FabricLoaderSummary, InstallExecutor, InstallSelection, InstallTask, InstalledContent,
-    InstanceIsolation, JavaArchitecture, JavaDistribution, LaunchAccount, LaunchExecution,
-    LaunchOptions, LaunchSessionSummary, ManagedInstanceSummary, MetadataClient, ModrinthClient,
+    CrashReportSummary, DiagnosticExportPreview, DiagnosticExportResult, FabricLoaderSummary,
+    InstallExecutor, InstallSelection, InstallTask, InstalledContent, InstanceIsolation,
+    JavaArchitecture, JavaDistribution, LaunchAccount, LaunchExecution, LaunchOptions,
+    LaunchSessionSummary, ManagedInstanceSummary, MetadataClient, ModrinthClient,
     ModrinthSearchPage, ModrinthSearchQuery, OnboardingSelection, RecoveryDecision,
     ResolvedInstallRequest, ResolvedLoader, TaskState, VersionCatalog, run_launch_execution,
 };
@@ -25,6 +26,11 @@ struct InstallPreviewStore {
 #[derive(Debug, Default)]
 struct ContentPreviewStore {
     plans: Mutex<HashMap<String, ContentInstallPlan>>,
+}
+
+#[derive(Debug, Default)]
+struct DiagnosticPreviewStore {
+    reports: Mutex<HashMap<String, String>>,
 }
 
 #[derive(Debug, Clone)]
@@ -144,6 +150,14 @@ struct InstallPreview {
 struct ContentInstallPreview {
     id: String,
     plan: ContentInstallPlan,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct DiagnosticExportPreviewResponse {
+    id: String,
+    #[serde(flatten)]
+    preview: DiagnosticExportPreview,
 }
 
 #[tauri::command]
@@ -447,6 +461,66 @@ fn list_launch_sessions(
         .map_err(|error| error.to_string())
 }
 
+#[tauri::command]
+fn list_crash_reports(service: State<'_, AppService>) -> Result<Vec<CrashReportSummary>, String> {
+    service
+        .list_crash_reports()
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+fn preview_diagnostic_export(
+    service: State<'_, AppService>,
+    previews: State<'_, DiagnosticPreviewStore>,
+    report_id: String,
+) -> Result<DiagnosticExportPreviewResponse, String> {
+    let preview = service
+        .preview_diagnostic_export(&report_id)
+        .map_err(|error| error.to_string())?;
+    let id = Uuid::new_v4().to_string();
+    let mut reports = previews
+        .reports
+        .lock()
+        .map_err(|_| "诊断导出预览状态锁已损坏，请重启 MoyuMax".to_owned())?;
+    if reports.len() >= 32 {
+        reports.clear();
+    }
+    reports.insert(id.clone(), report_id);
+    Ok(DiagnosticExportPreviewResponse { id, preview })
+}
+
+#[tauri::command]
+async fn confirm_diagnostic_export(
+    service: State<'_, AppService>,
+    previews: State<'_, DiagnosticPreviewStore>,
+    preview_id: String,
+) -> Result<DiagnosticExportResult, String> {
+    let report_id = previews
+        .reports
+        .lock()
+        .map_err(|_| "诊断导出预览状态锁已损坏，请重启 MoyuMax".to_owned())?
+        .remove(&preview_id)
+        .ok_or_else(|| "诊断导出预览已失效，请重新查看文件清单".to_owned())?;
+    let service = service.inner().clone();
+    let export_report_id = report_id.clone();
+    let export = match tauri::async_runtime::spawn_blocking(move || {
+        service.export_diagnostic_bundle(&export_report_id)
+    })
+    .await
+    {
+        Ok(result) => result.map_err(|error| error.to_string()),
+        Err(error) => Err(format!("后台诊断导出中断：{error}")),
+    };
+    if export.is_err() {
+        previews
+            .reports
+            .lock()
+            .map_err(|_| "诊断导出预览状态锁已损坏，请重启 MoyuMax".to_owned())?
+            .insert(preview_id, report_id);
+    }
+    export
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
@@ -473,6 +547,7 @@ pub fn run() {
             app.manage(modrinth);
             app.manage(InstallPreviewStore::default());
             app.manage(ContentPreviewStore::default());
+            app.manage(DiagnosticPreviewStore::default());
             app.manage(coordinator);
             app.manage(LaunchCoordinator::default());
             Ok(())
@@ -498,7 +573,10 @@ pub fn run() {
             list_instances,
             start_instance,
             stop_instance,
-            list_launch_sessions
+            list_launch_sessions,
+            list_crash_reports,
+            preview_diagnostic_export,
+            confirm_diagnostic_export
         ])
         .run(tauri::generate_context!())
         .expect("MoyuMax desktop runtime failed");

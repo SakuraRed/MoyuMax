@@ -65,6 +65,21 @@ async fn installed_recommended_fabric_enters_minecraft_and_extracts_natives() {
         "90 秒内未进入 Minecraft/native 初始化\nstdout:\n{stdout}\nstderr:\n{stderr}"
     );
     assert_eq!(completed.state, LaunchSessionState::Stopped);
+    assert!(
+        service
+            .list_crash_reports()
+            .unwrap()
+            .iter()
+            .all(|report| report.launch_session_id != completed.id)
+    );
+    let script = Path::new(&completed.stdout_path)
+        .parent()
+        .unwrap()
+        .join(format!("{}.launch-redacted.cmd.txt", completed.id));
+    let script = std::fs::read_to_string(script).unwrap();
+    assert!(script.contains("<redacted"));
+    assert!(!script.contains("MoyuMaxPlayer"));
+    assert!(!script.contains(&instance.root_directory));
     assert!(contains_dll(
         Path::new(&instance.root_directory)
             .join("natives")

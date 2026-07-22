@@ -10,12 +10,14 @@ use thiserror::Error;
 
 mod catalog;
 mod content;
+mod diagnostics;
 mod execution;
 mod install;
 mod launch;
 
 pub use catalog::*;
 pub use content::*;
+pub use diagnostics::*;
 pub use execution::*;
 pub use install::*;
 pub use launch::*;
@@ -95,6 +97,8 @@ pub enum CoreError {
     Launch(String),
     #[error("内容服务不可用：{0}")]
     Content(String),
+    #[error("无法生成本地诊断：{0}")]
+    Diagnostics(String),
 }
 
 pub type Result<T> = std::result::Result<T, CoreError>;
@@ -119,6 +123,7 @@ impl AppService {
         service.recover_interrupted_install_tasks()?;
         service.recover_interrupted_content_tasks()?;
         service.recover_interrupted_launch_sessions()?;
+        service.generate_missing_crash_reports()?;
         Ok(service)
     }
 
@@ -237,6 +242,18 @@ impl AppService {
             );
             CREATE INDEX IF NOT EXISTS idx_launch_sessions_instance_state
                 ON launch_sessions(instance_id, state, started_at_unix_seconds);
+            CREATE TABLE IF NOT EXISTS crash_reports (
+                id TEXT PRIMARY KEY NOT NULL,
+                launch_session_id TEXT NOT NULL UNIQUE
+                    REFERENCES launch_sessions(id) ON DELETE CASCADE,
+                instance_id TEXT NOT NULL REFERENCES instances(id) ON DELETE CASCADE,
+                created_at_unix_seconds INTEGER NOT NULL,
+                report_json TEXT NOT NULL,
+                evidence_json TEXT NOT NULL,
+                report_directory TEXT NOT NULL
+            );
+            CREATE INDEX IF NOT EXISTS idx_crash_reports_instance_created
+                ON crash_reports(instance_id, created_at_unix_seconds);
             CREATE TABLE IF NOT EXISTS content_install_tasks (
                 id TEXT PRIMARY KEY NOT NULL,
                 instance_id TEXT NOT NULL REFERENCES instances(id) ON DELETE CASCADE,
@@ -280,7 +297,7 @@ impl AppService {
             );
             CREATE INDEX IF NOT EXISTS idx_installed_content_instance_title
                 ON installed_content(instance_id, project_title, project_id);
-            PRAGMA user_version = 5;
+            PRAGMA user_version = 6;
             ",
         )?;
         Ok(())

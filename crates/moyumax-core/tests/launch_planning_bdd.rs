@@ -270,6 +270,7 @@ async fn m4_launch_006_explicit_stop_persists_stopped_state_and_logs() {
     assert!(completed.ended_at_unix_seconds.is_some());
     assert!(Path::new(&completed.stdout_path).is_file());
     assert!(Path::new(&completed.stderr_path).is_file());
+    assert!(service.list_crash_reports().unwrap().is_empty());
 }
 
 #[test]
@@ -302,6 +303,8 @@ fn m4_launch_007_reopen_marks_orphaned_session_interrupted() {
             .error_summary
             .is_some_and(|summary| summary.contains("启动器退出"))
     );
+    let report = reopened.list_crash_reports().unwrap().remove(0);
+    assert_eq!(report.launch_session_id, session_id);
 }
 
 #[test]
@@ -364,6 +367,22 @@ async fn m4_launch_003_nonzero_process_exit_persists_logs_and_failure_state() {
         )
         .unwrap();
     let session_id = execution.session().id.clone();
+    let diagnostic_script = Path::new(&execution.session().stdout_path)
+        .parent()
+        .unwrap()
+        .join(format!("{session_id}.launch-redacted.cmd.txt"));
+    let diagnostic_script = fs::read_to_string(diagnostic_script).unwrap();
+    assert!(diagnostic_script.contains("<redacted"));
+    assert!(!diagnostic_script.contains("LocalPlayer"));
+    assert!(!diagnostic_script.contains(fixture.root.to_string_lossy().as_ref()));
+    assert!(
+        !diagnostic_script.contains(
+            &LaunchAccount::offline("LocalPlayer")
+                .unwrap()
+                .player_uuid()
+                .to_string()
+        )
+    );
     let (_stop, stop_receiver) = tokio::sync::oneshot::channel();
 
     let completed = run_launch_execution(&service, execution, stop_receiver)
@@ -376,6 +395,14 @@ async fn m4_launch_003_nonzero_process_exit_persists_logs_and_failure_state() {
     assert!(Path::new(&completed.stdout_path).is_file());
     assert!(Path::new(&completed.stderr_path).is_file());
     assert_eq!(service.list_launch_sessions().unwrap()[0].id, session_id);
+    let report = service.list_crash_reports().unwrap().remove(0);
+    assert_eq!(report.launch_session_id, session_id);
+    assert!(
+        report
+            .evidence
+            .iter()
+            .any(|item| { item.bundle_name == "moyumax/launch-redacted.cmd.txt" })
+    );
 }
 
 #[tokio::test]
@@ -389,6 +416,7 @@ async fn m4_launch_011_log_initialization_failure_is_persisted() {
             &LaunchOptions::default(),
         )
         .unwrap();
+    fs::remove_dir_all(fixture.root.join(".minecraft/logs")).unwrap();
     fs::write(fixture.root.join(".minecraft/logs"), b"not a directory").unwrap();
     let (_stop_sender, stop_receiver) = tokio::sync::oneshot::channel();
 
@@ -401,6 +429,14 @@ async fn m4_launch_011_log_initialization_failure_is_persisted() {
     assert_eq!(session.state, LaunchSessionState::Failed);
     assert!(session.ended_at_unix_seconds.is_some());
     assert!(session.error_summary.is_some());
+    let report = service.list_crash_reports().unwrap().remove(0);
+    assert_eq!(report.launch_session_id, session.id);
+    assert!(
+        report
+            .evidence
+            .iter()
+            .any(|item| { item.bundle_name == "moyumax/environment.json" })
+    );
 }
 
 struct LaunchFixture {

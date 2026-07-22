@@ -13,7 +13,10 @@ use sha1::{Digest, Sha1};
 use tokio::{process::Command, sync::oneshot};
 use uuid::Uuid;
 
-use crate::{AppService, CoreError, ManagedInstanceSummary, Result, unix_timestamp};
+use crate::{
+    AppService, CoreError, ManagedInstanceSummary, Result, append_launch_diagnostic_event,
+    remove_launch_diagnostic_files, unix_timestamp, write_launch_diagnostic_files,
+};
 
 const WINDOWS_VERSION: &str = "10.0.19045";
 
@@ -252,7 +255,6 @@ impl AppService {
             stderr_path: path_string(&stderr_path)?,
             error_summary: None,
         };
-
         let mut connection = self.connection()?;
         let transaction = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
         let active = transaction
@@ -265,7 +267,19 @@ impl AppService {
         if active.is_some() {
             return Err(CoreError::Launch("该实例已经在运行".to_owned()));
         }
-        transaction.execute(
+        let raw_script = diagnostic_launch_script(&prepared)?;
+        write_launch_diagnostic_files(
+            &logs_directory,
+            &session.id,
+            &raw_script,
+            &[
+                account.player_name.clone(),
+                account.player_uuid.to_string(),
+                instance.root_directory.clone(),
+                prepared.working_directory.to_string_lossy().into_owned(),
+            ],
+        )?;
+        if let Err(error) = transaction.execute(
             "INSERT INTO launch_sessions (id, instance_id, player_name, state, started_at_unix_seconds, stdout_path, stderr_path) VALUES (?1, ?2, ?3, 'starting', ?4, ?5, ?6)",
             params![
                 session.id,
@@ -275,8 +289,14 @@ impl AppService {
                 session.stdout_path,
                 session.stderr_path,
             ],
-        )?;
-        transaction.commit()?;
+        ) {
+            remove_launch_diagnostic_files(&logs_directory, &session.id);
+            return Err(error.into());
+        }
+        if let Err(error) = transaction.commit() {
+            remove_launch_diagnostic_files(&logs_directory, &session.id);
+            return Err(error.into());
+        }
         Ok(LaunchExecution { session, prepared })
     }
 
@@ -405,6 +425,23 @@ impl AppService {
             .find(|session| session.id == session_id)
             .ok_or_else(|| CoreError::Launch("启动会话完成后无法读取".to_owned()))
     }
+
+    fn finish_failed_launch_session(
+        &self,
+        session_id: &str,
+        exit_code: Option<i32>,
+        error_summary: &str,
+    ) -> Result<LaunchSessionSummary> {
+        let session = self.finish_launch_session(
+            session_id,
+            LaunchSessionState::Failed,
+            exit_code,
+            Some(error_summary),
+        )?;
+        let _ = append_launch_diagnostic_event(&session, error_summary);
+        let _ = self.create_crash_report_for_session(session_id);
+        Ok(session)
+    }
 }
 
 pub async fn run_launch_execution(
@@ -440,12 +477,7 @@ pub async fn run_launch_execution(
         Ok(files) => files,
         Err(error) => {
             let summary = error.to_string();
-            let _ = service.finish_launch_session(
-                &session_id,
-                LaunchSessionState::Failed,
-                None,
-                Some(&summary),
-            );
+            let _ = service.finish_failed_launch_session(&session_id, None, &summary);
             return Err(error);
         }
     };
@@ -470,35 +502,27 @@ pub async fn run_launch_execution(
         Ok(child) => child,
         Err(error) => {
             let summary = error.to_string();
-            let _ = service.finish_launch_session(
-                &session_id,
-                LaunchSessionState::Failed,
-                None,
-                Some(&summary),
-            );
+            let _ = service.finish_failed_launch_session(&session_id, None, &summary);
             return Err(error.into());
         }
     };
+    let _ = append_launch_diagnostic_event(&execution.session, "游戏进程已创建");
     if let Err(error) = service.mark_launch_running(&session_id) {
         let _ = child.kill().await;
         let _ = child.wait().await;
         let summary = error.to_string();
-        let _ = service.finish_launch_session(
-            &session_id,
-            LaunchSessionState::Failed,
-            None,
-            Some(&summary),
-        );
+        let _ = service.finish_failed_launch_session(&session_id, None, &summary);
         return Err(error);
     }
+    let _ = append_launch_diagnostic_event(&execution.session, "游戏会话进入运行状态");
 
     let lifecycle: Result<_> = async {
         tokio::select! {
-            status = child.wait() => Ok((status?, false)),
+            biased;
             stop_request = &mut stop_receiver => {
                 if stop_request.is_ok() {
                     if let Some(status) = child.try_wait()? {
-                        Ok((status, false))
+                        Ok((status, true))
                     } else {
                         child.kill().await?;
                         Ok((child.wait().await?, true))
@@ -507,6 +531,7 @@ pub async fn run_launch_execution(
                     Ok((child.wait().await?, false))
                 }
             }
+            status = child.wait() => Ok((status?, false)),
         }
     }
     .await;
@@ -514,38 +539,64 @@ pub async fn run_launch_execution(
         Ok(outcome) => outcome,
         Err(error) => {
             let summary = error.to_string();
-            let _ = service.finish_launch_session(
-                &session_id,
-                LaunchSessionState::Failed,
-                None,
-                Some(&summary),
-            );
+            let _ = service.finish_failed_launch_session(&session_id, None, &summary);
             return Err(error);
         }
     };
     let exit_code = status.code();
     if stopped {
-        return service.finish_launch_session(
+        let session = service.finish_launch_session(
             &session_id,
             LaunchSessionState::Stopped,
             exit_code,
             None,
-        );
+        )?;
+        let _ = append_launch_diagnostic_event(&session, "用户请求停止游戏，会话已结束");
+        return Ok(session);
     }
     if status.success() {
-        service.finish_launch_session(&session_id, LaunchSessionState::Completed, exit_code, None)
+        let session = service.finish_launch_session(
+            &session_id,
+            LaunchSessionState::Completed,
+            exit_code,
+            None,
+        )?;
+        let _ = append_launch_diagnostic_event(&session, "游戏正常退出");
+        Ok(session)
     } else {
         let summary = exit_code.map_or_else(
             || "游戏进程异常终止且没有退出码".to_owned(),
             |code| format!("游戏进程退出码：{code}"),
         );
-        service.finish_launch_session(
-            &session_id,
-            LaunchSessionState::Failed,
-            exit_code,
-            Some(&summary),
-        )
+        service.finish_failed_launch_session(&session_id, exit_code, &summary)
     }
+}
+
+fn diagnostic_launch_script(prepared: &PreparedLaunch) -> Result<String> {
+    let mut lines = vec![
+        "@echo off".to_owned(),
+        "rem MoyuMax 诊断副本，仅用于展示；敏感值和本地目录将在写入前脱敏。".to_owned(),
+        format!(
+            "cd /d {}",
+            serde_json::to_string(&prepared.working_directory.to_string_lossy())?
+        ),
+    ];
+    let executable = serde_json::to_string(&prepared.executable.to_string_lossy())?;
+    if prepared.arguments.is_empty() {
+        lines.push(executable);
+    } else {
+        lines.push(format!("{executable} ^"));
+        for (index, argument) in prepared.arguments.iter().enumerate() {
+            let suffix = if index + 1 == prepared.arguments.len() {
+                ""
+            } else {
+                " ^"
+            };
+            lines.push(format!("  {}{suffix}", serde_json::to_string(argument)?));
+        }
+    }
+    lines.push(String::new());
+    Ok(lines.join("\r\n"))
 }
 
 #[derive(Debug, Deserialize)]

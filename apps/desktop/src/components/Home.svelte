@@ -3,6 +3,7 @@
 
   import type {
     ContentInstallTask,
+    CrashReport,
     InstallTask,
     LaunchSession,
     ManagedInstance,
@@ -19,10 +20,12 @@
     contentTasks: ContentInstallTask[];
     instances: ManagedInstance[];
     launchSessions: LaunchSession[];
+    crashReports: CrashReport[];
     notice: string;
     onInstall: () => void;
     onOpenTasks: () => void;
     onOpenResources: () => void;
+    onOpenCrash: (report: CrashReport) => void;
     onStateChanged: () => Promise<void>;
     onMinimize: () => Promise<void>;
     onToggleMaximize: () => Promise<void>;
@@ -36,10 +39,12 @@
     contentTasks,
     instances,
     launchSessions,
+    crashReports,
     notice,
     onInstall,
     onOpenTasks,
     onOpenResources,
+    onOpenCrash,
     onStateChanged,
     onMinimize,
     onToggleMaximize,
@@ -78,6 +83,11 @@
 
   function latestSession(instanceId: string): LaunchSession | undefined {
     return launchSessions.find((session) => session.instanceId === instanceId);
+  }
+
+  function crashReportForSession(session: LaunchSession | undefined): CrashReport | undefined {
+    if (!session || !["failed", "interrupted"].includes(session.state)) return undefined;
+    return crashReports.find((report) => report.launchSessionId === session.id);
   }
 
   function loaderLabel(instance: ManagedInstance): string {
@@ -188,7 +198,8 @@
           {#each instances as instance, index}
             {@const active = activeSession(instance.id)}
             {@const latest = latestSession(instance.id)}
-            <article class:running={active?.state === "running"} class="instance-card">
+            {@const crashReport = crashReportForSession(latest)}
+            <article class:running={active?.state === "running"} class:crashed={Boolean(crashReport)} class="instance-card">
               <div class="instance-cover" aria-hidden="true">{instance.name.slice(0, 1)}</div>
               <div class="instance-copy">
                 <div class="instance-title-line">
@@ -217,6 +228,9 @@
                     disabled={changingInstance === instance.id || instance.state !== "ready"}
                     onclick={() => void start(instance)}
                   ><Icon name="play" size={14} />{changingInstance === instance.id ? "正在启动" : "启动游戏"}</button>
+                {/if}
+                {#if crashReport && !active}
+                  <button class="button crash-report-button" onclick={() => onOpenCrash(crashReport)}>查看崩溃报告</button>
                 {/if}
                 <span>启动前将使用托管 Java</span>
               </div>

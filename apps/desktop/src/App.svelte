@@ -2,6 +2,7 @@
   import { onMount } from "svelte";
 
   import AppShell from "./components/AppShell.svelte";
+  import CrashCenter from "./components/CrashCenter.svelte";
   import GameInstall from "./components/GameInstall.svelte";
   import Home from "./components/Home.svelte";
   import Onboarding from "./components/Onboarding.svelte";
@@ -11,13 +12,14 @@
   import type {
     BootstrapState,
     ContentInstallTask,
+    CrashReport,
     InstallTask,
     LaunchSession,
     ManagedInstance,
     OnboardingSelection,
   } from "./runtime";
 
-  type Phase = "loading" | "onboarding" | "home" | "install" | "resources" | "tasks" | "fatal";
+  type Phase = "loading" | "onboarding" | "home" | "install" | "resources" | "tasks" | "crash" | "fatal";
 
   const runtime = createRuntime();
   let phase = $state<Phase>("loading");
@@ -29,6 +31,8 @@
   let contentTasks = $state<ContentInstallTask[]>([]);
   let instances = $state<ManagedInstance[]>([]);
   let launchSessions = $state<LaunchSession[]>([]);
+  let crashReports = $state<CrashReport[]>([]);
+  let selectedCrashReport = $state<CrashReport | null>(null);
   let homeRefreshRunning = false;
 
   onMount(() => {
@@ -48,6 +52,7 @@
         initialContentTasks,
         initialInstances,
         initialSessions,
+        initialCrashReports,
       ] =
         await Promise.all([
           runtime.getBootstrapState(),
@@ -55,6 +60,7 @@
           runtime.getContentInstallTasks(),
           runtime.listInstances(),
           runtime.listLaunchSessions(),
+          runtime.listCrashReports(),
         ]);
       bootstrap = bootstrapState;
       settings = bootstrap.settings ?? bootstrap.defaults;
@@ -62,6 +68,7 @@
       contentTasks = initialContentTasks;
       instances = initialInstances;
       launchSessions = initialSessions;
+      crashReports = initialCrashReports;
       phase = bootstrap.requiresOnboarding ? "onboarding" : "home";
     } catch (error) {
       fatalMessage = error instanceof Error ? error.message : String(error);
@@ -96,7 +103,14 @@
     } catch (error) {
       notice = `无法刷新任务：${error instanceof Error ? error.message : String(error)}`;
     }
+    selectedCrashReport = null;
     phase = "home";
+  }
+
+  function openCrashReport(report: CrashReport): void {
+    selectedCrashReport = report;
+    notice = "";
+    phase = "crash";
   }
 
   async function refreshTasks(): Promise<void> {
@@ -107,16 +121,18 @@
   }
 
   async function refreshHomeState(): Promise<void> {
-    const [nextTasks, nextContentTasks, nextInstances, nextSessions] = await Promise.all([
+    const [nextTasks, nextContentTasks, nextInstances, nextSessions, nextCrashReports] = await Promise.all([
       runtime.getInstallTasks(),
       runtime.getContentInstallTasks(),
       runtime.listInstances(),
       runtime.listLaunchSessions(),
+      runtime.listCrashReports(),
     ]);
     tasks = nextTasks;
     contentTasks = nextContentTasks;
     instances = nextInstances;
     launchSessions = nextSessions;
+    crashReports = nextCrashReports;
   }
 
   async function refreshHomeStateSilently(): Promise<void> {
@@ -176,10 +192,12 @@
     {contentTasks}
     {instances}
     {launchSessions}
+    {crashReports}
     {notice}
     onInstall={openInstaller}
     onOpenTasks={() => phase = "tasks"}
     onOpenResources={() => phase = "resources"}
+    onOpenCrash={openCrashReport}
     onStateChanged={refreshHomeState}
     onMinimize={() => runtime.minimizeWindow()}
     onToggleMaximize={() => runtime.toggleMaximizeWindow()}
@@ -215,6 +233,19 @@
     onBack={() => void returnHome()}
     onOpenResources={() => phase = "resources"}
     onTasksChanged={refreshTasks}
+    onMinimize={() => runtime.minimizeWindow()}
+    onToggleMaximize={() => runtime.toggleMaximizeWindow()}
+    onClose={() => runtime.closeWindow()}
+  />
+{:else if phase === "crash" && settings && selectedCrashReport}
+  <CrashCenter
+    {runtime}
+    {settings}
+    report={selectedCrashReport}
+    instance={instances.find((instance) => instance.id === selectedCrashReport?.instanceId) ?? null}
+    onBack={() => void returnHome()}
+    onOpenResources={() => phase = "resources"}
+    onOpenTasks={() => phase = "tasks"}
     onMinimize={() => runtime.minimizeWindow()}
     onToggleMaximize={() => runtime.toggleMaximizeWindow()}
     onClose={() => runtime.closeWindow()}
