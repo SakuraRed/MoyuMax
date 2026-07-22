@@ -1,0 +1,12 @@
+{
+  "name": "moyumax",
+  "version": "0.1.0-preview.1",
+  "private": true,
+  "packageManager": "pnpm@10.26.2",
+  "scripts": {
+    "build": "pnpm --filter @moyumax/desktop build",
+    "dev": "pnpm --filter @moyumax/desktop dev",
+    "lint": "pnpm --filter @moyumax/desktop lint",
+    "test": "pnpm --filter @moyumax/desktop test"
+  }
+}

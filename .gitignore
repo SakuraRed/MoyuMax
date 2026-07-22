@@ -1,0 +1,36 @@
+# Rust
+/target/
+**/*.rs.bk
+
+# Node
+/node_modules/
+**/node_modules/
+**/dist/
+*.tsbuildinfo
+
+# Runtime data
+/data/
+*.db
+*.db-shm
+*.db-wal
+*.sqlite
+*.sqlite3
+
+# Local configuration and secrets
+.env
+.env.*
+!.env.example
+
+# Test and browser artifacts
+/.playwright-cli/
+/output/
+/coverage/
+/apps/desktop/test-results/
+/apps/desktop/playwright-report/
+
+# IDE and OS
+.idea/
+.vscode/
+.DS_Store
+Thumbs.db
+desktop.ini
