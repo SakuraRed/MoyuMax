@@ -1,17 +1,48 @@
-use std::{collections::HashMap, path::PathBuf, sync::Mutex};
+use std::{
+    collections::HashMap,
+    path::PathBuf,
+    sync::{Arc, Mutex},
+};
 
 use moyumax_core::{
-    AppService, BootstrapState, FabricLoaderSummary, InstallSelection, InstallTask,
-    InstanceIsolation, JavaArchitecture, JavaDistribution, MetadataClient, OnboardingSelection,
-    RecoveryDecision, ResolvedInstallRequest, ResolvedLoader, VersionCatalog,
+    AppService, BootstrapState, FabricLoaderSummary, InstallExecutor, InstallSelection,
+    InstallTask, InstanceIsolation, JavaArchitecture, JavaDistribution, MetadataClient,
+    OnboardingSelection, RecoveryDecision, ResolvedInstallRequest, ResolvedLoader, TaskState,
+    VersionCatalog,
 };
 use serde::Serialize;
 use tauri::{Manager, State};
+use tokio::sync::Semaphore;
 use uuid::Uuid;
 
 #[derive(Debug, Default)]
 struct InstallPreviewStore {
     requests: Mutex<HashMap<String, ResolvedInstallRequest>>,
+}
+
+#[derive(Debug, Clone)]
+struct TaskCoordinator {
+    executor: InstallExecutor,
+    task_permits: Arc<Semaphore>,
+}
+
+impl TaskCoordinator {
+    fn new() -> Result<Self, String> {
+        Ok(Self {
+            executor: InstallExecutor::new(4).map_err(|error| error.to_string())?,
+            task_permits: Arc::new(Semaphore::new(1)),
+        })
+    }
+
+    fn submit(&self, service: AppService, task_id: String) {
+        let coordinator = self.clone();
+        tauri::async_runtime::spawn(async move {
+            let Ok(_permit) = coordinator.task_permits.acquire().await else {
+                return;
+            };
+            let _ = coordinator.executor.execute_task(&service, &task_id).await;
+        });
+    }
 }
 
 #[derive(Debug, Serialize)]
@@ -120,6 +151,7 @@ async fn preview_install(
 fn confirm_install_preview(
     service: State<'_, AppService>,
     previews: State<'_, InstallPreviewStore>,
+    coordinator: State<'_, TaskCoordinator>,
     preview_id: String,
 ) -> Result<InstallTask, String> {
     let request = previews
@@ -128,9 +160,11 @@ fn confirm_install_preview(
         .map_err(|_| "安装预览状态锁已损坏，请重启 MoyuMax".to_owned())?
         .remove(&preview_id)
         .ok_or_else(|| "安装预览已失效，请返回重新确认".to_owned())?;
-    service
+    let task = service
         .enqueue_install_task(&request)
-        .map_err(|error| error.to_string())
+        .map_err(|error| error.to_string())?;
+    coordinator.submit(service.inner().clone(), task.id.clone());
+    Ok(task)
 }
 
 #[tauri::command]
@@ -143,12 +177,30 @@ fn get_install_tasks(service: State<'_, AppService>) -> Result<Vec<InstallTask>,
 #[tauri::command]
 fn resolve_install_task_recovery(
     service: State<'_, AppService>,
+    coordinator: State<'_, TaskCoordinator>,
     task_id: String,
     decision: RecoveryDecision,
 ) -> Result<(), String> {
     service
         .resolve_install_task_recovery(&task_id, decision)
-        .map_err(|error| error.to_string())
+        .map_err(|error| error.to_string())?;
+    if decision == RecoveryDecision::Resume {
+        coordinator.submit(service.inner().clone(), task_id);
+    }
+    Ok(())
+}
+
+#[tauri::command]
+fn retry_install_task(
+    service: State<'_, AppService>,
+    coordinator: State<'_, TaskCoordinator>,
+    task_id: String,
+) -> Result<(), String> {
+    service
+        .retry_failed_install_task(&task_id)
+        .map_err(|error| error.to_string())?;
+    coordinator.submit(service.inner().clone(), task_id);
+    Ok(())
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -160,9 +212,16 @@ pub fn run() {
             let default_data_directory = default_data_directory()?;
             let service = AppService::open(&database_path, &default_data_directory)?;
             let metadata = MetadataClient::new()?;
+            let coordinator = TaskCoordinator::new().map_err(std::io::Error::other)?;
+            for task in service.list_install_tasks()? {
+                if task.state == TaskState::Queued {
+                    coordinator.submit(service.clone(), task.id);
+                }
+            }
             app.manage(service);
             app.manage(metadata);
             app.manage(InstallPreviewStore::default());
+            app.manage(coordinator);
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -174,7 +233,8 @@ pub fn run() {
             preview_install,
             confirm_install_preview,
             get_install_tasks,
-            resolve_install_task_recovery
+            resolve_install_task_recovery,
+            retry_install_task
         ])
         .run(tauri::generate_context!())
         .expect("MoyuMax desktop runtime failed");

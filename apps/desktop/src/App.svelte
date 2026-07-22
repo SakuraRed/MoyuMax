@@ -21,6 +21,10 @@
 
   onMount(() => {
     void initialize();
+    const taskPoll = setInterval(() => {
+      if (phase === "home" || phase === "tasks") void refreshTasksSilently();
+    }, 750);
+    return () => clearInterval(taskPoll);
   });
 
   async function initialize(): Promise<void> {
@@ -67,6 +71,14 @@
 
   async function refreshTasks(): Promise<void> {
     tasks = await runtime.getInstallTasks();
+  }
+
+  async function refreshTasksSilently(): Promise<void> {
+    try {
+      tasks = await runtime.getInstallTasks();
+    } catch {
+      // 可交互页面保持可用，显式进入任务中心时再显示读取错误。
+    }
   }
 </script>
 

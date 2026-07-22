@@ -59,7 +59,11 @@ test("UI-A11Y-001 在 960x600 和 200% 放大下主区域不重叠", async ({ pa
 
 test("UI-A11Y-001 文本与卡片边缘保持可读内边距", async ({ page }) => {
   await expectElementPadding(page, ".wizard-card", { block: 18, inline: 22 });
-  await expectElementPadding(page, ".choice-group", { block: 8, inline: 16 });
+  await expectContentInset(page, ".choice", ".choice-copy", {
+    top: 10,
+    right: 12,
+    bottom: 10,
+  });
 
   const legendGap = await page.evaluate(() => {
     const legend = document.querySelector<HTMLElement>(".choice-section legend");
@@ -70,10 +74,18 @@ test("UI-A11Y-001 文本与卡片边缘保持可读内边距", async ({ page }) 
   expect(legendGap).toBeGreaterThanOrEqual(7);
 
   await page.getByRole("button", { name: "下一步" }).click();
-  await expectElementPadding(page, ".choice-group", { block: 8, inline: 16 });
+  await expectContentInset(page, ".choice", ".choice-copy", {
+    top: 10,
+    right: 12,
+    bottom: 10,
+  });
 
   await page.getByRole("button", { name: "下一步" }).click();
-  await expectElementPadding(page, ".settings-panel", { block: 12, inline: 16 });
+  await expectContentInset(page, ".setting-row", ".setting-row > span:first-child", {
+    top: 10,
+    bottom: 10,
+    left: 12,
+  });
 
   await page.getByRole("button", { name: "完成设置" }).click();
   await expectElementPadding(page, ".summary-list > div", { block: 10, inline: 16 });
@@ -92,7 +104,11 @@ test("M2-INSTALL-001 默认配置生成可恢复安装任务", async ({ page }) 
     "aria-checked",
     "true",
   );
-  await expectElementPadding(page, ".install-choice-list", { block: 8, inline: 16 });
+  await expectContentInset(page, ".install-choice-row", ".choice-copy", {
+    top: 10,
+    right: 12,
+    bottom: 10,
+  });
   await expectElementPadding(page, ".install-form-card", { block: 16, inline: 18 });
   await assertDocumentHasNoHorizontalOverflow(page);
 
@@ -104,7 +120,7 @@ test("M2-INSTALL-001 默认配置生成可恢复安装任务", async ({ page }) 
 
   await page.getByRole("button", { name: "开始安装" }).click();
   await expect(page.getByRole("heading", { name: "安装任务已进入队列" })).toBeVisible();
-  await expect(page.getByText("等待执行器", { exact: true })).toBeVisible();
+  await expect(page.getByText("等待调度", { exact: true })).toBeVisible();
   await expect(page.getByText("安装游戏环境", { exact: true })).toBeVisible();
   await expectElementPadding(page, ".queued-task-card", { block: 16, inline: 18 });
 
@@ -175,6 +191,33 @@ async function expectElementPadding(
   expect(spacing.right).toBeGreaterThanOrEqual(minimum.inline);
   expect(spacing.bottom).toBeGreaterThanOrEqual(minimum.block);
   expect(spacing.left).toBeGreaterThanOrEqual(minimum.inline);
+}
+
+async function expectContentInset(
+  page: import("@playwright/test").Page,
+  containerSelector: string,
+  contentSelector: string,
+  minimum: Partial<Record<"top" | "right" | "bottom" | "left", number>>,
+): Promise<void> {
+  const inset = await page.locator(containerSelector).first().evaluate(
+    (container, selector) => {
+      const content = container.querySelector<HTMLElement>(selector);
+      if (!content) throw new Error(`missing content region: ${selector}`);
+      const containerBounds = container.getBoundingClientRect();
+      const contentBounds = content.getBoundingClientRect();
+      return {
+        top: contentBounds.top - containerBounds.top,
+        right: containerBounds.right - contentBounds.right,
+        bottom: containerBounds.bottom - contentBounds.bottom,
+        left: contentBounds.left - containerBounds.left,
+      };
+    },
+    contentSelector,
+  );
+
+  for (const [side, expected] of Object.entries(minimum)) {
+    expect(inset[side as keyof typeof inset]).toBeGreaterThanOrEqual(expected);
+  }
 }
 
 async function assertRegionsDoNotOverlap(

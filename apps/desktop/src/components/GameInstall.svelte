@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { onMount, tick } from "svelte";
+  import { onDestroy, onMount, tick } from "svelte";
 
   import {
     defaultInstanceName,
@@ -55,6 +55,8 @@
   let showOlderVersions = $state(false);
   let pageRoot: HTMLElement | undefined = $state();
   let loaderRequestSequence = 0;
+  let taskPoll: ReturnType<typeof setInterval> | undefined;
+  let taskPollRunning = false;
 
   const visibleVersions = $derived(
     (catalog?.versions ?? [])
@@ -71,6 +73,10 @@
 
   onMount(() => {
     void loadCatalog();
+  });
+
+  onDestroy(() => {
+    if (taskPoll) clearInterval(taskPoll);
   });
 
   async function loadCatalog(): Promise<void> {
@@ -167,10 +173,39 @@
     try {
       task = await runtime.confirmInstallPreview(preview.id);
       view = "queued";
+      startTaskPolling();
     } catch (error) {
       errorMessage = error instanceof Error ? error.message : String(error);
       view = "confirm";
     }
+  }
+
+  function startTaskPolling(): void {
+    if (taskPoll) clearInterval(taskPoll);
+    taskPoll = setInterval(() => void refreshCurrentTask(), 400);
+  }
+
+  async function refreshCurrentTask(): Promise<void> {
+    if (!task || taskPollRunning) return;
+    taskPollRunning = true;
+    try {
+      const refreshed = (await runtime.getInstallTasks()).find((candidate) => candidate.id === task?.id);
+      if (refreshed) task = refreshed;
+      if (refreshed && ["completed", "failed", "cancelled"].includes(refreshed.state)) {
+        if (taskPoll) clearInterval(taskPoll);
+        taskPoll = undefined;
+      }
+    } finally {
+      taskPollRunning = false;
+    }
+  }
+
+  function taskStateLabel(current: InstallTask): string {
+    if (current.state === "completed") return "已完成";
+    if (current.state === "failed") return "需要处理";
+    if (current.state === "committing") return "正在提交";
+    if (current.state === "running") return "正在安装";
+    return "等待调度";
   }
 
   function returnToConfiguration(): void {
@@ -192,7 +227,7 @@
   dataDirectory={settings.dataDirectory}
   activeNavigation={view === "queued" ? "tasks" : "instances"}
   connectionStatus={catalog?.source === "cache" ? "离线模式 · 使用版本目录缓存" : "官方元数据 · 按需连接"}
-  taskStatus={task ? "1 个安装任务已排队" : "无活动任务"}
+  taskStatus={task ? `安装任务：${taskStateLabel(task)}` : "无活动任务"}
   {onMinimize}
   {onToggleMaximize}
   {onClose}
@@ -363,16 +398,24 @@
       </div>
     {:else if view === "queued" && task}
       <section class="queued-result" aria-live="polite">
-        <span class="done-mark"><Icon name="check" size={18} /></span>
-        <h1>安装任务已进入队列</h1>
-        <p>计划已经持久化。当前构建尚未接入文件执行器，因此不会显示虚假下载进度。</p>
+        <span class="done-mark"><Icon name={task.state === "completed" ? "check" : "task"} size={18} /></span>
+        <h1>{task.state === "completed" ? "游戏安装完成" : task.state === "failed" ? "安装任务未完成" : task.state === "queued" ? "安装任务已进入队列" : "正在安装游戏"}</h1>
+        <p>{task.state === "completed" ? "实例已经通过校验并原子提交，现在可以从首页进入实例。" : task.state === "failed" ? "没有发布半完成实例；可在任务中心查看原因并重试。" : "计划已持久化，以下进度来自真实下载与校验状态。"}</p>
         <div class="queued-task-card">
-          <div><strong>{task.plan.instanceName}</strong><span>等待执行器</span></div>
+          <div><strong>{task.plan.instanceName}</strong><span>{taskStateLabel(task)}</span></div>
           <ol>
             {#each task.plan.stages as stage, index}
-              <li class:current={index === 0}><span>{index + 1}</span><b>{installStageLabel(stage)}</b></li>
+              <li class:current={task.currentStage === stage}><span>{index + 1}</span><b>{installStageLabel(stage)}</b></li>
             {/each}
           </ol>
+          {#if task.state === "running" || task.state === "committing"}
+            <div class="queued-progress" aria-label={`已完成 ${task.progress.completedBytes} 字节${task.progress.totalBytes === null ? "，总量未知" : `，共 ${task.progress.totalBytes} 字节`}`}>
+              <div class="progress-track"><span style:width={task.progress.totalBytes && task.progress.totalBytes > 0 ? `${Math.min(100, task.progress.completedBytes / task.progress.totalBytes * 100)}%` : "24%"}></span></div>
+              <small>{task.progress.currentItem ?? "正在处理"}</small>
+            </div>
+          {:else if task.state === "failed"}
+            <div class="error-block task-error" role="alert"><strong>可恢复失败</strong><span>{task.progress.errorSummary ?? "请从任务中心重试。"}</span></div>
+          {/if}
           <small>暂存区：<code>{task.stagingDirectory}</code></small>
         </div>
         <button class="button primary" data-autofocus="true" onclick={onBack}>返回首页</button>

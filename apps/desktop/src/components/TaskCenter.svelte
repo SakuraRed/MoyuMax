@@ -48,10 +48,24 @@
     }
   }
 
+  async function retryTask(taskId: string): Promise<void> {
+    changingTask = taskId;
+    errorMessage = "";
+    try {
+      await runtime.retryInstallTask(taskId);
+      await onTasksChanged();
+    } catch (error) {
+      errorMessage = error instanceof Error ? error.message : String(error);
+    } finally {
+      changingTask = "";
+    }
+  }
+
   function stateLabel(state: TaskState): string {
     const labels: Record<TaskState, string> = {
       queued: "已排队",
       running: "正在运行",
+      committing: "正在提交",
       paused: "已暂停",
       awaitingRecovery: "等待恢复确认",
       failed: "失败",
@@ -108,7 +122,21 @@
                 {/each}
               </ol>
               {#if task.state === "queued"}
-                <p class="task-boundary">计划与暂存区已建立；文件执行器接入前保持排队，不显示虚假速度或剩余时间。</p>
+                <p class="task-boundary">计划与暂存区已建立，正在等待统一任务调度器分配执行槽。</p>
+              {:else if task.state === "running" || task.state === "committing"}
+                <div class="task-progress" aria-label={`已完成 ${task.progress.completedBytes} 字节${task.progress.totalBytes === null ? "，总量未知" : `，共 ${task.progress.totalBytes} 字节`}`}>
+                  <div class="progress-track">
+                    <span style:width={task.progress.totalBytes && task.progress.totalBytes > 0 ? `${Math.min(100, task.progress.completedBytes / task.progress.totalBytes * 100)}%` : "24%"}></span>
+                  </div>
+                  <p>{task.progress.currentItem ?? "正在处理"}</p>
+                </div>
+              {:else if task.state === "failed"}
+                <div class="error-block task-error" role="alert">
+                  <strong>安装任务未完成</strong>
+                  <span>尚未发布可启动实例；已校验共享文件不会被删除。</span>
+                  <span>{task.progress.errorSummary ?? "请查看详情后重试。"}</span>
+                  <button class="button primary compact" disabled={changingTask === task.id} onclick={() => void retryTask(task.id)}>重试未完成内容</button>
+                </div>
               {/if}
             {/if}
             <details><summary>任务路径</summary><code>{task.stagingDirectory}</code></details>

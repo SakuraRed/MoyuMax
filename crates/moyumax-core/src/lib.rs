@@ -9,9 +9,11 @@ use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
 mod catalog;
+mod execution;
 mod install;
 
 pub use catalog::*;
+pub use execution::*;
 pub use install::*;
 
 const SETTING_ONBOARDING_COMPLETE: &str = "onboarding_complete";
@@ -81,6 +83,10 @@ pub enum CoreError {
     InvalidStoredState(String),
     #[error("无法获取在线元数据：{0}")]
     Network(#[from] reqwest::Error),
+    #[error("下载未完成：{0}")]
+    Download(String),
+    #[error("压缩包不安全或无法解包：{0}")]
+    Archive(String),
 }
 
 pub type Result<T> = std::result::Result<T, CoreError>;
@@ -184,6 +190,13 @@ impl AppService {
                 environment_id TEXT NOT NULL REFERENCES managed_java_environments(id),
                 action TEXT NOT NULL
             );
+            CREATE TABLE IF NOT EXISTS task_progress (
+                task_id TEXT PRIMARY KEY NOT NULL REFERENCES install_tasks(id) ON DELETE CASCADE,
+                completed_bytes INTEGER NOT NULL DEFAULT 0,
+                total_bytes INTEGER,
+                current_item TEXT,
+                error_summary TEXT
+            );
             CREATE TABLE IF NOT EXISTS instances (
                 id TEXT PRIMARY KEY NOT NULL,
                 name TEXT NOT NULL,
@@ -194,7 +207,13 @@ impl AppService {
                 state TEXT NOT NULL,
                 created_at_unix_seconds INTEGER NOT NULL
             );
-            PRAGMA user_version = 2;
+            CREATE TABLE IF NOT EXISTS instance_runtime (
+                instance_id TEXT PRIMARY KEY NOT NULL REFERENCES instances(id) ON DELETE CASCADE,
+                java_environment_id TEXT NOT NULL REFERENCES managed_java_environments(id),
+                plan_json TEXT NOT NULL,
+                runtime_json TEXT NOT NULL
+            );
+            PRAGMA user_version = 3;
             ",
         )?;
         Ok(())

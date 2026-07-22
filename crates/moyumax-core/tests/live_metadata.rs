@@ -54,4 +54,23 @@ async fn official_metadata_resolves_a_verified_default_install_request() {
         Some(64)
     );
     assert!(request.java.artifact.size > 0);
+    let java_download = reqwest::Client::new()
+        .head(&request.java.artifact.url)
+        .send()
+        .await
+        .expect("Azul Java download should accept HEAD")
+        .error_for_status()
+        .expect("Azul Java download should be available");
+    let download_size = java_download
+        .headers()
+        .get(reqwest::header::CONTENT_LENGTH)
+        .expect("Azul Java download should declare Content-Length")
+        .to_str()
+        .expect("Content-Length should be ASCII")
+        .parse::<u64>()
+        .expect("Content-Length should be an integer");
+    assert_eq!(
+        download_size, request.java.artifact.size,
+        "the immutable install snapshot should use the current download length"
+    );
 }

@@ -83,6 +83,7 @@ export type InstallStage =
 export type TaskState =
   | "queued"
   | "running"
+  | "committing"
   | "paused"
   | "awaitingRecovery"
   | "failed"
@@ -107,6 +108,12 @@ export interface InstallTask {
   targetDirectory: string;
   createdAtUnixSeconds: number;
   updatedAtUnixSeconds: number;
+  progress: {
+    completedBytes: number;
+    totalBytes: number | null;
+    currentItem: string | null;
+    errorSummary: string | null;
+  };
 }
 
 export interface MoyuRuntime {
@@ -119,6 +126,7 @@ export interface MoyuRuntime {
   confirmInstallPreview(previewId: string): Promise<InstallTask>;
   getInstallTasks(): Promise<InstallTask[]>;
   resolveInstallTaskRecovery(taskId: string, decision: RecoveryDecision): Promise<void>;
+  retryInstallTask(taskId: string): Promise<void>;
   minimizeWindow(): Promise<void>;
   toggleMaximizeWindow(): Promise<void>;
   closeWindow(): Promise<void>;
@@ -153,6 +161,7 @@ function createTauriRuntime(): MoyuRuntime {
     getInstallTasks: () => invoke<InstallTask[]>("get_install_tasks"),
     resolveInstallTaskRecovery: (taskId, decision) =>
       invoke<void>("resolve_install_task_recovery", { taskId, decision }),
+    retryInstallTask: (taskId) => invoke<void>("retry_install_task", { taskId }),
     minimizeWindow: () => currentWindow.minimize(),
     toggleMaximizeWindow: () => currentWindow.toggleMaximize(),
     closeWindow: () => currentWindow.close(),
@@ -241,6 +250,12 @@ function createBrowserRuntime(): MoyuRuntime {
         targetDirectory: `D:\\MoyuMax\\data\\instances\\${id}`,
         createdAtUnixSeconds: now,
         updatedAtUnixSeconds: now,
+        progress: {
+          completedBytes: 0,
+          totalBytes: 1_934_524_416,
+          currentItem: "等待执行",
+          errorSummary: null,
+        },
       };
       const tasks = browserInstallTasks();
       tasks.push(task);
@@ -257,6 +272,17 @@ function createBrowserRuntime(): MoyuRuntime {
         throw new Error("任务当前不需要恢复确认");
       }
       task.state = decision === "resume" ? "queued" : "cancelled";
+      task.updatedAtUnixSeconds = Math.floor(Date.now() / 1000);
+      window.localStorage.setItem(BROWSER_TASKS_KEY, JSON.stringify(tasks));
+    },
+    async retryInstallTask(taskId) {
+      const tasks = browserInstallTasks();
+      const task = tasks.find((candidate) => candidate.id === taskId);
+      if (!task || task.state !== "failed") throw new Error("任务当前不能重试");
+      task.state = "queued";
+      task.currentStage = "prepare";
+      task.progress.currentItem = "等待重试执行";
+      task.progress.errorSummary = null;
       task.updatedAtUnixSeconds = Math.floor(Date.now() / 1000);
       window.localStorage.setItem(BROWSER_TASKS_KEY, JSON.stringify(tasks));
     },

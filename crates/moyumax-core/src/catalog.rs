@@ -1,6 +1,6 @@
 use std::time::Duration;
 
-use reqwest::{Client, Url};
+use reqwest::{Client, Url, header::CONTENT_LENGTH};
 use rusqlite::{OptionalExtension, params};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -493,6 +493,14 @@ impl MetadataClient {
                 "Azul 返回的 JDK 架构或 Java 主版本与请求不一致".to_owned(),
             ));
         }
+        if details.size == 0 {
+            return Err(CoreError::Metadata(
+                "Azul 返回的 JDK 元数据大小无效".to_owned(),
+            ));
+        }
+        let download_size = self
+            .remote_content_length(&details.download_url, "Azul JDK")
+            .await?;
         let full_version =
             format_java_version(&details.java_version, details.openjdk_build_number)?;
         Ok(ResolvedJavaPackage {
@@ -504,11 +512,32 @@ impl MetadataClient {
                 kind: ArtifactKind::JavaArchive,
                 relative_path: format!("java/packages/{}", details.name),
                 url: details.download_url,
-                size: details.size,
+                size: download_size,
                 sha1: None,
                 sha256: Some(details.sha256_hash),
             },
         })
+    }
+
+    async fn remote_content_length(&self, url: &str, artifact_name: &str) -> Result<u64> {
+        validate_https_url(url)?;
+        let response = self.client.head(url).send().await?.error_for_status()?;
+        let value = response.headers().get(CONTENT_LENGTH).ok_or_else(|| {
+            CoreError::Metadata(format!("{artifact_name} 下载端没有提供 Content-Length"))
+        })?;
+        let size = value
+            .to_str()
+            .map_err(|_| CoreError::Metadata(format!("{artifact_name} Content-Length 不是 ASCII")))?
+            .parse::<u64>()
+            .map_err(|_| {
+                CoreError::Metadata(format!("{artifact_name} Content-Length 不是有效整数"))
+            })?;
+        if size == 0 {
+            return Err(CoreError::Metadata(format!(
+                "{artifact_name} Content-Length 不能为 0"
+            )));
+        }
+        Ok(size)
     }
 }
 

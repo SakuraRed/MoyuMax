@@ -15,7 +15,10 @@ pub enum ArtifactKind {
     VersionMetadata,
     GameClient,
     Library,
+    LoaderLibrary,
+    NativeLibrary,
     AssetIndex,
+    AssetObject,
     LoggingConfiguration,
     JavaArchive,
 }
@@ -241,6 +244,7 @@ impl InstallStage {
 pub enum TaskState {
     Queued,
     Running,
+    Committing,
     Paused,
     AwaitingRecovery,
     Failed,
@@ -260,6 +264,7 @@ impl TaskState {
         match self {
             Self::Queued => "queued",
             Self::Running => "running",
+            Self::Committing => "committing",
             Self::Paused => "paused",
             Self::AwaitingRecovery => "awaiting_recovery",
             Self::Failed => "failed",
@@ -272,6 +277,7 @@ impl TaskState {
         match value {
             "queued" => Ok(Self::Queued),
             "running" => Ok(Self::Running),
+            "committing" => Ok(Self::Committing),
             "paused" => Ok(Self::Paused),
             "awaiting_recovery" => Ok(Self::AwaitingRecovery),
             "failed" => Ok(Self::Failed),
@@ -329,6 +335,16 @@ pub struct InstallTask {
     pub target_directory: String,
     pub created_at_unix_seconds: i64,
     pub updated_at_unix_seconds: i64,
+    pub progress: TaskProgress,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TaskProgress {
+    pub completed_bytes: u64,
+    pub total_bytes: Option<u64>,
+    pub current_item: Option<String>,
+    pub error_summary: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -377,10 +393,15 @@ impl AppService {
         let connection = self.connection()?;
         let mut statement = connection.prepare(
             "
-            SELECT id, state, current_stage, plan_json, staging_directory,
-                   target_directory, created_at_unix_seconds, updated_at_unix_seconds
+            SELECT task.id, task.state, task.current_stage, task.plan_json,
+                   task.staging_directory, task.target_directory,
+                   task.created_at_unix_seconds, task.updated_at_unix_seconds,
+                   COALESCE(progress.completed_bytes, 0), progress.total_bytes,
+                   progress.current_item, progress.error_summary
             FROM install_tasks
-            ORDER BY created_at_unix_seconds, id
+            AS task
+            LEFT JOIN task_progress AS progress ON progress.task_id = task.id
+            ORDER BY task.created_at_unix_seconds, task.id
             ",
         )?;
         let rows = statement.query_map([], |row| {
@@ -393,11 +414,28 @@ impl AppService {
                 row.get::<_, String>(5)?,
                 row.get::<_, i64>(6)?,
                 row.get::<_, i64>(7)?,
+                row.get::<_, i64>(8)?,
+                row.get::<_, Option<i64>>(9)?,
+                row.get::<_, Option<String>>(10)?,
+                row.get::<_, Option<String>>(11)?,
             ))
         })?;
 
         rows.map(|row| {
-            let (id, state, stage, plan, staging, target, created_at, updated_at) = row?;
+            let (
+                id,
+                state,
+                stage,
+                plan,
+                staging,
+                target,
+                created_at,
+                updated_at,
+                completed_bytes,
+                total_bytes,
+                current_item,
+                error_summary,
+            ) = row?;
             Ok(InstallTask {
                 id,
                 state: TaskState::from_database(&state)?,
@@ -410,6 +448,14 @@ impl AppService {
                 target_directory: target,
                 created_at_unix_seconds: created_at,
                 updated_at_unix_seconds: updated_at,
+                progress: TaskProgress {
+                    completed_bytes: sqlite_unsigned(completed_bytes, "已完成字节数")?,
+                    total_bytes: total_bytes
+                        .map(|value| sqlite_unsigned(value, "总字节数"))
+                        .transpose()?,
+                    current_item,
+                    error_summary,
+                },
             })
         })
         .collect()
@@ -433,6 +479,34 @@ impl AppService {
                 "任务不存在或当前状态不能开始运行".to_owned(),
             ));
         }
+        Ok(())
+    }
+
+    pub fn retry_failed_install_task(&self, task_id: &str) -> Result<()> {
+        let mut connection = self.connection()?;
+        let transaction = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let changed = transaction.execute(
+            "
+            UPDATE install_tasks
+            SET state = 'queued', current_stage = 'prepare', updated_at_unix_seconds = ?2
+            WHERE id = ?1 AND state = 'failed'
+            ",
+            params![task_id, unix_timestamp()],
+        )?;
+        if changed == 0 {
+            return Err(CoreError::InvalidInstallRequest(
+                "任务不存在或当前状态不能重试".to_owned(),
+            ));
+        }
+        transaction.execute(
+            "
+            UPDATE task_progress
+            SET current_item = '等待重试执行', error_summary = NULL
+            WHERE task_id = ?1
+            ",
+            params![task_id],
+        )?;
+        transaction.commit()?;
         Ok(())
     }
 
@@ -637,6 +711,195 @@ impl AppService {
             .map_err(CoreError::from)
     }
 
+    pub(crate) fn install_task(&self, task_id: &str) -> Result<InstallTask> {
+        self.list_install_tasks()?
+            .into_iter()
+            .find(|task| task.id == task_id)
+            .ok_or_else(|| CoreError::InvalidInstallRequest("安装任务不存在".to_owned()))
+    }
+
+    pub(crate) fn set_task_phase(
+        &self,
+        task_id: &str,
+        state: TaskState,
+        stage: InstallStage,
+        current_item: &str,
+    ) -> Result<()> {
+        let mut connection = self.connection()?;
+        let transaction = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let changed = transaction.execute(
+            "
+            UPDATE install_tasks
+            SET state = ?2, current_stage = ?3, updated_at_unix_seconds = ?4
+            WHERE id = ?1
+            ",
+            params![
+                task_id,
+                state.database_value(),
+                stage.database_value(),
+                unix_timestamp()
+            ],
+        )?;
+        if changed == 0 {
+            return Err(CoreError::InvalidInstallRequest(
+                "安装任务不存在".to_owned(),
+            ));
+        }
+        transaction.execute(
+            "
+            INSERT INTO task_progress (task_id, completed_bytes, current_item, error_summary)
+            VALUES (?1, 0, ?2, NULL)
+            ON CONFLICT(task_id) DO UPDATE SET
+                current_item = excluded.current_item,
+                error_summary = NULL
+            ",
+            params![task_id, current_item],
+        )?;
+        transaction.commit()?;
+        Ok(())
+    }
+
+    pub(crate) fn set_task_progress(
+        &self,
+        task_id: &str,
+        completed_bytes: u64,
+        total_bytes: Option<u64>,
+        current_item: Option<&str>,
+    ) -> Result<()> {
+        let completed = sqlite_integer(completed_bytes, "已完成字节数")?;
+        let total = total_bytes
+            .map(|value| sqlite_integer(value, "总字节数"))
+            .transpose()?;
+        self.connection()?.execute(
+            "
+            INSERT INTO task_progress (
+                task_id, completed_bytes, total_bytes, current_item, error_summary
+            ) VALUES (?1, ?2, ?3, ?4, NULL)
+            ON CONFLICT(task_id) DO UPDATE SET
+                completed_bytes = excluded.completed_bytes,
+                total_bytes = excluded.total_bytes,
+                current_item = excluded.current_item,
+                error_summary = NULL
+            ",
+            params![task_id, completed, total, current_item],
+        )?;
+        Ok(())
+    }
+
+    pub(crate) fn mark_task_failed(&self, task_id: &str, error: &str) -> Result<()> {
+        let summary: String = error.chars().take(4_000).collect();
+        let mut connection = self.connection()?;
+        let transaction = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        transaction.execute(
+            "
+            UPDATE install_tasks
+            SET state = 'failed', updated_at_unix_seconds = ?2
+            WHERE id = ?1
+            ",
+            params![task_id, unix_timestamp()],
+        )?;
+        transaction.execute(
+            "
+            UPDATE task_progress
+            SET current_item = '等待重试', error_summary = ?2
+            WHERE task_id = ?1
+            ",
+            params![task_id, summary],
+        )?;
+        transaction.commit()?;
+        Ok(())
+    }
+
+    pub(crate) fn mark_java_environment_status(
+        &self,
+        environment_id: &str,
+        status: JavaEnvironmentStatus,
+    ) -> Result<()> {
+        let changed = self.connection()?.execute(
+            "UPDATE managed_java_environments SET status = ?2 WHERE id = ?1",
+            params![environment_id, status.database_value()],
+        )?;
+        if changed == 0 {
+            return Err(CoreError::InvalidStoredState(
+                "安装计划引用的 Java 环境不存在".to_owned(),
+            ));
+        }
+        Ok(())
+    }
+
+    pub(crate) fn publish_ready_instance(
+        &self,
+        task: &InstallTask,
+        java_environment_id: &str,
+        runtime: &Value,
+    ) -> Result<ManagedInstanceSummary> {
+        let (loader_kind, loader_version) = match &task.plan.loader {
+            ResolvedLoader::Vanilla => ("vanilla", None),
+            ResolvedLoader::Fabric { version, .. } => ("fabric", Some(version.as_str())),
+        };
+        let instance = ManagedInstanceSummary {
+            id: task.plan.instance_id.clone(),
+            name: task.plan.instance_name.clone(),
+            game_version: task.plan.game.version.id.clone(),
+            loader_kind: loader_kind.to_owned(),
+            loader_version: loader_version.map(str::to_owned),
+            root_directory: task.target_directory.clone(),
+            state: "ready".to_owned(),
+        };
+        let mut connection = self.connection()?;
+        let transaction = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        transaction.execute(
+            "
+            INSERT INTO instances (
+                id, name, game_version, loader_kind, loader_version,
+                root_directory, state, created_at_unix_seconds
+            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, 'ready', ?7)
+            ",
+            params![
+                instance.id,
+                instance.name,
+                instance.game_version,
+                instance.loader_kind,
+                instance.loader_version,
+                instance.root_directory,
+                unix_timestamp(),
+            ],
+        )?;
+        transaction.execute(
+            "
+            INSERT INTO instance_runtime (
+                instance_id, java_environment_id, plan_json, runtime_json
+            ) VALUES (?1, ?2, ?3, ?4)
+            ",
+            params![
+                instance.id,
+                java_environment_id,
+                serde_json::to_string(&task.plan)?,
+                serde_json::to_string(runtime)?,
+            ],
+        )?;
+        transaction.execute(
+            "
+            UPDATE install_tasks
+            SET state = 'completed', current_stage = 'create_rollback_point',
+                updated_at_unix_seconds = ?2
+            WHERE id = ?1 AND state = 'committing'
+            ",
+            params![task.id, unix_timestamp()],
+        )?;
+        transaction.execute(
+            "
+            UPDATE task_progress
+            SET completed_bytes = COALESCE(total_bytes, completed_bytes),
+                current_item = '安装完成', error_summary = NULL
+            WHERE task_id = ?1
+            ",
+            params![task.id],
+        )?;
+        transaction.commit()?;
+        Ok(instance)
+    }
+
     fn selected_data_directory(&self) -> Result<std::path::PathBuf> {
         let state = self.bootstrap_state()?;
         let selection: OnboardingSelection = state.settings.unwrap_or(state.defaults);
@@ -689,6 +952,7 @@ impl AppService {
             estimated_download_bytes,
         };
         let now = unix_timestamp();
+        let progress_total = plan.estimated_download_bytes;
         let task = InstallTask {
             id: task_id.to_owned(),
             state: TaskState::Queued,
@@ -698,6 +962,12 @@ impl AppService {
             target_directory: target_text,
             created_at_unix_seconds: now,
             updated_at_unix_seconds: now,
+            progress: TaskProgress {
+                completed_bytes: 0,
+                total_bytes: Some(progress_total),
+                current_item: Some("等待执行".to_owned()),
+                error_summary: None,
+            },
         };
         transaction.execute(
             "
@@ -716,6 +986,20 @@ impl AppService {
                 task.created_at_unix_seconds,
                 task.updated_at_unix_seconds,
             ],
+        )?;
+        let completed_db = sqlite_integer(task.progress.completed_bytes, "已完成字节数")?;
+        let total_db = task
+            .progress
+            .total_bytes
+            .map(|value| sqlite_integer(value, "总字节数"))
+            .transpose()?;
+        transaction.execute(
+            "
+            INSERT INTO task_progress (
+                task_id, completed_bytes, total_bytes, current_item, error_summary
+            ) VALUES (?1, ?2, ?3, ?4, NULL)
+            ",
+            params![task.id, completed_db, total_db, task.progress.current_item,],
         )?;
         let (environment_id, action) = match &task.plan.java_action {
             JavaPlanAction::Install { environment_id, .. } => (environment_id, "install"),
@@ -918,4 +1202,13 @@ fn validate_java_identity(
 
 fn path_text(path: &Path) -> String {
     path.to_string_lossy().into_owned()
+}
+
+fn sqlite_integer(value: u64, label: &str) -> Result<i64> {
+    i64::try_from(value)
+        .map_err(|_| CoreError::InvalidStoredState(format!("{label}超过 SQLite 可表示范围")))
+}
+
+fn sqlite_unsigned(value: i64, label: &str) -> Result<u64> {
+    u64::try_from(value).map_err(|_| CoreError::InvalidStoredState(format!("{label}不能是负数")))
 }
