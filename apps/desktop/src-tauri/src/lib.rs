@@ -10,8 +10,9 @@ use moyumax_core::{
     InstallExecutor, InstallSelection, InstallTask, InstalledContent, InstanceIsolation,
     JavaArchitecture, JavaDistribution, LaunchAccount, LaunchExecution, LaunchOptions,
     LaunchSessionSummary, ManagedInstanceSummary, MetadataClient, ModrinthClient,
-    ModrinthSearchPage, ModrinthSearchQuery, OnboardingSelection, RecoveryDecision,
-    ResolvedInstallRequest, ResolvedLoader, TaskState, VersionCatalog, run_launch_execution,
+    ModrinthSearchPage, ModrinthSearchQuery, OnboardingSelection, RecoveryDecision, RecycleBinItem,
+    RecyclePurgeResult, ResolvedInstallRequest, ResolvedLoader, TaskState, VersionCatalog,
+    run_launch_execution,
 };
 use serde::Serialize;
 use tauri::{Manager, State};
@@ -419,6 +420,49 @@ fn list_instances(service: State<'_, AppService>) -> Result<Vec<ManagedInstanceS
 }
 
 #[tauri::command]
+fn list_recycle_bin_items(service: State<'_, AppService>) -> Result<Vec<RecycleBinItem>, String> {
+    service
+        .list_recycle_bin_items()
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+async fn recycle_instance(
+    service: State<'_, AppService>,
+    instance_id: String,
+) -> Result<RecycleBinItem, String> {
+    let service = service.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || service.recycle_instance(&instance_id))
+        .await
+        .map_err(|error| format!("后台回收操作中断：{error}"))?
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+async fn restore_recycle_bin_item(
+    service: State<'_, AppService>,
+    item_id: String,
+) -> Result<ManagedInstanceSummary, String> {
+    let service = service.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || service.restore_recycle_bin_item(&item_id))
+        .await
+        .map_err(|error| format!("后台恢复操作中断：{error}"))?
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+async fn purge_recycle_bin_item(
+    service: State<'_, AppService>,
+    item_id: String,
+) -> Result<RecyclePurgeResult, String> {
+    let service = service.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || service.purge_recycle_bin_item(&item_id))
+        .await
+        .map_err(|error| format!("后台永久删除操作中断：{error}"))?
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
 async fn start_instance(
     service: State<'_, AppService>,
     coordinator: State<'_, LaunchCoordinator>,
@@ -525,7 +569,9 @@ async fn confirm_diagnostic_export(
 pub fn run() {
     tauri::Builder::default()
         .setup(|app| {
-            let state_directory = app.path().app_local_data_dir()?;
+            let state_directory = std::env::var_os("MOYUMAX_STATE_DIR")
+                .map(PathBuf::from)
+                .map_or_else(|| app.path().app_local_data_dir(), Ok)?;
             let database_path = state_directory.join("state.sqlite3");
             let default_data_directory = default_data_directory()?;
             let service = AppService::open(&database_path, &default_data_directory)?;
@@ -571,6 +617,10 @@ pub fn run() {
             retry_content_task,
             resolve_content_task_recovery,
             list_instances,
+            list_recycle_bin_items,
+            recycle_instance,
+            restore_recycle_bin_item,
+            purge_recycle_bin_item,
             start_instance,
             stop_instance,
             list_launch_sessions,

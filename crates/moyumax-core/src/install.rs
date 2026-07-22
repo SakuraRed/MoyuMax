@@ -696,6 +696,12 @@ impl AppService {
             "
             SELECT id, name, game_version, loader_kind, loader_version, root_directory, state
             FROM instances
+            WHERE NOT EXISTS (
+                SELECT 1
+                FROM recycle_bin_items
+                WHERE recycle_bin_items.subject_id = instances.id
+                  AND recycle_bin_items.item_kind = 'instance'
+            )
             ORDER BY created_at_unix_seconds, id
             ",
         )?;

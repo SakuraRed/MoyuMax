@@ -25,6 +25,7 @@
     onInstall: () => void;
     onOpenTasks: () => void;
     onOpenResources: () => void;
+    onOpenData: () => void;
     onOpenCrash: (report: CrashReport) => void;
     onStateChanged: () => Promise<void>;
     onMinimize: () => Promise<void>;
@@ -44,6 +45,7 @@
     onInstall,
     onOpenTasks,
     onOpenResources,
+    onOpenData,
     onOpenCrash,
     onStateChanged,
     onMinimize,
@@ -54,6 +56,8 @@
   let changingInstance = $state<string | null>(null);
   let actionMessage = $state("");
   let actionError = $state("");
+  let recycleCandidate = $state<ManagedInstance | null>(null);
+  let recycleDialog = $state<HTMLElement | null>(null);
   let homeRoot: HTMLElement | undefined = $state();
 
   onMount(async () => {
@@ -143,14 +147,65 @@
       changingInstance = null;
     }
   }
+
+  async function askRecycle(instance: ManagedInstance): Promise<void> {
+    actionMessage = "";
+    actionError = "";
+    recycleCandidate = instance;
+    await tick();
+    recycleDialog?.querySelector<HTMLElement>("[data-dialog-autofocus]")?.focus();
+  }
+
+  function cancelRecycle(): void {
+    if (changingInstance === recycleCandidate?.id) return;
+    recycleCandidate = null;
+  }
+
+  async function recycleInstance(): Promise<void> {
+    const instance = recycleCandidate;
+    if (!instance) return;
+    changingInstance = instance.id;
+    actionMessage = "";
+    actionError = "";
+    try {
+      await runtime.recycleInstance(instance.id);
+      recycleCandidate = null;
+      actionMessage = `已将「${instance.name}」移入回收站，可在数据页恢复`;
+      await onStateChanged();
+    } catch (error) {
+      actionError = error instanceof Error ? error.message : String(error);
+    } finally {
+      changingInstance = null;
+    }
+  }
+
+  function handleRecycleDialogKeydown(event: KeyboardEvent): void {
+    if (event.key === "Escape") {
+      event.preventDefault();
+      cancelRecycle();
+      return;
+    }
+    if (event.key !== "Tab" || !recycleDialog) return;
+    const controls = [...recycleDialog.querySelectorAll<HTMLButtonElement>("button:not(:disabled)")];
+    const first = controls.at(0);
+    const last = controls.at(-1);
+    if (!first || !last) return;
+    if (event.shiftKey && document.activeElement === first) {
+      event.preventDefault();
+      last.focus();
+    } else if (!event.shiftKey && document.activeElement === last) {
+      event.preventDefault();
+      first.focus();
+    }
+  }
 </script>
 
 <AppShell
   pageTitle="首页"
   dataDirectory={settings.dataDirectory}
   searchVisible
-  navigationTargets={["resources", "tasks"]}
-  onNavigate={(target) => target === "resources" ? onOpenResources() : target === "tasks" ? onOpenTasks() : undefined}
+  navigationTargets={["resources", "tasks", "data"]}
+  onNavigate={(target) => target === "resources" ? onOpenResources() : target === "tasks" ? onOpenTasks() : target === "data" ? onOpenData() : undefined}
   taskStatus={activeLaunches.length > 0 ? `${activeLaunches.length} 个游戏正在运行` : activeTasks.length + activeContentTasks.length > 0 ? `${activeTasks.length + activeContentTasks.length} 个未完成任务` : "无活动任务"}
   {onMinimize}
   {onToggleMaximize}
@@ -232,6 +287,14 @@
                 {#if crashReport && !active}
                   <button class="button crash-report-button" onclick={() => onOpenCrash(crashReport)}>查看崩溃报告</button>
                 {/if}
+                {#if !active}
+                  <button
+                    class="button danger-subtle"
+                    aria-label={`将“${instance.name}”移入回收站`}
+                    disabled={changingInstance === instance.id}
+                    onclick={() => void askRecycle(instance)}
+                  >移入回收站</button>
+                {/if}
                 <span>启动前将使用托管 Java</span>
               </div>
             </article>
@@ -264,4 +327,33 @@
     <div class="toast" role="status"><Icon name="info" size={16} /><span>{actionMessage || notice}</span></div>
   {/if}
   <div class="sr-live" aria-live="polite">{actionMessage || actionError || notice}</div>
+
+  {#if recycleCandidate}
+    <div class="modal-backdrop">
+      <div
+        class="confirmation-dialog"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="recycle-confirm-title"
+        tabindex="-1"
+        bind:this={recycleDialog}
+        onkeydown={handleRecycleDialogKeydown}
+      >
+        <header>
+          <h2 id="recycle-confirm-title">将“{recycleCandidate.name}”移入回收站？</h2>
+          <p>实例会从首页隐藏，但文件、存档和配置会保留 30 天。</p>
+        </header>
+        <div class="confirmation-impact">
+          <strong>托管 Java 不会被删除</strong>
+          <span>共享游戏基础文件也会继续保留；你可以随时从数据页恢复到原位置。</span>
+        </div>
+        <div class="confirmation-actions">
+          <button class="button" data-dialog-autofocus disabled={changingInstance === recycleCandidate.id} onclick={cancelRecycle}>取消</button>
+          <button class="button danger" disabled={changingInstance === recycleCandidate.id} onclick={() => void recycleInstance()}>
+            {changingInstance === recycleCandidate.id ? "正在移动" : "移入回收站"}
+          </button>
+        </div>
+      </div>
+    </div>
+  {/if}
 </AppShell>

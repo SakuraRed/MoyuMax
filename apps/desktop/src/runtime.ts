@@ -126,6 +126,29 @@ export interface ManagedInstance {
   state: string;
 }
 
+export type RecycleItemKind = "instance";
+export type RecycleItemState = "moving" | "ready" | "restoring" | "purging" | "failed";
+
+export interface RecycleBinItem {
+  id: string;
+  kind: RecycleItemKind;
+  subjectId: string;
+  displayName: string;
+  originalPath: string;
+  recycledPath: string;
+  originalState: string;
+  sizeBytes: number;
+  deletedAtUnixSeconds: number;
+  expiresAtUnixSeconds: number;
+  state: RecycleItemState;
+}
+
+export interface RecyclePurgeResult {
+  itemId: string;
+  releasedBytes: number;
+  removedSubjects: number;
+}
+
 export type ModrinthSearchIndex = "relevance" | "downloads" | "follows" | "newest" | "updated";
 
 export interface ModrinthSearchQuery {
@@ -342,6 +365,10 @@ export interface MoyuRuntime {
   retryContentTask(taskId: string): Promise<void>;
   resolveContentTaskRecovery(taskId: string, decision: RecoveryDecision): Promise<void>;
   listInstances(): Promise<ManagedInstance[]>;
+  listRecycleBinItems(): Promise<RecycleBinItem[]>;
+  recycleInstance(instanceId: string): Promise<RecycleBinItem>;
+  restoreRecycleBinItem(itemId: string): Promise<ManagedInstance>;
+  purgeRecycleBinItem(itemId: string): Promise<RecyclePurgeResult>;
   startInstance(instanceId: string): Promise<LaunchSession>;
   stopInstance(instanceId: string): Promise<void>;
   listLaunchSessions(): Promise<LaunchSession[]>;
@@ -356,6 +383,7 @@ export interface MoyuRuntime {
 const BROWSER_STORAGE_KEY = "moyumax.browser.onboarding";
 const BROWSER_TASKS_KEY = "moyumax.browser.installTasks";
 const BROWSER_INSTANCES_KEY = "moyumax.browser.instances";
+const BROWSER_RECYCLE_BIN_KEY = "moyumax.browser.recycleBin";
 const BROWSER_LAUNCH_SESSIONS_KEY = "moyumax.browser.launchSessions";
 const BROWSER_CRASH_REPORTS_KEY = "moyumax.browser.crashReports";
 const BROWSER_CONTENT_TASKS_KEY = "moyumax.browser.contentTasks";
@@ -364,6 +392,10 @@ const BROWSER_MODRINTH_OFFLINE_KEY = "moyumax.browser.modrinthOffline";
 const browserPreviews = new Map<string, InstallSelection>();
 const browserContentPreviews = new Map<string, ContentInstallPlan>();
 const browserDiagnosticPreviews = new Map<string, string>();
+
+interface BrowserRecycleEntry extends RecycleBinItem {
+  instance: ManagedInstance;
+}
 
 export function createRuntime(): MoyuRuntime {
   return Reflect.has(window, "__TAURI_INTERNALS__")
@@ -409,6 +441,14 @@ function createTauriRuntime(): MoyuRuntime {
     resolveContentTaskRecovery: (taskId, decision) =>
       invoke<void>("resolve_content_task_recovery", { taskId, decision }),
     listInstances: () => invoke<ManagedInstance[]>("list_instances"),
+    listRecycleBinItems: () =>
+      invoke<RecycleBinItem[]>("list_recycle_bin_items"),
+    recycleInstance: (instanceId) =>
+      invoke<RecycleBinItem>("recycle_instance", { instanceId }),
+    restoreRecycleBinItem: (itemId) =>
+      invoke<ManagedInstance>("restore_recycle_bin_item", { itemId }),
+    purgeRecycleBinItem: (itemId) =>
+      invoke<RecyclePurgeResult>("purge_recycle_bin_item", { itemId }),
     startInstance: (instanceId) =>
       invoke<LaunchSession>("start_instance", { instanceId }),
     stopInstance: (instanceId) => invoke<void>("stop_instance", { instanceId }),
@@ -681,6 +721,90 @@ function createBrowserRuntime(): MoyuRuntime {
     async listInstances() {
       return browserInstances();
     },
+    async listRecycleBinItems() {
+      return browserRecycleEntries().map(({ instance: _instance, ...item }) => item);
+    },
+    async recycleInstance(instanceId) {
+      const instances = browserInstances();
+      const index = instances.findIndex((candidate) => candidate.id === instanceId);
+      if (index < 0) throw new Error("实例不存在或已经在回收站中");
+      if (
+        browserLaunchSessions().some(
+          (session) =>
+            session.instanceId === instanceId &&
+            ["starting", "running"].includes(session.state),
+        )
+      ) {
+        throw new Error("实例仍在运行，请先停止游戏再移入回收站");
+      }
+      if (
+        browserContentTasks().some(
+          (task) =>
+            task.plan.instanceId === instanceId &&
+            !["completed", "cancelled", "failed"].includes(task.state),
+        )
+      ) {
+        throw new Error("实例仍有未完成的内容任务，请先处理任务再移入回收站");
+      }
+      const managedInstance = instances[index];
+      if (!managedInstance) throw new Error("实例不存在或已经在回收站中");
+      instances.splice(index, 1);
+      const now = Math.floor(Date.now() / 1000);
+      const item: BrowserRecycleEntry = {
+        id: `recycle-${crypto.randomUUID()}`,
+        kind: "instance",
+        subjectId: managedInstance.id,
+        displayName: managedInstance.name,
+        originalPath: managedInstance.rootDirectory,
+        recycledPath: `${recommended.dataDirectory}\\.recycle\\instances\\${managedInstance.id}`,
+        originalState: managedInstance.state,
+        sizeBytes: 64 * 1024 * 1024,
+        deletedAtUnixSeconds: now,
+        expiresAtUnixSeconds: now + 30 * 24 * 60 * 60,
+        state: "ready",
+        instance: managedInstance,
+      };
+      window.localStorage.setItem(BROWSER_INSTANCES_KEY, JSON.stringify(instances));
+      const entries = browserRecycleEntries();
+      entries.unshift(item);
+      window.localStorage.setItem(BROWSER_RECYCLE_BIN_KEY, JSON.stringify(entries));
+      const { instance: _instance, ...summary } = item;
+      return summary;
+    },
+    async restoreRecycleBinItem(itemId) {
+      const entries = browserRecycleEntries();
+      const index = entries.findIndex((candidate) => candidate.id === itemId);
+      const entry = entries[index];
+      if (!entry || entry.state !== "ready") {
+        throw new Error("该回收站项目当前不能恢复");
+      }
+      entries.splice(index, 1);
+      const restored: ManagedInstance = {
+        ...entry.instance,
+        rootDirectory: entry.originalPath,
+        state: entry.originalState,
+      };
+      const instances = browserInstances();
+      instances.push(restored);
+      window.localStorage.setItem(BROWSER_INSTANCES_KEY, JSON.stringify(instances));
+      window.localStorage.setItem(BROWSER_RECYCLE_BIN_KEY, JSON.stringify(entries));
+      return restored;
+    },
+    async purgeRecycleBinItem(itemId) {
+      const entries = browserRecycleEntries();
+      const index = entries.findIndex((candidate) => candidate.id === itemId);
+      const entry = entries[index];
+      if (!entry || entry.state !== "ready") {
+        throw new Error("该回收站项目当前不能永久删除");
+      }
+      entries.splice(index, 1);
+      window.localStorage.setItem(BROWSER_RECYCLE_BIN_KEY, JSON.stringify(entries));
+      return {
+        itemId: entry.id,
+        releasedBytes: entry.sizeBytes,
+        removedSubjects: 1,
+      };
+    },
     async startInstance(instanceId) {
       const instance = browserInstances().find((candidate) => candidate.id === instanceId);
       if (!instance || instance.state !== "ready") {
@@ -824,6 +948,11 @@ function browserContentEntry(
 function browserInstances(): ManagedInstance[] {
   const serialized = window.localStorage.getItem(BROWSER_INSTANCES_KEY);
   return serialized ? (JSON.parse(serialized) as ManagedInstance[]) : [];
+}
+
+function browserRecycleEntries(): BrowserRecycleEntry[] {
+  const serialized = window.localStorage.getItem(BROWSER_RECYCLE_BIN_KEY);
+  return serialized ? (JSON.parse(serialized) as BrowserRecycleEntry[]) : [];
 }
 
 function browserLaunchSessions(): LaunchSession[] {

@@ -3,6 +3,7 @@
 
   import AppShell from "./components/AppShell.svelte";
   import CrashCenter from "./components/CrashCenter.svelte";
+  import DataCenter from "./components/DataCenter.svelte";
   import GameInstall from "./components/GameInstall.svelte";
   import Home from "./components/Home.svelte";
   import Onboarding from "./components/Onboarding.svelte";
@@ -19,7 +20,7 @@
     OnboardingSelection,
   } from "./runtime";
 
-  type Phase = "loading" | "onboarding" | "home" | "install" | "resources" | "tasks" | "crash" | "fatal";
+  type Phase = "loading" | "onboarding" | "home" | "install" | "resources" | "tasks" | "data" | "crash" | "fatal";
 
   const runtime = createRuntime();
   let phase = $state<Phase>("loading");
@@ -113,6 +114,11 @@
     phase = "crash";
   }
 
+  function openData(): void {
+    notice = "";
+    phase = "data";
+  }
+
   async function refreshTasks(): Promise<void> {
     [tasks, contentTasks] = await Promise.all([
       runtime.getInstallTasks(),
@@ -197,6 +203,7 @@
     onInstall={openInstaller}
     onOpenTasks={() => phase = "tasks"}
     onOpenResources={() => phase = "resources"}
+    onOpenData={openData}
     onOpenCrash={openCrashReport}
     onStateChanged={refreshHomeState}
     onMinimize={() => runtime.minimizeWindow()}
@@ -233,6 +240,18 @@
     onBack={() => void returnHome()}
     onOpenResources={() => phase = "resources"}
     onTasksChanged={refreshTasks}
+    onMinimize={() => runtime.minimizeWindow()}
+    onToggleMaximize={() => runtime.toggleMaximizeWindow()}
+    onClose={() => runtime.closeWindow()}
+  />
+{:else if phase === "data" && settings}
+  <DataCenter
+    {runtime}
+    {settings}
+    onBack={() => void returnHome()}
+    onOpenResources={() => phase = "resources"}
+    onOpenTasks={() => phase = "tasks"}
+    onInstancesChanged={refreshHomeState}
     onMinimize={() => runtime.minimizeWindow()}
     onToggleMaximize={() => runtime.toggleMaximizeWindow()}
     onClose={() => runtime.closeWindow()}

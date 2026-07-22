@@ -14,6 +14,7 @@ mod diagnostics;
 mod execution;
 mod install;
 mod launch;
+mod recycle;
 
 pub use catalog::*;
 pub use content::*;
@@ -21,6 +22,7 @@ pub use diagnostics::*;
 pub use execution::*;
 pub use install::*;
 pub use launch::*;
+pub use recycle::*;
 
 const SETTING_ONBOARDING_COMPLETE: &str = "onboarding_complete";
 const SETTING_ONBOARDING_SELECTION: &str = "onboarding_selection";
@@ -99,6 +101,8 @@ pub enum CoreError {
     Content(String),
     #[error("无法生成本地诊断：{0}")]
     Diagnostics(String),
+    #[error("无法管理内置回收站：{0}")]
+    Recycle(String),
 }
 
 pub type Result<T> = std::result::Result<T, CoreError>;
@@ -123,6 +127,7 @@ impl AppService {
         service.recover_interrupted_install_tasks()?;
         service.recover_interrupted_content_tasks()?;
         service.recover_interrupted_launch_sessions()?;
+        service.recover_interrupted_recycle_operations()?;
         service.generate_missing_crash_reports()?;
         Ok(service)
     }
@@ -297,7 +302,23 @@ impl AppService {
             );
             CREATE INDEX IF NOT EXISTS idx_installed_content_instance_title
                 ON installed_content(instance_id, project_title, project_id);
-            PRAGMA user_version = 6;
+            CREATE TABLE IF NOT EXISTS recycle_bin_items (
+                id TEXT PRIMARY KEY NOT NULL,
+                item_kind TEXT NOT NULL,
+                subject_id TEXT NOT NULL UNIQUE
+                    REFERENCES instances(id) ON DELETE CASCADE,
+                display_name TEXT NOT NULL,
+                original_path TEXT NOT NULL,
+                recycled_path TEXT NOT NULL UNIQUE,
+                original_state TEXT NOT NULL,
+                size_bytes INTEGER NOT NULL,
+                deleted_at_unix_seconds INTEGER NOT NULL,
+                expires_at_unix_seconds INTEGER NOT NULL,
+                state TEXT NOT NULL
+            );
+            CREATE INDEX IF NOT EXISTS idx_recycle_items_state_deleted
+                ON recycle_bin_items(state, deleted_at_unix_seconds);
+            PRAGMA user_version = 7;
             ",
         )?;
         Ok(())
