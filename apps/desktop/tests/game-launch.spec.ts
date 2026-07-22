@@ -50,6 +50,17 @@ test("UI-LAUNCH-001 首页可以启动和停止本地实例", async ({ page }) =
   });
   expect(cardPadding).toEqual({ top: 18, right: 20, bottom: 18, left: 20 });
 
+  const statePadding = await page.locator(".instance-state").evaluate((element) => {
+    const style = getComputedStyle(element);
+    return {
+      top: Number.parseFloat(style.paddingTop),
+      right: Number.parseFloat(style.paddingRight),
+      bottom: Number.parseFloat(style.paddingBottom),
+      left: Number.parseFloat(style.paddingLeft),
+    };
+  });
+  expect(statePadding).toEqual({ top: 4, right: 10, bottom: 4, left: 10 });
+
   const startButton = page.getByRole("button", { name: "启动游戏" });
   await expect(startButton).toBeFocused();
   await startButton.click();

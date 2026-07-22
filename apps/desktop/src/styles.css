@@ -62,10 +62,10 @@ summary:focus-visible {
   --warn-dim: rgba(224, 174, 92, 0.13);
   --info: #6fa8dc;
   --focus-ring: #a8e09a;
-  --control-content-inset-block: 12px;
-  --control-content-inset-inline: 16px;
-  --compact-label-inset-block: 3px;
-  --compact-label-inset-inline: 8px;
+  --control-content-inset-block: 14px;
+  --control-content-inset-inline: 18px;
+  --compact-label-inset-block: 4px;
+  --compact-label-inset-inline: 10px;
 
   width: 100%;
   height: 100%;
@@ -208,7 +208,7 @@ summary:focus-visible {
   display: flex;
   align-items: center;
   gap: 10px;
-  padding: 8px 10px;
+  padding: 8px 12px;
   border-radius: 6px;
   color: var(--text-2);
   font-size: 13.5px;
@@ -262,7 +262,7 @@ summary:focus-visible {
   display: flex;
   align-items: center;
   gap: 9px;
-  padding: 12px 10px 8px;
+  padding: 12px 12px 8px;
   border-top: 1px solid var(--border);
   text-align: left;
 }
@@ -327,7 +327,7 @@ summary:focus-visible {
   display: flex;
   align-items: center;
   gap: 8px;
-  padding: 0 10px;
+  padding: 0 12px;
   border: 1px solid var(--border);
   border-radius: 6px;
   color: var(--text-3);
@@ -343,7 +343,7 @@ summary:focus-visible {
 
 .searchbox kbd {
   margin-left: auto;
-  padding: 0 4px;
+  padding: 2px 6px;
   border: 1px solid var(--border-strong);
   border-radius: 4px;
   color: var(--text-3);
@@ -657,7 +657,7 @@ summary:focus-visible {
   width: 100%;
   height: 34px;
   margin-top: 6px;
-  padding: 0 10px;
+  padding: 0 12px;
   border: 1px solid var(--border-strong);
   border-radius: 6px;
   color: var(--text);
@@ -836,7 +836,7 @@ summary:focus-visible {
   flex-direction: column;
   gap: 4px;
   margin: 0 0 12px;
-  padding: 12px 14px;
+  padding: 14px 16px;
   border: 1px solid var(--danger);
   border-radius: 8px;
   color: var(--text-2);
@@ -901,7 +901,7 @@ summary:focus-visible {
   grid-template-columns: 88px minmax(0, 1fr) auto;
   align-items: center;
   gap: 12px;
-  padding: 10px 16px;
+  padding: 14px 18px;
   border-bottom: 1px solid var(--border);
 }
 
@@ -922,7 +922,7 @@ summary:focus-visible {
 }
 
 .summary-list span {
-  padding: 2px 8px;
+  padding: var(--compact-label-inset-block) var(--compact-label-inset-inline);
   border-radius: 10px;
   color: var(--accent);
   background: var(--accent-dim);
@@ -974,7 +974,7 @@ summary:focus-visible {
   justify-content: space-between;
   gap: 18px;
   margin-top: 16px;
-  padding: 12px 16px;
+  padding: 14px 18px;
   border: 1px solid var(--border);
   border-radius: 9px;
   color: var(--text);
@@ -1104,7 +1104,7 @@ summary:focus-visible {
 
 .instance-state {
   flex: none;
-  padding: 3px 9px;
+  padding: var(--compact-label-inset-block) var(--compact-label-inset-inline);
   border-radius: 5px;
   color: var(--text-2);
   background: var(--surface-3);
@@ -1196,7 +1196,7 @@ summary:focus-visible {
   display: flex;
   align-items: center;
   gap: 10px;
-  padding: 10px 14px;
+  padding: 12px 16px;
   border: 1px solid var(--border-strong);
   border-radius: 8px;
   background: var(--surface-2);
@@ -1255,7 +1255,7 @@ summary:focus-visible {
   align-items: flex-start;
   gap: 10px;
   margin: 0 auto 18px;
-  padding: 12px 16px;
+  padding: 14px 18px;
   border: 1px solid var(--info);
   border-radius: 8px;
   color: var(--text-2);
@@ -1361,7 +1361,7 @@ summary:focus-visible {
   grid-template-columns: 16px minmax(0, 1fr);
   align-content: center;
   gap: 3px 8px;
-  padding: 12px 16px;
+  padding: 14px 18px;
   border: 1px solid var(--border);
   border-radius: 9px;
   color: var(--text);
@@ -1414,7 +1414,7 @@ summary:focus-visible {
 .loader-version-field {
   max-width: 420px;
   margin-top: 12px;
-  padding: 14px 16px;
+  padding: 16px 18px;
   border: 1px solid var(--accent);
   border-radius: 9px;
   background: var(--accent-dim);
@@ -1424,7 +1424,7 @@ summary:focus-visible {
 .install-form-card input {
   width: 100%;
   height: 34px;
-  padding: 0 10px;
+  padding: 0 12px;
   border: 1px solid var(--border-strong);
   border-radius: 6px;
   color: var(--text);
@@ -1441,7 +1441,7 @@ summary:focus-visible {
   display: grid;
   grid-template-columns: minmax(220px, 0.8fr) minmax(300px, 1.2fr);
   gap: 20px;
-  padding: 16px 18px;
+  padding: 18px 20px;
   border: 1px solid var(--border);
   border-radius: 10px;
   background: var(--surface);
@@ -1531,7 +1531,7 @@ summary:focus-visible {
   grid-template-columns: 140px minmax(0, 1fr) auto;
   align-items: baseline;
   gap: 14px;
-  padding: 12px 16px;
+  padding: 14px 18px;
   border-bottom: 1px solid var(--border);
 }
 
@@ -1558,7 +1558,7 @@ summary:focus-visible {
 
 .stage-preview {
   margin-top: 16px;
-  padding: 14px 16px 16px;
+  padding: 16px 18px 18px;
   border: 1px solid var(--border);
   border-radius: 10px;
 }
@@ -1576,7 +1576,7 @@ summary:focus-visible {
 
 .stage-preview li {
   min-width: 0;
-  padding: 9px 10px;
+  padding: 12px 14px;
   border-radius: 6px;
   color: var(--text-2);
   background: var(--surface-2);
@@ -1612,7 +1612,7 @@ summary:focus-visible {
 .queued-task-card {
   width: min(760px, 100%);
   margin: 20px 0;
-  padding: 16px 18px;
+  padding: 18px 20px;
   border: 1px solid var(--border);
   border-radius: 10px;
   background: var(--surface);
@@ -1628,7 +1628,7 @@ summary:focus-visible {
 }
 
 .queued-task-card > div span {
-  padding: 2px 8px;
+  padding: var(--compact-label-inset-block) var(--compact-label-inset-inline);
   border-radius: 12px;
   color: var(--warn);
   background: var(--warn-dim);
@@ -1677,7 +1677,7 @@ summary:focus-visible {
 
 .queued-task-card > small {
   display: block;
-  padding-top: 12px;
+  padding-top: 14px;
   border-top: 1px solid var(--border);
   color: var(--text-3);
 }
@@ -1713,7 +1713,7 @@ summary:focus-visible {
 }
 
 .task-card {
-  padding: 16px 18px;
+  padding: 18px 20px;
   border: 1px solid var(--border);
   border-radius: 10px;
   background: var(--surface);
@@ -1729,7 +1729,7 @@ summary:focus-visible {
   align-items: center;
   justify-content: space-between;
   gap: 16px;
-  padding-bottom: 12px;
+  padding-bottom: 14px;
   border-bottom: 1px solid var(--border);
 }
 
@@ -1753,7 +1753,7 @@ summary:focus-visible {
 
 .task-state {
   flex: none;
-  padding: 2px 9px;
+  padding: var(--compact-label-inset-block) var(--compact-label-inset-inline);
   border-radius: 12px;
   color: var(--text-2);
   background: var(--surface-3);
@@ -1849,7 +1849,7 @@ summary:focus-visible {
 
 .task-card details {
   margin-top: 12px;
-  padding-top: 10px;
+  padding-top: 14px;
   border-top: 1px solid var(--border);
   color: var(--text-3);
   font-size: 11.5px;

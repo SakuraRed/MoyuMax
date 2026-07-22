@@ -60,11 +60,11 @@ test("UI-A11Y-001 在 960x600 和 200% 放大下主区域不重叠", async ({ pa
 test("UI-A11Y-001 文本与卡片边缘保持可读内边距", async ({ page }) => {
   await expectElementPadding(page, ".wizard-card", { block: 18, inline: 22 });
   await expectContentInset(page, ".choice", ".choice-copy", {
-    top: 12,
-    right: 16,
-    bottom: 12,
+    top: 14,
+    right: 18,
+    bottom: 14,
   });
-  await expectElementPadding(page, ".choice-copy strong em", { block: 3, inline: 8 });
+  await expectElementPadding(page, ".choice-copy strong em", { block: 4, inline: 10 });
 
   const legendGap = await page.evaluate(() => {
     const legend = document.querySelector<HTMLElement>(".choice-section legend");
@@ -76,21 +76,21 @@ test("UI-A11Y-001 文本与卡片边缘保持可读内边距", async ({ page }) 
 
   await page.getByRole("button", { name: "下一步" }).click();
   await expectContentInset(page, ".choice", ".choice-copy", {
-    top: 12,
-    right: 16,
-    bottom: 12,
+    top: 14,
+    right: 18,
+    bottom: 14,
   });
 
   await page.getByRole("button", { name: "下一步" }).click();
   await expectContentInset(page, ".setting-row", ".setting-row > span:first-child", {
-    top: 12,
-    bottom: 12,
-    left: 16,
+    top: 14,
+    bottom: 14,
+    left: 18,
   });
-  await expectElementPadding(page, ".setting-row strong em", { block: 3, inline: 8 });
+  await expectElementPadding(page, ".setting-row strong em", { block: 4, inline: 10 });
 
   await page.getByRole("button", { name: "完成设置" }).click();
-  await expectElementPadding(page, ".summary-list > div", { block: 10, inline: 16 });
+  await expectElementPadding(page, ".summary-list > div", { block: 14, inline: 18 });
 });
 
 test("M2-INSTALL-001 默认配置生成可恢复安装任务", async ({ page }) => {
@@ -107,30 +107,33 @@ test("M2-INSTALL-001 默认配置生成可恢复安装任务", async ({ page }) 
     "true",
   );
   await expectContentInset(page, ".install-choice-row", ".choice-copy", {
-    top: 12,
-    right: 16,
-    bottom: 12,
+    top: 14,
+    right: 18,
+    bottom: 14,
   });
-  await expectElementPadding(page, ".install-form-card", { block: 16, inline: 18 });
+  await expectElementPadding(page, ".install-form-card", { block: 18, inline: 20 });
   await assertDocumentHasNoHorizontalOverflow(page);
 
   await page.getByRole("button", { name: "查看安装信息" }).click();
   await expect(page.getByRole("heading", { name: "确认安装信息" })).toBeVisible();
   await expect(page.getByText("Azul Zulu 21.0.12+8 · x64")).toBeVisible();
   await expect(page.getByText("安装游戏环境", { exact: true })).toBeVisible();
-  await expectElementPadding(page, ".install-summary > div", { block: 12, inline: 16 });
+  await expectElementPadding(page, ".install-summary > div", { block: 14, inline: 18 });
+  await expectElementPadding(page, ".stage-preview li", { block: 12, inline: 14 });
 
   await page.getByRole("button", { name: "开始安装" }).click();
   await expect(page.getByRole("heading", { name: "安装任务已进入队列" })).toBeVisible();
   await expect(page.getByText("等待调度", { exact: true })).toBeVisible();
   await expect(page.getByText("安装游戏环境", { exact: true })).toBeVisible();
-  await expectElementPadding(page, ".queued-task-card", { block: 16, inline: 18 });
+  await expectElementPadding(page, ".queued-task-card", { block: 18, inline: 20 });
 
   await page.getByRole("button", { name: "返回首页" }).click();
   await expect(page.getByRole("button", { name: /1\.21\.8 Fabric.*1 个任务/ })).toBeVisible();
   await page.getByRole("button", { name: /1\.21\.8 Fabric.*1 个任务/ }).click();
   await expect(page.getByRole("heading", { name: "任务中心" })).toBeVisible();
   await expect(page.getByText("计划与暂存区已建立", { exact: false })).toBeVisible();
+  await expectElementPadding(page, ".task-card", { block: 18, inline: 20 });
+  await expectElementPadding(page, ".task-state", { block: 4, inline: 10 });
 
   await page.reload();
   await expect(page.getByRole("button", { name: /1\.21\.8 Fabric.*1 个任务/ })).toBeVisible();
