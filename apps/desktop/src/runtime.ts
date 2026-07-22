@@ -126,6 +126,116 @@ export interface ManagedInstance {
   state: string;
 }
 
+export type ModrinthSearchIndex = "relevance" | "downloads" | "follows" | "newest" | "updated";
+
+export interface ModrinthSearchQuery {
+  query: string;
+  gameVersion: string;
+  loader: string;
+  index: ModrinthSearchIndex;
+  offset: number;
+  limit: number;
+}
+
+export interface ModrinthProjectSummary {
+  projectId: string;
+  slug: string;
+  title: string;
+  description: string;
+  downloads: number;
+  clientSide: string;
+  serverSide: string;
+}
+
+export interface ModrinthSearchPage {
+  hits: ModrinthProjectSummary[];
+  offset: number;
+  limit: number;
+  totalHits: number;
+}
+
+export type ContentDependencyKind = "required" | "optional" | "incompatible" | "embedded";
+
+export interface ContentDependencyChoice {
+  projectId: string | null;
+  versionId: string | null;
+  title: string;
+  kind: ContentDependencyKind;
+  requiredByProjectId: string;
+}
+
+export interface ContentFilePlan {
+  url: string;
+  filename: string;
+  size: number;
+  sha1: string;
+  sha512: string;
+}
+
+export interface ContentPlanEntry {
+  projectId: string;
+  versionId: string;
+  projectTitle: string;
+  versionNumber: string;
+  requiredByProjectId: string | null;
+  file: ContentFilePlan;
+}
+
+export interface ContentInstallPlan {
+  schemaVersion: number;
+  instanceId: string;
+  instanceName: string;
+  gameVersion: string;
+  loader: string;
+  rootProjectId: string;
+  entries: ContentPlanEntry[];
+  optionalDependencies: ContentDependencyChoice[];
+  incompatibleDependencies: ContentDependencyChoice[];
+}
+
+export interface ContentInstallPreview {
+  id: string;
+  plan: ContentInstallPlan;
+}
+
+export type ContentInstallStage =
+  | "prepare"
+  | "downloadFiles"
+  | "verifyFiles"
+  | "commitFiles"
+  | "indexContent";
+
+export interface ContentInstallTask {
+  id: string;
+  state: TaskState;
+  currentStage: ContentInstallStage | null;
+  plan: ContentInstallPlan;
+  stagingDirectory: string;
+  targetDirectory: string;
+  sharedStoreDirectory: string;
+  createdAtUnixSeconds: number;
+  updatedAtUnixSeconds: number;
+  progress: InstallTask["progress"];
+}
+
+export interface InstalledContent {
+  id: string;
+  instanceId: string;
+  provider: "modrinth";
+  projectId: string;
+  versionId: string;
+  projectTitle: string;
+  versionNumber: string;
+  fileName: string;
+  relativePath: string;
+  size: number;
+  sha1: string;
+  sha512: string;
+  enabled: boolean;
+  autoUpdateEnabled: boolean;
+  installedAtUnixSeconds: number;
+}
+
 export type LaunchSessionState =
   | "starting"
   | "running"
@@ -158,6 +268,17 @@ export interface MoyuRuntime {
   getInstallTasks(): Promise<InstallTask[]>;
   resolveInstallTaskRecovery(taskId: string, decision: RecoveryDecision): Promise<void>;
   retryInstallTask(taskId: string): Promise<void>;
+  searchModrinthMods(query: ModrinthSearchQuery): Promise<ModrinthSearchPage>;
+  previewModrinthInstall(
+    instanceId: string,
+    projectId: string,
+    selectedOptionalProjects: string[],
+  ): Promise<ContentInstallPreview>;
+  confirmContentPreview(previewId: string): Promise<ContentInstallTask>;
+  getContentInstallTasks(): Promise<ContentInstallTask[]>;
+  getInstalledContent(instanceId: string): Promise<InstalledContent[]>;
+  retryContentTask(taskId: string): Promise<void>;
+  resolveContentTaskRecovery(taskId: string, decision: RecoveryDecision): Promise<void>;
   listInstances(): Promise<ManagedInstance[]>;
   startInstance(instanceId: string): Promise<LaunchSession>;
   stopInstance(instanceId: string): Promise<void>;
@@ -171,7 +292,11 @@ const BROWSER_STORAGE_KEY = "moyumax.browser.onboarding";
 const BROWSER_TASKS_KEY = "moyumax.browser.installTasks";
 const BROWSER_INSTANCES_KEY = "moyumax.browser.instances";
 const BROWSER_LAUNCH_SESSIONS_KEY = "moyumax.browser.launchSessions";
+const BROWSER_CONTENT_TASKS_KEY = "moyumax.browser.contentTasks";
+const BROWSER_INSTALLED_CONTENT_KEY = "moyumax.browser.installedContent";
+const BROWSER_MODRINTH_OFFLINE_KEY = "moyumax.browser.modrinthOffline";
 const browserPreviews = new Map<string, InstallSelection>();
+const browserContentPreviews = new Map<string, ContentInstallPlan>();
 
 export function createRuntime(): MoyuRuntime {
   return Reflect.has(window, "__TAURI_INTERNALS__")
@@ -199,6 +324,23 @@ function createTauriRuntime(): MoyuRuntime {
     resolveInstallTaskRecovery: (taskId, decision) =>
       invoke<void>("resolve_install_task_recovery", { taskId, decision }),
     retryInstallTask: (taskId) => invoke<void>("retry_install_task", { taskId }),
+    searchModrinthMods: (query) =>
+      invoke<ModrinthSearchPage>("search_modrinth_mods", { query }),
+    previewModrinthInstall: (instanceId, projectId, selectedOptionalProjects) =>
+      invoke<ContentInstallPreview>("preview_modrinth_install", {
+        instanceId,
+        projectId,
+        selectedOptionalProjects,
+      }),
+    confirmContentPreview: (previewId) =>
+      invoke<ContentInstallTask>("confirm_content_preview", { previewId }),
+    getContentInstallTasks: () =>
+      invoke<ContentInstallTask[]>("get_content_install_tasks"),
+    getInstalledContent: (instanceId) =>
+      invoke<InstalledContent[]>("get_installed_content", { instanceId }),
+    retryContentTask: (taskId) => invoke<void>("retry_content_task", { taskId }),
+    resolveContentTaskRecovery: (taskId, decision) =>
+      invoke<void>("resolve_content_task_recovery", { taskId, decision }),
     listInstances: () => invoke<ManagedInstance[]>("list_instances"),
     startInstance: (instanceId) =>
       invoke<LaunchSession>("start_instance", { instanceId }),
@@ -329,6 +471,141 @@ function createBrowserRuntime(): MoyuRuntime {
       task.updatedAtUnixSeconds = Math.floor(Date.now() / 1000);
       window.localStorage.setItem(BROWSER_TASKS_KEY, JSON.stringify(tasks));
     },
+    async searchModrinthMods(query) {
+      if (window.localStorage.getItem(BROWSER_MODRINTH_OFFLINE_KEY) === "true") {
+        throw new Error("无法连接 Modrinth：浏览器测试环境处于离线状态");
+      }
+      const hit: ModrinthProjectSummary = {
+        projectId: "ROOT0001",
+        slug: "continuity",
+        title: "Continuity",
+        description: "为方块纹理提供连续连接效果。",
+        downloads: 42,
+        clientSide: "required",
+        serverSide: "optional",
+      };
+      const matches = `${hit.title} ${hit.description}`
+        .toLocaleLowerCase()
+        .includes(query.query.trim().toLocaleLowerCase());
+      return {
+        hits: matches ? [hit] : [],
+        offset: query.offset,
+        limit: query.limit,
+        totalHits: matches ? 1 : 0,
+      };
+    },
+    async previewModrinthInstall(instanceId, projectId, selectedOptionalProjects) {
+      const instance = browserInstances().find((candidate) => candidate.id === instanceId);
+      if (!instance || instance.loaderKind !== "fabric" || instance.state !== "ready") {
+        throw new Error("目标实例不存在或不是可用的 Fabric 实例");
+      }
+      if (projectId !== "ROOT0001") throw new Error("浏览器测试来源中没有该项目");
+      const optionalSelected = selectedOptionalProjects.includes("OPT00001");
+      const plan: ContentInstallPlan = {
+        schemaVersion: 1,
+        instanceId,
+        instanceName: instance.name,
+        gameVersion: instance.gameVersion,
+        loader: instance.loaderKind,
+        rootProjectId: projectId,
+        entries: [
+          browserContentEntry(
+            "DEP00001",
+            "DEPVER01",
+            "Fabric API",
+            "fabric-api.jar",
+            "ROOT0001",
+          ),
+          ...(optionalSelected
+            ? [
+                browserContentEntry(
+                  "OPT00001",
+                  "OPTVER01",
+                  "Mod Menu",
+                  "modmenu.jar",
+                  "ROOT0001",
+                ),
+              ]
+            : []),
+          browserContentEntry(
+            "ROOT0001",
+            "ROOTVER1",
+            "Continuity",
+            "continuity.jar",
+            null,
+          ),
+        ],
+        optionalDependencies: [
+          {
+            projectId: "OPT00001",
+            versionId: null,
+            title: "Mod Menu",
+            kind: "optional",
+            requiredByProjectId: "ROOT0001",
+          },
+        ],
+        incompatibleDependencies: [],
+      };
+      const id = crypto.randomUUID();
+      browserContentPreviews.set(id, plan);
+      return { id, plan };
+    },
+    async confirmContentPreview(previewId) {
+      const plan = browserContentPreviews.get(previewId);
+      if (!plan) throw new Error("内容安装预览已失效，请重新确认依赖");
+      browserContentPreviews.delete(previewId);
+      const id = crypto.randomUUID();
+      const now = Math.floor(Date.now() / 1000);
+      const totalBytes = plan.entries.reduce((total, entry) => total + entry.file.size, 0);
+      const task: ContentInstallTask = {
+        id,
+        state: "queued",
+        currentStage: "prepare",
+        plan,
+        stagingDirectory: `D:\\MoyuMax\\data\\.staging\\content\\${id}`,
+        targetDirectory: `D:\\MoyuMax\\data\\instances\\${plan.instanceId}`,
+        sharedStoreDirectory: "D:\\MoyuMax\\data\\store",
+        createdAtUnixSeconds: now,
+        updatedAtUnixSeconds: now,
+        progress: {
+          completedBytes: 0,
+          totalBytes,
+          currentItem: "等待执行",
+          errorSummary: null,
+        },
+      };
+      const tasks = browserContentTasks();
+      tasks.push(task);
+      window.localStorage.setItem(BROWSER_CONTENT_TASKS_KEY, JSON.stringify(tasks));
+      return task;
+    },
+    async getContentInstallTasks() {
+      return browserContentTasks();
+    },
+    async getInstalledContent(instanceId) {
+      return browserInstalledContent().filter((entry) => entry.instanceId === instanceId);
+    },
+    async retryContentTask(taskId) {
+      const tasks = browserContentTasks();
+      const task = tasks.find((candidate) => candidate.id === taskId);
+      if (!task || task.state !== "failed") throw new Error("内容任务当前不能重试");
+      task.state = "queued";
+      task.currentStage = "prepare";
+      task.progress.currentItem = "等待重试执行";
+      task.progress.errorSummary = null;
+      task.updatedAtUnixSeconds = Math.floor(Date.now() / 1000);
+      window.localStorage.setItem(BROWSER_CONTENT_TASKS_KEY, JSON.stringify(tasks));
+    },
+    async resolveContentTaskRecovery(taskId, decision) {
+      const tasks = browserContentTasks();
+      const task = tasks.find((candidate) => candidate.id === taskId);
+      if (!task || task.state !== "awaitingRecovery") {
+        throw new Error("内容任务当前不需要恢复确认");
+      }
+      task.state = decision === "resume" ? "queued" : "cancelled";
+      task.updatedAtUnixSeconds = Math.floor(Date.now() / 1000);
+      window.localStorage.setItem(BROWSER_CONTENT_TASKS_KEY, JSON.stringify(tasks));
+    },
     async listInstances() {
       return browserInstances();
     },
@@ -394,6 +671,39 @@ function createBrowserRuntime(): MoyuRuntime {
 function browserInstallTasks(): InstallTask[] {
   const serialized = window.localStorage.getItem(BROWSER_TASKS_KEY);
   return serialized ? (JSON.parse(serialized) as InstallTask[]) : [];
+}
+
+function browserContentTasks(): ContentInstallTask[] {
+  const serialized = window.localStorage.getItem(BROWSER_CONTENT_TASKS_KEY);
+  return serialized ? (JSON.parse(serialized) as ContentInstallTask[]) : [];
+}
+
+function browserInstalledContent(): InstalledContent[] {
+  const serialized = window.localStorage.getItem(BROWSER_INSTALLED_CONTENT_KEY);
+  return serialized ? (JSON.parse(serialized) as InstalledContent[]) : [];
+}
+
+function browserContentEntry(
+  projectId: string,
+  versionId: string,
+  projectTitle: string,
+  filename: string,
+  requiredByProjectId: string | null,
+): ContentPlanEntry {
+  return {
+    projectId,
+    versionId,
+    projectTitle,
+    versionNumber: "1.0.0+26.2",
+    requiredByProjectId,
+    file: {
+      url: `https://cdn.modrinth.com/data/${projectId}/${filename}`,
+      filename,
+      size: projectId === "ROOT0001" ? 1_040_013 : 2_530_080,
+      sha1: "1".repeat(40),
+      sha512: "2".repeat(128),
+    },
+  };
 }
 
 function browserInstances(): ManagedInstance[] {

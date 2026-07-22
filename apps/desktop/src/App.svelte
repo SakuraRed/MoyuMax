@@ -5,17 +5,19 @@
   import GameInstall from "./components/GameInstall.svelte";
   import Home from "./components/Home.svelte";
   import Onboarding from "./components/Onboarding.svelte";
+  import ResourceCenter from "./components/ResourceCenter.svelte";
   import TaskCenter from "./components/TaskCenter.svelte";
   import { createRuntime } from "./runtime";
   import type {
     BootstrapState,
+    ContentInstallTask,
     InstallTask,
     LaunchSession,
     ManagedInstance,
     OnboardingSelection,
   } from "./runtime";
 
-  type Phase = "loading" | "onboarding" | "home" | "install" | "tasks" | "fatal";
+  type Phase = "loading" | "onboarding" | "home" | "install" | "resources" | "tasks" | "fatal";
 
   const runtime = createRuntime();
   let phase = $state<Phase>("loading");
@@ -24,6 +26,7 @@
   let fatalMessage = $state("");
   let notice = $state("");
   let tasks = $state<InstallTask[]>([]);
+  let contentTasks = $state<ContentInstallTask[]>([]);
   let instances = $state<ManagedInstance[]>([]);
   let launchSessions = $state<LaunchSession[]>([]);
   let homeRefreshRunning = false;
@@ -39,16 +42,24 @@
 
   async function initialize(): Promise<void> {
     try {
-      const [bootstrapState, initialTasks, initialInstances, initialSessions] =
+      const [
+        bootstrapState,
+        initialTasks,
+        initialContentTasks,
+        initialInstances,
+        initialSessions,
+      ] =
         await Promise.all([
           runtime.getBootstrapState(),
           runtime.getInstallTasks(),
+          runtime.getContentInstallTasks(),
           runtime.listInstances(),
           runtime.listLaunchSessions(),
         ]);
       bootstrap = bootstrapState;
       settings = bootstrap.settings ?? bootstrap.defaults;
       tasks = initialTasks;
+      contentTasks = initialContentTasks;
       instances = initialInstances;
       launchSessions = initialSessions;
       phase = bootstrap.requiresOnboarding ? "onboarding" : "home";
@@ -89,16 +100,21 @@
   }
 
   async function refreshTasks(): Promise<void> {
-    tasks = await runtime.getInstallTasks();
+    [tasks, contentTasks] = await Promise.all([
+      runtime.getInstallTasks(),
+      runtime.getContentInstallTasks(),
+    ]);
   }
 
   async function refreshHomeState(): Promise<void> {
-    const [nextTasks, nextInstances, nextSessions] = await Promise.all([
+    const [nextTasks, nextContentTasks, nextInstances, nextSessions] = await Promise.all([
       runtime.getInstallTasks(),
+      runtime.getContentInstallTasks(),
       runtime.listInstances(),
       runtime.listLaunchSessions(),
     ]);
     tasks = nextTasks;
+    contentTasks = nextContentTasks;
     instances = nextInstances;
     launchSessions = nextSessions;
   }
@@ -117,7 +133,10 @@
 
   async function refreshTasksSilently(): Promise<void> {
     try {
-      tasks = await runtime.getInstallTasks();
+      [tasks, contentTasks] = await Promise.all([
+        runtime.getInstallTasks(),
+        runtime.getContentInstallTasks(),
+      ]);
     } catch {
       // 可交互页面保持可用，显式进入任务中心时再显示读取错误。
     }
@@ -154,11 +173,13 @@
     {runtime}
     {settings}
     {tasks}
+    {contentTasks}
     {instances}
     {launchSessions}
     {notice}
     onInstall={openInstaller}
     onOpenTasks={() => phase = "tasks"}
+    onOpenResources={() => phase = "resources"}
     onStateChanged={refreshHomeState}
     onMinimize={() => runtime.minimizeWindow()}
     onToggleMaximize={() => runtime.toggleMaximizeWindow()}
@@ -173,12 +194,26 @@
     onToggleMaximize={() => runtime.toggleMaximizeWindow()}
     onClose={() => runtime.closeWindow()}
   />
+{:else if phase === "resources" && settings}
+  <ResourceCenter
+    {runtime}
+    {settings}
+    {instances}
+    onBack={() => void returnHome()}
+    onOpenTasks={() => phase = "tasks"}
+    onTasksChanged={refreshTasks}
+    onMinimize={() => runtime.minimizeWindow()}
+    onToggleMaximize={() => runtime.toggleMaximizeWindow()}
+    onClose={() => runtime.closeWindow()}
+  />
 {:else if phase === "tasks" && settings}
   <TaskCenter
     {runtime}
     {settings}
     {tasks}
+    {contentTasks}
     onBack={() => void returnHome()}
+    onOpenResources={() => phase = "resources"}
     onTasksChanged={refreshTasks}
     onMinimize={() => runtime.minimizeWindow()}
     onToggleMaximize={() => runtime.toggleMaximizeWindow()}

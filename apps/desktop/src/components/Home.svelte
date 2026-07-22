@@ -2,6 +2,7 @@
   import { onMount, tick } from "svelte";
 
   import type {
+    ContentInstallTask,
     InstallTask,
     LaunchSession,
     ManagedInstance,
@@ -15,11 +16,13 @@
     runtime: MoyuRuntime;
     settings: OnboardingSelection;
     tasks: InstallTask[];
+    contentTasks: ContentInstallTask[];
     instances: ManagedInstance[];
     launchSessions: LaunchSession[];
     notice: string;
     onInstall: () => void;
     onOpenTasks: () => void;
+    onOpenResources: () => void;
     onStateChanged: () => Promise<void>;
     onMinimize: () => Promise<void>;
     onToggleMaximize: () => Promise<void>;
@@ -30,11 +33,13 @@
     runtime,
     settings,
     tasks,
+    contentTasks,
     instances,
     launchSessions,
     notice,
     onInstall,
     onOpenTasks,
+    onOpenResources,
     onStateChanged,
     onMinimize,
     onToggleMaximize,
@@ -58,6 +63,9 @@
     launchSessions.filter((session) =>
       ["starting", "running"].includes(session.state),
     ),
+  );
+  const activeContentTasks = $derived(
+    contentTasks.filter((task) => !["completed", "cancelled"].includes(task.state)),
   );
 
   function activeSession(instanceId: string): LaunchSession | undefined {
@@ -131,7 +139,9 @@
   pageTitle="首页"
   dataDirectory={settings.dataDirectory}
   searchVisible
-  taskStatus={activeLaunches.length > 0 ? `${activeLaunches.length} 个游戏正在运行` : activeTasks.length > 0 ? `${activeTasks.length} 个未完成任务` : "无活动任务"}
+  navigationTargets={["resources", "tasks"]}
+  onNavigate={(target) => target === "resources" ? onOpenResources() : target === "tasks" ? onOpenTasks() : undefined}
+  taskStatus={activeLaunches.length > 0 ? `${activeLaunches.length} 个游戏正在运行` : activeTasks.length + activeContentTasks.length > 0 ? `${activeTasks.length + activeContentTasks.length} 个未完成任务` : "无活动任务"}
   {onMinimize}
   {onToggleMaximize}
   {onClose}
@@ -151,6 +161,14 @@
           <button class="home-task-summary" onclick={onOpenTasks}>
             <span><strong>{task.plan.instanceName}</strong><small>{task.state === "awaitingRecovery" ? "等待恢复确认" : "安装任务已排队"}</small></span>
             <span>{activeTasks.length} 个任务 <Icon name="arrow-right" size={14} /></span>
+          </button>
+        {/each}
+      {/if}
+      {#if activeTasks.length === 0 && activeContentTasks.length > 0}
+        {#each activeContentTasks.slice(0, 1) as task}
+          <button class="home-task-summary" onclick={onOpenTasks}>
+            <span><strong>{task.plan.entries.find((entry) => entry.projectId === task.plan.rootProjectId)?.projectTitle ?? "Modrinth 内容"}</strong><small>{task.state === "awaitingRecovery" ? "等待恢复确认" : "内容安装任务已排队"}</small></span>
+            <span>{activeContentTasks.length} 个任务 <Icon name="arrow-right" size={14} /></span>
           </button>
         {/each}
       {/if}
@@ -211,6 +229,14 @@
             <button class="home-task-summary home-task-wide" onclick={onOpenTasks}>
               <span><strong>{task.plan.instanceName}</strong><small>{task.state === "awaitingRecovery" ? "等待恢复确认" : "安装任务正在处理"}</small></span>
               <span>{activeTasks.length} 个任务 <Icon name="arrow-right" size={14} /></span>
+            </button>
+          {/each}
+        {/if}
+        {#if activeTasks.length === 0 && activeContentTasks.length > 0}
+          {#each activeContentTasks.slice(0, 1) as task}
+            <button class="home-task-summary home-task-wide" onclick={onOpenTasks}>
+              <span><strong>{task.plan.entries.find((entry) => entry.projectId === task.plan.rootProjectId)?.projectTitle ?? "Modrinth 内容"}</strong><small>{task.state === "awaitingRecovery" ? "等待恢复确认" : "内容安装任务正在处理"}</small></span>
+              <span>{activeContentTasks.length} 个任务 <Icon name="arrow-right" size={14} /></span>
             </button>
           {/each}
         {/if}

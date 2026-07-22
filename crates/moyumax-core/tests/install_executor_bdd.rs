@@ -312,6 +312,7 @@ impl ExecutorFixture {
                     size: 1,
                     sha1: None,
                     sha256: Some("00".repeat(32)),
+                    sha512: None,
                 },
             },
             isolation: InstanceIsolation::Full,
@@ -332,6 +333,7 @@ fn artifact(
         size: u64::try_from(bytes.len()).unwrap(),
         sha1: Some(sha1(bytes)),
         sha256: None,
+        sha512: None,
     }
 }
 

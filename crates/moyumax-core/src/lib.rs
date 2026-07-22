@@ -9,11 +9,13 @@ use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
 mod catalog;
+mod content;
 mod execution;
 mod install;
 mod launch;
 
 pub use catalog::*;
+pub use content::*;
 pub use execution::*;
 pub use install::*;
 pub use launch::*;
@@ -91,6 +93,8 @@ pub enum CoreError {
     Archive(String),
     #[error("无法启动游戏：{0}")]
     Launch(String),
+    #[error("内容服务不可用：{0}")]
+    Content(String),
 }
 
 pub type Result<T> = std::result::Result<T, CoreError>;
@@ -113,6 +117,7 @@ impl AppService {
         };
         service.migrate()?;
         service.recover_interrupted_install_tasks()?;
+        service.recover_interrupted_content_tasks()?;
         service.recover_interrupted_launch_sessions()?;
         Ok(service)
     }
@@ -232,7 +237,50 @@ impl AppService {
             );
             CREATE INDEX IF NOT EXISTS idx_launch_sessions_instance_state
                 ON launch_sessions(instance_id, state, started_at_unix_seconds);
-            PRAGMA user_version = 4;
+            CREATE TABLE IF NOT EXISTS content_install_tasks (
+                id TEXT PRIMARY KEY NOT NULL,
+                instance_id TEXT NOT NULL REFERENCES instances(id) ON DELETE CASCADE,
+                state TEXT NOT NULL,
+                current_stage TEXT,
+                plan_json TEXT NOT NULL,
+                staging_directory TEXT NOT NULL,
+                target_directory TEXT NOT NULL,
+                shared_store_directory TEXT NOT NULL,
+                created_at_unix_seconds INTEGER NOT NULL,
+                updated_at_unix_seconds INTEGER NOT NULL
+            );
+            CREATE INDEX IF NOT EXISTS idx_content_tasks_state_created
+                ON content_install_tasks(state, created_at_unix_seconds);
+            CREATE TABLE IF NOT EXISTS content_task_progress (
+                task_id TEXT PRIMARY KEY NOT NULL
+                    REFERENCES content_install_tasks(id) ON DELETE CASCADE,
+                completed_bytes INTEGER NOT NULL DEFAULT 0,
+                total_bytes INTEGER,
+                current_item TEXT,
+                error_summary TEXT
+            );
+            CREATE TABLE IF NOT EXISTS installed_content (
+                id TEXT PRIMARY KEY NOT NULL,
+                instance_id TEXT NOT NULL REFERENCES instances(id) ON DELETE CASCADE,
+                provider TEXT NOT NULL,
+                project_id TEXT NOT NULL,
+                version_id TEXT NOT NULL,
+                project_title TEXT NOT NULL,
+                version_number TEXT NOT NULL,
+                file_name TEXT NOT NULL COLLATE NOCASE,
+                relative_path TEXT NOT NULL,
+                size INTEGER NOT NULL,
+                sha1 TEXT NOT NULL,
+                sha512 TEXT NOT NULL,
+                enabled INTEGER NOT NULL DEFAULT 1,
+                auto_update_enabled INTEGER NOT NULL DEFAULT 0,
+                installed_at_unix_seconds INTEGER NOT NULL,
+                UNIQUE(instance_id, provider, project_id),
+                UNIQUE(instance_id, file_name)
+            );
+            CREATE INDEX IF NOT EXISTS idx_installed_content_instance_title
+                ON installed_content(instance_id, project_title, project_id);
+            PRAGMA user_version = 5;
             ",
         )?;
         Ok(())

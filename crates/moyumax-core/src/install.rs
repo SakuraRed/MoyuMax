@@ -21,6 +21,7 @@ pub enum ArtifactKind {
     AssetObject,
     LoggingConfiguration,
     JavaArchive,
+    ContentMod,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -32,6 +33,8 @@ pub struct ResolvedArtifact {
     pub size: u64,
     pub sha1: Option<String>,
     pub sha256: Option<String>,
+    #[serde(default)]
+    pub sha512: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -260,7 +263,7 @@ pub enum RecoveryDecision {
 }
 
 impl TaskState {
-    fn database_value(self) -> &'static str {
+    pub(crate) fn database_value(self) -> &'static str {
         match self {
             Self::Queued => "queued",
             Self::Running => "running",
@@ -273,7 +276,7 @@ impl TaskState {
         }
     }
 
-    fn from_database(value: &str) -> Result<Self> {
+    pub(crate) fn from_database(value: &str) -> Result<Self> {
         match value {
             "queued" => Ok(Self::Queued),
             "running" => Ok(Self::Running),

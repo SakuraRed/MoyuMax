@@ -16,7 +16,7 @@ use regex::Regex;
 use reqwest::{Client, StatusCode, Url, header};
 use serde::{Deserialize, Serialize};
 use sha1::{Digest as Sha1Digest, Sha1};
-use sha2::{Digest as Sha2Digest, Sha256};
+use sha2::{Digest as Sha2Digest, Sha256, Sha512};
 use tokio::{
     fs::{File, OpenOptions},
     io::{AsyncReadExt, AsyncWriteExt},
@@ -25,8 +25,10 @@ use tokio::{
 use zip::ZipArchive;
 
 use crate::{
-    AppService, ArtifactKind, CoreError, InstallStage, InstallTask, JavaEnvironmentStatus,
-    JavaPlanAction, ManagedInstanceSummary, ResolvedArtifact, ResolvedLoader, Result, TaskState,
+    AppService, ArtifactKind, CONTENT_COMMIT_JOURNAL_NAME, ContentCommitJournal,
+    ContentCommitJournalEntry, ContentInstallStage, ContentInstallTask, ContentPlanEntry,
+    CoreError, InstallStage, InstallTask, InstalledContent, JavaEnvironmentStatus, JavaPlanAction,
+    ManagedInstanceSummary, ResolvedArtifact, ResolvedLoader, Result, TaskState,
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -189,6 +191,276 @@ impl ArtifactDownloader {
             bytes: artifact.size,
         })
     }
+}
+
+#[derive(Debug, Clone)]
+pub struct ContentExecutor {
+    downloader: ArtifactDownloader,
+    max_concurrent_downloads: usize,
+}
+
+impl ContentExecutor {
+    pub fn new(max_concurrent_downloads: usize) -> Result<Self> {
+        Ok(Self {
+            downloader: ArtifactDownloader::new(max_concurrent_downloads)?,
+            max_concurrent_downloads,
+        })
+    }
+
+    pub async fn execute_task(
+        &self,
+        service: &AppService,
+        task_id: &str,
+    ) -> Result<Vec<InstalledContent>> {
+        let task = service.content_install_task(task_id)?;
+        if task.state != TaskState::Queued {
+            return Err(CoreError::Content(format!(
+                "内容任务当前状态 {:?} 不能开始执行",
+                task.state
+            )));
+        }
+        service.set_content_task_phase(
+            task_id,
+            TaskState::Running,
+            ContentInstallStage::Prepare,
+            "正在检查实例与文件冲突",
+        )?;
+        let result = self.execute_task_inner(service, &task).await;
+        if let Err(error) = &result {
+            let _ = service.mark_content_task_failed(task_id, &error.to_string());
+        }
+        result
+    }
+
+    async fn execute_task_inner(
+        &self,
+        service: &AppService,
+        task: &ContentInstallTask,
+    ) -> Result<Vec<InstalledContent>> {
+        service.content_task_instance(task)?;
+        let artifacts = task
+            .plan
+            .entries
+            .iter()
+            .map(content_artifact)
+            .collect::<Result<Vec<_>>>()?;
+        let mods_directory = preflight_content_destinations(task, &artifacts).await?;
+        let total = artifacts
+            .iter()
+            .fold(0_u64, |sum, artifact| sum.saturating_add(artifact.size));
+        service.set_content_task_progress(&task.id, 0, total, "等待下载模组文件")?;
+        service.set_content_task_phase(
+            &task.id,
+            TaskState::Running,
+            ContentInstallStage::DownloadFiles,
+            "正在下载模组及必需依赖",
+        )?;
+
+        let staging_directory = PathBuf::from(&task.staging_directory);
+        let download_directory = staging_directory.join("downloads");
+        let shared_directory = PathBuf::from(&task.shared_store_directory);
+        let downloads = self
+            .download_batch(
+                service,
+                &task.id,
+                artifacts.clone(),
+                &download_directory,
+                &shared_directory,
+                total,
+            )
+            .await?;
+        service.set_content_task_phase(
+            &task.id,
+            TaskState::Running,
+            ContentInstallStage::VerifyFiles,
+            "所有模组文件已通过大小、SHA-1 和 SHA-512 校验",
+        )?;
+
+        for (artifact, result) in &downloads {
+            commit_shared_file(artifact, result, &shared_directory, &task.id).await?;
+        }
+        let publish_directory = staging_directory.join("publish");
+        if tokio::fs::try_exists(&publish_directory).await? {
+            tokio::fs::remove_dir_all(&publish_directory).await?;
+        }
+        tokio::fs::create_dir_all(&publish_directory).await?;
+        for (entry, artifact) in task.plan.entries.iter().zip(&artifacts) {
+            let source = safe_join(&shared_directory, &artifact.relative_path)?;
+            let destination = safe_join(&publish_directory, &entry.file.filename)?;
+            tokio::fs::copy(&source, &destination).await?;
+            verify_file(&destination, artifact).await?;
+        }
+
+        service.set_content_task_phase(
+            &task.id,
+            TaskState::Committing,
+            ContentInstallStage::CommitFiles,
+            "正在原子发布模组文件与本地索引",
+        )?;
+        preflight_content_destinations(task, &artifacts).await?;
+        tokio::fs::create_dir_all(&mods_directory).await?;
+        let journal = ContentCommitJournal {
+            schema_version: 1,
+            entries: task
+                .plan
+                .entries
+                .iter()
+                .map(|entry| {
+                    Ok(ContentCommitJournalEntry {
+                        file_name: entry.file.filename.clone(),
+                        existed_before: std::fs::exists(safe_join(
+                            &mods_directory,
+                            &entry.file.filename,
+                        )?)?,
+                    })
+                })
+                .collect::<Result<Vec<_>>>()?,
+        };
+        write_content_commit_journal(&staging_directory, &journal).await?;
+        let mut published = Vec::new();
+        for (entry, artifact) in task.plan.entries.iter().zip(&artifacts) {
+            let prepared = safe_join(&publish_directory, &entry.file.filename)?;
+            let destination = safe_join(&mods_directory, &entry.file.filename)?;
+            if tokio::fs::try_exists(&destination).await? {
+                if !file_matches(&destination, artifact).await? {
+                    let error = CoreError::Content(format!(
+                        "模组文件冲突：{} 已存在且哈希不同",
+                        entry.file.filename
+                    ));
+                    return rollback_content_error(error, &published).await;
+                }
+                tokio::fs::remove_file(&prepared).await?;
+                continue;
+            }
+            if let Err(error) = tokio::fs::rename(&prepared, &destination).await {
+                return rollback_content_error(error.into(), &published).await;
+            }
+            published.push(destination);
+        }
+
+        let installed = match service.publish_installed_content(task) {
+            Ok(installed) => installed,
+            Err(error) => return rollback_content_error(error, &published).await,
+        };
+        if let Err(error) = tokio::fs::remove_dir_all(&staging_directory).await {
+            let _ = service.note_content_cleanup_pending(&task.id, &error.to_string());
+        }
+        Ok(installed)
+    }
+
+    async fn download_batch(
+        &self,
+        service: &AppService,
+        task_id: &str,
+        artifacts: Vec<ResolvedArtifact>,
+        staging_directory: &Path,
+        shared_directory: &Path,
+        total: u64,
+    ) -> Result<Vec<(ResolvedArtifact, DownloadResult)>> {
+        let completed = Arc::new(AtomicU64::new(0));
+        let downloader = self.downloader.clone();
+        stream::iter(artifacts)
+            .map(|artifact| {
+                let downloader = downloader.clone();
+                let completed = Arc::clone(&completed);
+                let service = service.clone();
+                let task_id = task_id.to_owned();
+                let staging_directory = staging_directory.to_path_buf();
+                let shared_directory = shared_directory.to_path_buf();
+                async move {
+                    let result = downloader
+                        .fetch(&artifact, &staging_directory, &shared_directory)
+                        .await?;
+                    let finished = completed
+                        .fetch_add(artifact.size, Ordering::AcqRel)
+                        .saturating_add(artifact.size);
+                    service.set_content_task_progress(
+                        &task_id,
+                        finished,
+                        total,
+                        &artifact.relative_path,
+                    )?;
+                    Ok::<_, CoreError>((artifact, result))
+                }
+            })
+            .buffer_unordered(self.max_concurrent_downloads)
+            .try_collect()
+            .await
+    }
+}
+
+fn content_artifact(entry: &ContentPlanEntry) -> Result<ResolvedArtifact> {
+    validate_hash(&entry.file.sha1, 40, "模组文件 SHA-1")?;
+    validate_hash(&entry.file.sha512, 128, "模组文件 SHA-512")?;
+    let prefix = entry.file.sha512.get(..2).ok_or_else(|| {
+        CoreError::Content(format!("模组文件 {} 缺少 SHA-512", entry.file.filename))
+    })?;
+    Ok(ResolvedArtifact {
+        kind: ArtifactKind::ContentMod,
+        relative_path: format!(
+            "content/modrinth/{prefix}/{}/{}",
+            entry.file.sha512, entry.file.filename
+        ),
+        url: entry.file.url.clone(),
+        size: entry.file.size,
+        sha1: Some(entry.file.sha1.clone()),
+        sha256: None,
+        sha512: Some(entry.file.sha512.clone()),
+    })
+}
+
+async fn preflight_content_destinations(
+    task: &ContentInstallTask,
+    artifacts: &[ResolvedArtifact],
+) -> Result<PathBuf> {
+    let root = PathBuf::from(&task.target_directory);
+    if !tokio::fs::try_exists(&root).await? {
+        return Err(CoreError::Content("目标实例目录不存在".to_owned()));
+    }
+    let mods_directory = root.join(".minecraft").join("mods");
+    for (entry, artifact) in task.plan.entries.iter().zip(artifacts) {
+        let destination = safe_join(&mods_directory, &entry.file.filename)?;
+        if tokio::fs::try_exists(&destination).await?
+            && !file_matches(&destination, artifact).await?
+        {
+            return Err(CoreError::Content(format!(
+                "模组文件冲突：{} 已存在且哈希不同",
+                entry.file.filename
+            )));
+        }
+    }
+    Ok(mods_directory)
+}
+
+async fn rollback_content_error<T>(error: CoreError, published: &[PathBuf]) -> Result<T> {
+    let mut rollback_errors = Vec::new();
+    for path in published.iter().rev() {
+        if let Err(rollback_error) = tokio::fs::remove_file(path).await {
+            rollback_errors.push(format!("{}：{rollback_error}", path.display()));
+        }
+    }
+    if rollback_errors.is_empty() {
+        Err(error)
+    } else {
+        Err(CoreError::Content(format!(
+            "{error}；补偿回滚失败：{}",
+            rollback_errors.join("；")
+        )))
+    }
+}
+
+async fn write_content_commit_journal(
+    staging_directory: &Path,
+    journal: &ContentCommitJournal,
+) -> Result<()> {
+    tokio::fs::create_dir_all(staging_directory).await?;
+    let path = staging_directory.join(CONTENT_COMMIT_JOURNAL_NAME);
+    let payload = serde_json::to_vec_pretty(journal)?;
+    let mut file = File::create(path).await?;
+    file.write_all(&payload).await?;
+    file.flush().await?;
+    file.sync_all().await?;
+    Ok(())
 }
 
 #[derive(Debug, Clone)]
@@ -449,6 +721,7 @@ impl InstallExecutor {
                 size: object.size,
                 sha1: Some(object.hash),
                 sha256: None,
+                sha512: None,
             });
         }
         Ok(artifacts)
@@ -511,6 +784,7 @@ impl InstallExecutor {
                 size,
                 sha1: Some(sha1),
                 sha256: library.sha256,
+                sha512: None,
             });
         }
         Ok(artifacts)
@@ -740,6 +1014,7 @@ fn platform_artifacts(metadata: &serde_json::Value) -> Result<PlatformArtifacts>
             size: native.size,
             sha1: Some(native.sha1.clone()),
             sha256: None,
+            sha512: None,
         });
     }
     if native_artifacts.is_empty() && !has_modern_windows_native {
@@ -1245,6 +1520,7 @@ async fn verify_file(path: &Path, artifact: &ResolvedArtifact) -> Result<()> {
     let mut buffer = vec![0_u8; 128 * 1024];
     let mut sha1 = artifact.sha1.as_ref().map(|_| Sha1::new());
     let mut sha256 = artifact.sha256.as_ref().map(|_| Sha256::new());
+    let mut sha512 = artifact.sha512.as_ref().map(|_| Sha512::new());
     loop {
         let read = file.read(&mut buffer).await?;
         if read == 0 {
@@ -1254,6 +1530,9 @@ async fn verify_file(path: &Path, artifact: &ResolvedArtifact) -> Result<()> {
             Sha1Digest::update(hasher, &buffer[..read]);
         }
         if let Some(hasher) = &mut sha256 {
+            Sha2Digest::update(hasher, &buffer[..read]);
+        }
+        if let Some(hasher) = &mut sha512 {
             Sha2Digest::update(hasher, &buffer[..read]);
         }
     }
@@ -1275,7 +1554,16 @@ async fn verify_file(path: &Path, artifact: &ResolvedArtifact) -> Result<()> {
             )));
         }
     }
-    if artifact.sha1.is_none() && artifact.sha256.is_none() {
+    if let (Some(expected), Some(hasher)) = (&artifact.sha512, sha512) {
+        let actual = encode_hex(Sha2Digest::finalize(hasher));
+        if !actual.eq_ignore_ascii_case(expected) {
+            return Err(CoreError::Download(format!(
+                "{} 的 SHA-512 不匹配",
+                artifact.relative_path
+            )));
+        }
+    }
+    if artifact.sha1.is_none() && artifact.sha256.is_none() && artifact.sha512.is_none() {
         return Err(CoreError::Download(format!(
             "{} 缺少可信校验值",
             artifact.relative_path

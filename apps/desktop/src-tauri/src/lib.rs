@@ -5,11 +5,12 @@ use std::{
 };
 
 use moyumax_core::{
-    AppService, BootstrapState, FabricLoaderSummary, InstallExecutor, InstallSelection,
-    InstallTask, InstanceIsolation, JavaArchitecture, JavaDistribution, LaunchAccount,
-    LaunchExecution, LaunchOptions, LaunchSessionSummary, ManagedInstanceSummary, MetadataClient,
-    OnboardingSelection, RecoveryDecision, ResolvedInstallRequest, ResolvedLoader, TaskState,
-    VersionCatalog, run_launch_execution,
+    AppService, BootstrapState, ContentExecutor, ContentInstallPlan, ContentInstallTask,
+    FabricLoaderSummary, InstallExecutor, InstallSelection, InstallTask, InstalledContent,
+    InstanceIsolation, JavaArchitecture, JavaDistribution, LaunchAccount, LaunchExecution,
+    LaunchOptions, LaunchSessionSummary, ManagedInstanceSummary, MetadataClient, ModrinthClient,
+    ModrinthSearchPage, ModrinthSearchQuery, OnboardingSelection, RecoveryDecision,
+    ResolvedInstallRequest, ResolvedLoader, TaskState, VersionCatalog, run_launch_execution,
 };
 use serde::Serialize;
 use tauri::{Manager, State};
@@ -21,27 +22,50 @@ struct InstallPreviewStore {
     requests: Mutex<HashMap<String, ResolvedInstallRequest>>,
 }
 
+#[derive(Debug, Default)]
+struct ContentPreviewStore {
+    plans: Mutex<HashMap<String, ContentInstallPlan>>,
+}
+
 #[derive(Debug, Clone)]
 struct TaskCoordinator {
-    executor: InstallExecutor,
+    install_executor: InstallExecutor,
+    content_executor: ContentExecutor,
     task_permits: Arc<Semaphore>,
 }
 
 impl TaskCoordinator {
     fn new() -> Result<Self, String> {
         Ok(Self {
-            executor: InstallExecutor::new(4).map_err(|error| error.to_string())?,
+            install_executor: InstallExecutor::new(4).map_err(|error| error.to_string())?,
+            content_executor: ContentExecutor::new(4).map_err(|error| error.to_string())?,
             task_permits: Arc::new(Semaphore::new(1)),
         })
     }
 
-    fn submit(&self, service: AppService, task_id: String) {
+    fn submit_install(&self, service: AppService, task_id: String) {
         let coordinator = self.clone();
         tauri::async_runtime::spawn(async move {
             let Ok(_permit) = coordinator.task_permits.acquire().await else {
                 return;
             };
-            let _ = coordinator.executor.execute_task(&service, &task_id).await;
+            let _ = coordinator
+                .install_executor
+                .execute_task(&service, &task_id)
+                .await;
+        });
+    }
+
+    fn submit_content(&self, service: AppService, task_id: String) {
+        let coordinator = self.clone();
+        tauri::async_runtime::spawn(async move {
+            let Ok(_permit) = coordinator.task_permits.acquire().await else {
+                return;
+            };
+            let _ = coordinator
+                .content_executor
+                .execute_task(&service, &task_id)
+                .await;
         });
     }
 }
@@ -113,6 +137,13 @@ struct InstallPreview {
     java_architecture: JavaArchitecture,
     isolation: InstanceIsolation,
     estimated_download_bytes: u64,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ContentInstallPreview {
+    id: String,
+    plan: ContentInstallPlan,
 }
 
 #[tauri::command]
@@ -218,7 +249,7 @@ fn confirm_install_preview(
     let task = service
         .enqueue_install_task(&request)
         .map_err(|error| error.to_string())?;
-    coordinator.submit(service.inner().clone(), task.id.clone());
+    coordinator.submit_install(service.inner().clone(), task.id.clone());
     Ok(task)
 }
 
@@ -240,7 +271,7 @@ fn resolve_install_task_recovery(
         .resolve_install_task_recovery(&task_id, decision)
         .map_err(|error| error.to_string())?;
     if decision == RecoveryDecision::Resume {
-        coordinator.submit(service.inner().clone(), task_id);
+        coordinator.submit_install(service.inner().clone(), task_id);
     }
     Ok(())
 }
@@ -254,7 +285,117 @@ fn retry_install_task(
     service
         .retry_failed_install_task(&task_id)
         .map_err(|error| error.to_string())?;
-    coordinator.submit(service.inner().clone(), task_id);
+    coordinator.submit_install(service.inner().clone(), task_id);
+    Ok(())
+}
+
+#[tauri::command]
+async fn search_modrinth_mods(
+    modrinth: State<'_, ModrinthClient>,
+    query: ModrinthSearchQuery,
+) -> Result<ModrinthSearchPage, String> {
+    modrinth
+        .search_mods(&query)
+        .await
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+async fn preview_modrinth_install(
+    service: State<'_, AppService>,
+    modrinth: State<'_, ModrinthClient>,
+    previews: State<'_, ContentPreviewStore>,
+    instance_id: String,
+    project_id: String,
+    selected_optional_projects: Vec<String>,
+) -> Result<ContentInstallPreview, String> {
+    let instance = service
+        .list_instances()
+        .map_err(|error| error.to_string())?
+        .into_iter()
+        .find(|instance| instance.id == instance_id)
+        .ok_or_else(|| "目标实例不存在，请刷新实例列表".to_owned())?;
+    let plan = modrinth
+        .resolve_mod_install_plan(&instance, &project_id, &selected_optional_projects)
+        .await
+        .map_err(|error| error.to_string())?;
+    let id = Uuid::new_v4().to_string();
+    let mut store = previews
+        .plans
+        .lock()
+        .map_err(|_| "内容安装预览状态锁已损坏，请重启 MoyuMax".to_owned())?;
+    if store.len() >= 16 {
+        store.clear();
+    }
+    store.insert(id.clone(), plan.clone());
+    Ok(ContentInstallPreview { id, plan })
+}
+
+#[tauri::command]
+fn confirm_content_preview(
+    service: State<'_, AppService>,
+    previews: State<'_, ContentPreviewStore>,
+    coordinator: State<'_, TaskCoordinator>,
+    preview_id: String,
+) -> Result<ContentInstallTask, String> {
+    let plan = previews
+        .plans
+        .lock()
+        .map_err(|_| "内容安装预览状态锁已损坏，请重启 MoyuMax".to_owned())?
+        .remove(&preview_id)
+        .ok_or_else(|| "内容安装预览已失效，请重新确认依赖".to_owned())?;
+    let task = service
+        .enqueue_content_install_task(&plan)
+        .map_err(|error| error.to_string())?;
+    coordinator.submit_content(service.inner().clone(), task.id.clone());
+    Ok(task)
+}
+
+#[tauri::command]
+fn get_content_install_tasks(
+    service: State<'_, AppService>,
+) -> Result<Vec<ContentInstallTask>, String> {
+    service
+        .list_content_install_tasks()
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+fn get_installed_content(
+    service: State<'_, AppService>,
+    instance_id: String,
+) -> Result<Vec<InstalledContent>, String> {
+    service
+        .list_installed_content(&instance_id)
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+fn retry_content_task(
+    service: State<'_, AppService>,
+    coordinator: State<'_, TaskCoordinator>,
+    task_id: String,
+) -> Result<(), String> {
+    service
+        .retry_failed_content_task(&task_id)
+        .map_err(|error| error.to_string())?;
+    coordinator.submit_content(service.inner().clone(), task_id);
+    Ok(())
+}
+
+#[tauri::command]
+fn resolve_content_task_recovery(
+    service: State<'_, AppService>,
+    coordinator: State<'_, TaskCoordinator>,
+    task_id: String,
+    decision: RecoveryDecision,
+) -> Result<(), String> {
+    service
+        .resolve_content_task_recovery(&task_id, decision)
+        .map_err(|error| error.to_string())?;
+    if decision == RecoveryDecision::Resume {
+        coordinator.submit_content(service.inner().clone(), task_id);
+    }
     Ok(())
 }
 
@@ -315,15 +456,23 @@ pub fn run() {
             let default_data_directory = default_data_directory()?;
             let service = AppService::open(&database_path, &default_data_directory)?;
             let metadata = MetadataClient::new()?;
+            let modrinth = ModrinthClient::new()?;
             let coordinator = TaskCoordinator::new().map_err(std::io::Error::other)?;
             for task in service.list_install_tasks()? {
                 if task.state == TaskState::Queued {
-                    coordinator.submit(service.clone(), task.id);
+                    coordinator.submit_install(service.clone(), task.id);
+                }
+            }
+            for task in service.list_content_install_tasks()? {
+                if task.state == TaskState::Queued {
+                    coordinator.submit_content(service.clone(), task.id);
                 }
             }
             app.manage(service);
             app.manage(metadata);
+            app.manage(modrinth);
             app.manage(InstallPreviewStore::default());
+            app.manage(ContentPreviewStore::default());
             app.manage(coordinator);
             app.manage(LaunchCoordinator::default());
             Ok(())
@@ -339,6 +488,13 @@ pub fn run() {
             get_install_tasks,
             resolve_install_task_recovery,
             retry_install_task,
+            search_modrinth_mods,
+            preview_modrinth_install,
+            confirm_content_preview,
+            get_content_install_tasks,
+            get_installed_content,
+            retry_content_task,
+            resolve_content_task_recovery,
             list_instances,
             start_instance,
             stop_instance,
@@ -387,7 +543,24 @@ fn default_data_directory() -> Result<PathBuf, std::io::Error> {
 
 #[cfg(test)]
 mod tests {
-    use super::LaunchCoordinator;
+    use super::{LaunchCoordinator, TaskCoordinator};
+
+    #[tokio::test]
+    async fn install_and_content_tasks_share_one_background_slot() {
+        let coordinator = TaskCoordinator::new().unwrap();
+        assert_eq!(coordinator.task_permits.available_permits(), 1);
+
+        let permit = coordinator
+            .task_permits
+            .clone()
+            .acquire_owned()
+            .await
+            .unwrap();
+        assert_eq!(coordinator.task_permits.available_permits(), 0);
+
+        drop(permit);
+        assert_eq!(coordinator.task_permits.available_permits(), 1);
+    }
 
     #[tokio::test]
     async fn launch_coordinator_routes_one_explicit_stop_request() {

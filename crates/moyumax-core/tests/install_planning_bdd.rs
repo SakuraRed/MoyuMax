@@ -205,6 +205,7 @@ fn resolved_request(instance_name: &str) -> ResolvedInstallRequest {
                 size: 30_000_000,
                 sha1: Some("3333333333333333333333333333333333333333".to_owned()),
                 sha256: None,
+                sha512: None,
             }],
             asset_objects_total_bytes: 0,
         },
@@ -237,6 +238,7 @@ fn resolved_java() -> ResolvedJavaPackage {
             sha256: Some(
                 "3c06e6693fd6fa725b985e66798a6a8293c75f52b793490754ad3c54d3d8b5a6".to_owned(),
             ),
+            sha512: None,
         },
     }
 }

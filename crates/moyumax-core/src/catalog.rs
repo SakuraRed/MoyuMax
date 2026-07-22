@@ -369,6 +369,7 @@ impl MetadataClient {
             size: u64::try_from(payload.len()).unwrap_or(u64::MAX),
             sha1: Some(actual_sha1),
             sha256: None,
+            sha512: None,
         });
         artifacts.push(game_download_artifact(
             ArtifactKind::GameClient,
@@ -395,6 +396,7 @@ impl MetadataClient {
                     size: artifact.size,
                     sha1: Some(artifact.sha1),
                     sha256: None,
+                    sha512: None,
                 });
             }
         }
@@ -406,6 +408,7 @@ impl MetadataClient {
                 size: logging.client.file.size,
                 sha1: Some(logging.client.file.sha1),
                 sha256: None,
+                sha512: None,
             });
         }
 
@@ -515,6 +518,7 @@ impl MetadataClient {
                 size: download_size,
                 sha1: None,
                 sha256: Some(details.sha256_hash),
+                sha512: None,
             },
         })
     }
@@ -563,6 +567,7 @@ fn game_download_artifact(
         size: download.size,
         sha1: Some(download.sha1),
         sha256: None,
+        sha512: None,
     }
 }
 

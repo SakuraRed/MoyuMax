@@ -12,6 +12,7 @@ use moyumax_core::{
     extract_zip_safely,
 };
 use sha1::{Digest, Sha1};
+use sha2::Sha512;
 use tempfile::TempDir;
 use zip::{ZipWriter, write::SimpleFileOptions};
 
@@ -79,6 +80,23 @@ async fn m3_execute_004_checksum_failure_never_replaces_shared_file() {
     assert_eq!(fs::read(fixture.partial_path()).unwrap(), returned);
 }
 
+#[tokio::test]
+async fn m5_install_001_sha512_mismatch_is_rejected_even_when_sha1_matches() {
+    let body = b"sha512 must also match".to_vec();
+    let server = TestServer::new(body.clone(), false);
+    let mut fixture = DownloadFixture::new(&server.url, &body);
+    fixture.artifact.sha512 = Some("00".repeat(64));
+
+    let error = fixture
+        .downloader
+        .fetch(&fixture.artifact, &fixture.staging, &fixture.shared)
+        .await
+        .expect_err("SHA-512 mismatch must fail");
+
+    assert!(error.to_string().contains("SHA-512"));
+    assert_eq!(fs::read(fixture.partial_path()).unwrap(), body);
+}
+
 #[test]
 fn m3_execute_005_java_archive_path_traversal_is_rejected() {
     let directory = TempDir::new().unwrap();
@@ -121,6 +139,7 @@ impl DownloadFixture {
                 size: u64::try_from(expected.len()).unwrap(),
                 sha1: Some(sha1(expected)),
                 sha256: None,
+                sha512: Some(sha512(expected)),
             },
             downloader: ArtifactDownloader::new(2).unwrap(),
             _directory: directory,
@@ -144,6 +163,12 @@ fn partial_path(staged_file: &Path) -> PathBuf {
 
 fn sha1(bytes: &[u8]) -> String {
     let mut hasher = Sha1::new();
+    hasher.update(bytes);
+    encode_hex(hasher.finalize())
+}
+
+fn sha512(bytes: &[u8]) -> String {
+    let mut hasher = Sha512::new();
     hasher.update(bytes);
     encode_hex(hasher.finalize())
 }

@@ -3,6 +3,8 @@
 
   import Icon from "./Icon.svelte";
 
+  type NavigationKey = "home" | "instances" | "resources" | "tasks" | "data" | "settings";
+
   interface Props {
     pageTitle: string;
     dataDirectory: string;
@@ -10,12 +12,14 @@
     titleSuffix?: string;
     searchVisible?: boolean;
     navigationDisabled?: boolean;
-    activeNavigation?: "home" | "instances" | "resources" | "tasks" | "data" | "settings";
+    activeNavigation?: NavigationKey;
+    navigationTargets?: NavigationKey[];
     connectionStatus?: string;
     taskStatus?: string;
     onMinimize: () => Promise<void>;
     onToggleMaximize: () => Promise<void>;
     onClose: () => Promise<void>;
+    onNavigate?: (target: NavigationKey) => void;
   }
 
   let {
@@ -26,11 +30,13 @@
     searchVisible = false,
     navigationDisabled = false,
     activeNavigation = "home",
+    navigationTargets = [],
     connectionStatus = "本地模式 · 未进行联网检查",
     taskStatus = "无活动任务",
     onMinimize,
     onToggleMaximize,
     onClose,
+    onNavigate,
   }: Props = $props();
 
   const navigation = [
@@ -64,8 +70,10 @@
         <button
           class:active
           class="nav-item"
+          aria-label={item.label}
           aria-current={active ? "page" : undefined}
-          disabled={navigationDisabled || !active}
+          disabled={navigationDisabled || (!active && !navigationTargets.includes(item.key))}
+          onclick={() => onNavigate?.(item.key)}
         >
           <Icon name={item.name} />
           <span>{item.label}</span>
