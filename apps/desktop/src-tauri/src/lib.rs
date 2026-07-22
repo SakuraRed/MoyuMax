@@ -6,13 +6,14 @@ use std::{
 
 use moyumax_core::{
     AppService, BootstrapState, FabricLoaderSummary, InstallExecutor, InstallSelection,
-    InstallTask, InstanceIsolation, JavaArchitecture, JavaDistribution, MetadataClient,
+    InstallTask, InstanceIsolation, JavaArchitecture, JavaDistribution, LaunchAccount,
+    LaunchExecution, LaunchOptions, LaunchSessionSummary, ManagedInstanceSummary, MetadataClient,
     OnboardingSelection, RecoveryDecision, ResolvedInstallRequest, ResolvedLoader, TaskState,
-    VersionCatalog,
+    VersionCatalog, run_launch_execution,
 };
 use serde::Serialize;
 use tauri::{Manager, State};
-use tokio::sync::Semaphore;
+use tokio::sync::{Semaphore, oneshot};
 use uuid::Uuid;
 
 #[derive(Debug, Default)]
@@ -42,6 +43,60 @@ impl TaskCoordinator {
             };
             let _ = coordinator.executor.execute_task(&service, &task_id).await;
         });
+    }
+}
+
+#[derive(Debug, Clone, Default)]
+struct LaunchCoordinator {
+    stop_requests: Arc<Mutex<HashMap<String, oneshot::Sender<()>>>>,
+}
+
+impl LaunchCoordinator {
+    fn register_stop_request(
+        &self,
+        instance_id: &str,
+        sender: oneshot::Sender<()>,
+    ) -> Result<(), String> {
+        let mut requests = self
+            .stop_requests
+            .lock()
+            .map_err(|_| "游戏进程协调器状态锁已损坏，请重启 MoyuMax".to_owned())?;
+        if requests.contains_key(instance_id) {
+            return Err("该实例已经在运行".to_owned());
+        }
+        requests.insert(instance_id.to_owned(), sender);
+        Ok(())
+    }
+
+    fn submit(
+        &self,
+        service: AppService,
+        execution: LaunchExecution,
+    ) -> Result<LaunchSessionSummary, String> {
+        let session = execution.session().clone();
+        let instance_id = session.instance_id.clone();
+        let (stop_sender, stop_receiver) = oneshot::channel();
+        self.register_stop_request(&instance_id, stop_sender)?;
+        let coordinator = self.clone();
+        tauri::async_runtime::spawn(async move {
+            let _ = run_launch_execution(&service, execution, stop_receiver).await;
+            if let Ok(mut requests) = coordinator.stop_requests.lock() {
+                requests.remove(&instance_id);
+            }
+        });
+        Ok(session)
+    }
+
+    fn request_stop(&self, instance_id: &str) -> Result<(), String> {
+        let sender = self
+            .stop_requests
+            .lock()
+            .map_err(|_| "游戏进程协调器状态锁已损坏，请重启 MoyuMax".to_owned())?
+            .remove(instance_id)
+            .ok_or_else(|| "该实例当前没有可停止的游戏进程".to_owned())?;
+        sender
+            .send(())
+            .map_err(|_| "游戏进程已经结束，正在刷新会话状态".to_owned())
     }
 }
 
@@ -203,6 +258,54 @@ fn retry_install_task(
     Ok(())
 }
 
+#[tauri::command]
+fn list_instances(service: State<'_, AppService>) -> Result<Vec<ManagedInstanceSummary>, String> {
+    service.list_instances().map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+async fn start_instance(
+    service: State<'_, AppService>,
+    coordinator: State<'_, LaunchCoordinator>,
+    instance_id: String,
+) -> Result<LaunchSessionSummary, String> {
+    let service = service.inner().clone();
+    let coordinator = coordinator.inner().clone();
+    let account = LaunchAccount::offline("MoyuMaxPlayer").map_err(|error| error.to_string())?;
+    let preparation_service = service.clone();
+    let execution = tauri::async_runtime::spawn_blocking(move || {
+        preparation_service.create_launch_execution(
+            &instance_id,
+            &account,
+            &LaunchOptions {
+                minimum_memory_mib: 512,
+                maximum_memory_mib: 2_048,
+            },
+        )
+    })
+    .await
+    .map_err(|error| format!("后台启动检查中断：{error}"))?
+    .map_err(|error| error.to_string())?;
+    coordinator.submit(service, execution)
+}
+
+#[tauri::command]
+fn stop_instance(
+    coordinator: State<'_, LaunchCoordinator>,
+    instance_id: String,
+) -> Result<(), String> {
+    coordinator.request_stop(&instance_id)
+}
+
+#[tauri::command]
+fn list_launch_sessions(
+    service: State<'_, AppService>,
+) -> Result<Vec<LaunchSessionSummary>, String> {
+    service
+        .list_launch_sessions()
+        .map_err(|error| error.to_string())
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
@@ -222,6 +325,7 @@ pub fn run() {
             app.manage(metadata);
             app.manage(InstallPreviewStore::default());
             app.manage(coordinator);
+            app.manage(LaunchCoordinator::default());
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -234,7 +338,11 @@ pub fn run() {
             confirm_install_preview,
             get_install_tasks,
             resolve_install_task_recovery,
-            retry_install_task
+            retry_install_task,
+            list_instances,
+            start_instance,
+            stop_instance,
+            list_launch_sessions
         ])
         .run(tauri::generate_context!())
         .expect("MoyuMax desktop runtime failed");
@@ -275,4 +383,23 @@ fn default_data_directory() -> Result<PathBuf, std::io::Error> {
         .parent()
         .ok_or_else(|| std::io::Error::other("executable directory is unavailable"))?;
     Ok(executable_directory.join("data"))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::LaunchCoordinator;
+
+    #[tokio::test]
+    async fn launch_coordinator_routes_one_explicit_stop_request() {
+        let coordinator = LaunchCoordinator::default();
+        let (sender, receiver) = tokio::sync::oneshot::channel();
+        coordinator
+            .register_stop_request("instance-id", sender)
+            .unwrap();
+
+        coordinator.request_stop("instance-id").unwrap();
+
+        assert!(receiver.await.is_ok());
+        assert!(coordinator.request_stop("instance-id").is_err());
+    }
 }

@@ -116,6 +116,37 @@ export interface InstallTask {
   };
 }
 
+export interface ManagedInstance {
+  id: string;
+  name: string;
+  gameVersion: string;
+  loaderKind: string;
+  loaderVersion: string | null;
+  rootDirectory: string;
+  state: string;
+}
+
+export type LaunchSessionState =
+  | "starting"
+  | "running"
+  | "completed"
+  | "failed"
+  | "stopped"
+  | "interrupted";
+
+export interface LaunchSession {
+  id: string;
+  instanceId: string;
+  playerName: string;
+  state: LaunchSessionState;
+  startedAtUnixSeconds: number;
+  endedAtUnixSeconds: number | null;
+  exitCode: number | null;
+  stdoutPath: string;
+  stderrPath: string;
+  errorSummary: string | null;
+}
+
 export interface MoyuRuntime {
   getBootstrapState(): Promise<BootstrapState>;
   completeOnboarding(selection: OnboardingSelection): Promise<void>;
@@ -127,6 +158,10 @@ export interface MoyuRuntime {
   getInstallTasks(): Promise<InstallTask[]>;
   resolveInstallTaskRecovery(taskId: string, decision: RecoveryDecision): Promise<void>;
   retryInstallTask(taskId: string): Promise<void>;
+  listInstances(): Promise<ManagedInstance[]>;
+  startInstance(instanceId: string): Promise<LaunchSession>;
+  stopInstance(instanceId: string): Promise<void>;
+  listLaunchSessions(): Promise<LaunchSession[]>;
   minimizeWindow(): Promise<void>;
   toggleMaximizeWindow(): Promise<void>;
   closeWindow(): Promise<void>;
@@ -134,6 +169,8 @@ export interface MoyuRuntime {
 
 const BROWSER_STORAGE_KEY = "moyumax.browser.onboarding";
 const BROWSER_TASKS_KEY = "moyumax.browser.installTasks";
+const BROWSER_INSTANCES_KEY = "moyumax.browser.instances";
+const BROWSER_LAUNCH_SESSIONS_KEY = "moyumax.browser.launchSessions";
 const browserPreviews = new Map<string, InstallSelection>();
 
 export function createRuntime(): MoyuRuntime {
@@ -162,6 +199,12 @@ function createTauriRuntime(): MoyuRuntime {
     resolveInstallTaskRecovery: (taskId, decision) =>
       invoke<void>("resolve_install_task_recovery", { taskId, decision }),
     retryInstallTask: (taskId) => invoke<void>("retry_install_task", { taskId }),
+    listInstances: () => invoke<ManagedInstance[]>("list_instances"),
+    startInstance: (instanceId) =>
+      invoke<LaunchSession>("start_instance", { instanceId }),
+    stopInstance: (instanceId) => invoke<void>("stop_instance", { instanceId }),
+    listLaunchSessions: () =>
+      invoke<LaunchSession[]>("list_launch_sessions"),
     minimizeWindow: () => currentWindow.minimize(),
     toggleMaximizeWindow: () => currentWindow.toggleMaximize(),
     closeWindow: () => currentWindow.close(),
@@ -286,6 +329,62 @@ function createBrowserRuntime(): MoyuRuntime {
       task.updatedAtUnixSeconds = Math.floor(Date.now() / 1000);
       window.localStorage.setItem(BROWSER_TASKS_KEY, JSON.stringify(tasks));
     },
+    async listInstances() {
+      return browserInstances();
+    },
+    async startInstance(instanceId) {
+      const instance = browserInstances().find((candidate) => candidate.id === instanceId);
+      if (!instance || instance.state !== "ready") {
+        throw new Error("实例不存在或当前不可启动");
+      }
+      const sessions = browserLaunchSessions();
+      if (
+        sessions.some(
+          (session) =>
+            session.instanceId === instanceId &&
+            ["starting", "running"].includes(session.state),
+        )
+      ) {
+        throw new Error("该实例已经在运行");
+      }
+      const now = Math.floor(Date.now() / 1000);
+      const session: LaunchSession = {
+        id: crypto.randomUUID(),
+        instanceId,
+        playerName: "MoyuMaxPlayer",
+        state: "running",
+        startedAtUnixSeconds: now,
+        endedAtUnixSeconds: null,
+        exitCode: null,
+        stdoutPath: `${instance.rootDirectory}\\.minecraft\\logs\\moyumax\\browser.stdout.log`,
+        stderrPath: `${instance.rootDirectory}\\.minecraft\\logs\\moyumax\\browser.stderr.log`,
+        errorSummary: null,
+      };
+      sessions.unshift(session);
+      window.localStorage.setItem(
+        BROWSER_LAUNCH_SESSIONS_KEY,
+        JSON.stringify(sessions),
+      );
+      return session;
+    },
+    async stopInstance(instanceId) {
+      const sessions = browserLaunchSessions();
+      const session = sessions.find(
+        (candidate) =>
+          candidate.instanceId === instanceId &&
+          ["starting", "running"].includes(candidate.state),
+      );
+      if (!session) throw new Error("该实例当前没有可停止的游戏进程");
+      session.state = "stopped";
+      session.endedAtUnixSeconds = Math.floor(Date.now() / 1000);
+      window.localStorage.setItem(
+        BROWSER_LAUNCH_SESSIONS_KEY,
+        JSON.stringify(sessions),
+      );
+    },
+    async listLaunchSessions() {
+      return browserLaunchSessions();
+    },
     async minimizeWindow() {},
     async toggleMaximizeWindow() {},
     async closeWindow() {},
@@ -295,6 +394,16 @@ function createBrowserRuntime(): MoyuRuntime {
 function browserInstallTasks(): InstallTask[] {
   const serialized = window.localStorage.getItem(BROWSER_TASKS_KEY);
   return serialized ? (JSON.parse(serialized) as InstallTask[]) : [];
+}
+
+function browserInstances(): ManagedInstance[] {
+  const serialized = window.localStorage.getItem(BROWSER_INSTANCES_KEY);
+  return serialized ? (JSON.parse(serialized) as ManagedInstance[]) : [];
+}
+
+function browserLaunchSessions(): LaunchSession[] {
+  const serialized = window.localStorage.getItem(BROWSER_LAUNCH_SESSIONS_KEY);
+  return serialized ? (JSON.parse(serialized) as LaunchSession[]) : [];
 }
 
 function browserVersionCatalog(): VersionCatalog {

@@ -11,10 +11,12 @@ use thiserror::Error;
 mod catalog;
 mod execution;
 mod install;
+mod launch;
 
 pub use catalog::*;
 pub use execution::*;
 pub use install::*;
+pub use launch::*;
 
 const SETTING_ONBOARDING_COMPLETE: &str = "onboarding_complete";
 const SETTING_ONBOARDING_SELECTION: &str = "onboarding_selection";
@@ -87,6 +89,8 @@ pub enum CoreError {
     Download(String),
     #[error("压缩包不安全或无法解包：{0}")]
     Archive(String),
+    #[error("无法启动游戏：{0}")]
+    Launch(String),
 }
 
 pub type Result<T> = std::result::Result<T, CoreError>;
@@ -109,6 +113,7 @@ impl AppService {
         };
         service.migrate()?;
         service.recover_interrupted_install_tasks()?;
+        service.recover_interrupted_launch_sessions()?;
         Ok(service)
     }
 
@@ -213,7 +218,21 @@ impl AppService {
                 plan_json TEXT NOT NULL,
                 runtime_json TEXT NOT NULL
             );
-            PRAGMA user_version = 3;
+            CREATE TABLE IF NOT EXISTS launch_sessions (
+                id TEXT PRIMARY KEY NOT NULL,
+                instance_id TEXT NOT NULL REFERENCES instances(id) ON DELETE CASCADE,
+                player_name TEXT NOT NULL,
+                state TEXT NOT NULL,
+                started_at_unix_seconds INTEGER NOT NULL,
+                ended_at_unix_seconds INTEGER,
+                exit_code INTEGER,
+                stdout_path TEXT NOT NULL,
+                stderr_path TEXT NOT NULL,
+                error_summary TEXT
+            );
+            CREATE INDEX IF NOT EXISTS idx_launch_sessions_instance_state
+                ON launch_sessions(instance_id, state, started_at_unix_seconds);
+            PRAGMA user_version = 4;
             ",
         )?;
         Ok(())

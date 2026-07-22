@@ -113,6 +113,27 @@ async fn current_recommended_fabric_installs_to_a_ready_isolated_instance() {
         TaskState::Completed
     );
     assert!(!Path::new(&task.staging_directory).exists());
+    if let Some(result_file) = std::env::var_os("MOYUMAX_LIVE_RESULT_FILE") {
+        let result_file = std::path::PathBuf::from(result_file);
+        if let Some(parent) = result_file.parent() {
+            std::fs::create_dir_all(parent).unwrap();
+        }
+        std::fs::write(
+            result_file,
+            serde_json::to_vec_pretty(&serde_json::json!({
+                "instanceId": instance.id,
+                "gameVersion": instance.game_version,
+                "loaderKind": instance.loader_kind,
+                "loaderVersion": instance.loader_version,
+                "javaVersion": java_environment.full_version,
+                "state": instance.state,
+                "taskState": "completed",
+                "stagingCleaned": true
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+    }
     if std::env::var_os("MOYUMAX_LIVE_KEEP").is_some() {
         let retained = directory.keep();
         println!("真实安装成功并保留在 {}", retained.display());

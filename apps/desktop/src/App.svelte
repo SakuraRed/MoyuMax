@@ -3,11 +3,17 @@
 
   import AppShell from "./components/AppShell.svelte";
   import GameInstall from "./components/GameInstall.svelte";
-  import HomeEmpty from "./components/HomeEmpty.svelte";
+  import Home from "./components/Home.svelte";
   import Onboarding from "./components/Onboarding.svelte";
   import TaskCenter from "./components/TaskCenter.svelte";
   import { createRuntime } from "./runtime";
-  import type { BootstrapState, InstallTask, OnboardingSelection } from "./runtime";
+  import type {
+    BootstrapState,
+    InstallTask,
+    LaunchSession,
+    ManagedInstance,
+    OnboardingSelection,
+  } from "./runtime";
 
   type Phase = "loading" | "onboarding" | "home" | "install" | "tasks" | "fatal";
 
@@ -18,20 +24,33 @@
   let fatalMessage = $state("");
   let notice = $state("");
   let tasks = $state<InstallTask[]>([]);
+  let instances = $state<ManagedInstance[]>([]);
+  let launchSessions = $state<LaunchSession[]>([]);
+  let homeRefreshRunning = false;
 
   onMount(() => {
     void initialize();
-    const taskPoll = setInterval(() => {
-      if (phase === "home" || phase === "tasks") void refreshTasksSilently();
-    }, 750);
-    return () => clearInterval(taskPoll);
+    const statePoll = setInterval(() => {
+      if (phase === "home") void refreshHomeStateSilently();
+      else if (phase === "tasks") void refreshTasksSilently();
+    }, 1_000);
+    return () => clearInterval(statePoll);
   });
 
   async function initialize(): Promise<void> {
     try {
-      bootstrap = await runtime.getBootstrapState();
+      const [bootstrapState, initialTasks, initialInstances, initialSessions] =
+        await Promise.all([
+          runtime.getBootstrapState(),
+          runtime.getInstallTasks(),
+          runtime.listInstances(),
+          runtime.listLaunchSessions(),
+        ]);
+      bootstrap = bootstrapState;
       settings = bootstrap.settings ?? bootstrap.defaults;
-      tasks = await runtime.getInstallTasks();
+      tasks = initialTasks;
+      instances = initialInstances;
+      launchSessions = initialSessions;
       phase = bootstrap.requiresOnboarding ? "onboarding" : "home";
     } catch (error) {
       fatalMessage = error instanceof Error ? error.message : String(error);
@@ -61,7 +80,7 @@
 
   async function returnHome(): Promise<void> {
     try {
-      tasks = await runtime.getInstallTasks();
+      await refreshHomeState();
       notice = "";
     } catch (error) {
       notice = `无法刷新任务：${error instanceof Error ? error.message : String(error)}`;
@@ -71,6 +90,29 @@
 
   async function refreshTasks(): Promise<void> {
     tasks = await runtime.getInstallTasks();
+  }
+
+  async function refreshHomeState(): Promise<void> {
+    const [nextTasks, nextInstances, nextSessions] = await Promise.all([
+      runtime.getInstallTasks(),
+      runtime.listInstances(),
+      runtime.listLaunchSessions(),
+    ]);
+    tasks = nextTasks;
+    instances = nextInstances;
+    launchSessions = nextSessions;
+  }
+
+  async function refreshHomeStateSilently(): Promise<void> {
+    if (homeRefreshRunning) return;
+    homeRefreshRunning = true;
+    try {
+      await refreshHomeState();
+    } catch {
+      // 本地实例列表保持最后一次成功快照，显式操作失败时由首页显示原因。
+    } finally {
+      homeRefreshRunning = false;
+    }
   }
 
   async function refreshTasksSilently(): Promise<void> {
@@ -108,12 +150,16 @@
     onClose={() => runtime.closeWindow()}
   />
 {:else if phase === "home" && settings}
-  <HomeEmpty
+  <Home
+    {runtime}
     {settings}
     {tasks}
+    {instances}
+    {launchSessions}
     {notice}
     onInstall={openInstaller}
     onOpenTasks={() => phase = "tasks"}
+    onStateChanged={refreshHomeState}
     onMinimize={() => runtime.minimizeWindow()}
     onToggleMaximize={() => runtime.toggleMaximizeWindow()}
     onClose={() => runtime.closeWindow()}

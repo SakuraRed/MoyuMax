@@ -60,10 +60,11 @@ test("UI-A11Y-001 在 960x600 和 200% 放大下主区域不重叠", async ({ pa
 test("UI-A11Y-001 文本与卡片边缘保持可读内边距", async ({ page }) => {
   await expectElementPadding(page, ".wizard-card", { block: 18, inline: 22 });
   await expectContentInset(page, ".choice", ".choice-copy", {
-    top: 10,
-    right: 12,
-    bottom: 10,
+    top: 12,
+    right: 16,
+    bottom: 12,
   });
+  await expectElementPadding(page, ".choice-copy strong em", { block: 3, inline: 8 });
 
   const legendGap = await page.evaluate(() => {
     const legend = document.querySelector<HTMLElement>(".choice-section legend");
@@ -75,17 +76,18 @@ test("UI-A11Y-001 文本与卡片边缘保持可读内边距", async ({ page }) 
 
   await page.getByRole("button", { name: "下一步" }).click();
   await expectContentInset(page, ".choice", ".choice-copy", {
-    top: 10,
-    right: 12,
-    bottom: 10,
+    top: 12,
+    right: 16,
+    bottom: 12,
   });
 
   await page.getByRole("button", { name: "下一步" }).click();
   await expectContentInset(page, ".setting-row", ".setting-row > span:first-child", {
-    top: 10,
-    bottom: 10,
-    left: 12,
+    top: 12,
+    bottom: 12,
+    left: 16,
   });
+  await expectElementPadding(page, ".setting-row strong em", { block: 3, inline: 8 });
 
   await page.getByRole("button", { name: "完成设置" }).click();
   await expectElementPadding(page, ".summary-list > div", { block: 10, inline: 16 });
@@ -105,9 +107,9 @@ test("M2-INSTALL-001 默认配置生成可恢复安装任务", async ({ page }) 
     "true",
   );
   await expectContentInset(page, ".install-choice-row", ".choice-copy", {
-    top: 10,
-    right: 12,
-    bottom: 10,
+    top: 12,
+    right: 16,
+    bottom: 12,
   });
   await expectElementPadding(page, ".install-form-card", { block: 16, inline: 18 });
   await assertDocumentHasNoHorizontalOverflow(page);

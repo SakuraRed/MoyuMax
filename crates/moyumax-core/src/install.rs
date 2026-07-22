@@ -900,7 +900,7 @@ impl AppService {
         Ok(instance)
     }
 
-    fn selected_data_directory(&self) -> Result<std::path::PathBuf> {
+    pub(crate) fn selected_data_directory(&self) -> Result<std::path::PathBuf> {
         let state = self.bootstrap_state()?;
         let selection: OnboardingSelection = state.settings.unwrap_or(state.defaults);
         Ok(std::path::PathBuf::from(selection.data_directory))
