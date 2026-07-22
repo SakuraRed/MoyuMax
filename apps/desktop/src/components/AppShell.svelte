@@ -10,6 +10,9 @@
     titleSuffix?: string;
     searchVisible?: boolean;
     navigationDisabled?: boolean;
+    activeNavigation?: "home" | "instances" | "resources" | "tasks" | "data" | "settings";
+    connectionStatus?: string;
+    taskStatus?: string;
     onMinimize: () => Promise<void>;
     onToggleMaximize: () => Promise<void>;
     onClose: () => Promise<void>;
@@ -22,18 +25,21 @@
     titleSuffix,
     searchVisible = false,
     navigationDisabled = false,
+    activeNavigation = "home",
+    connectionStatus = "本地模式 · 未进行联网检查",
+    taskStatus = "无活动任务",
     onMinimize,
     onToggleMaximize,
     onClose,
   }: Props = $props();
 
   const navigation = [
-    { name: "home" as const, label: "首页", active: true },
-    { name: "box" as const, label: "实例", active: false },
-    { name: "compass" as const, label: "资源", active: false },
-    { name: "task" as const, label: "任务", active: false },
-    { name: "database" as const, label: "数据", active: false },
-    { name: "settings" as const, label: "设置", active: false },
+    { key: "home" as const, name: "home" as const, label: "首页" },
+    { key: "instances" as const, name: "box" as const, label: "实例" },
+    { key: "resources" as const, name: "compass" as const, label: "资源" },
+    { key: "tasks" as const, name: "task" as const, label: "任务" },
+    { key: "data" as const, name: "database" as const, label: "数据" },
+    { key: "settings" as const, name: "settings" as const, label: "设置" },
   ];
 </script>
 
@@ -54,11 +60,12 @@
   <div class="app-body">
     <nav class:nav-disabled={navigationDisabled} class="navrail" aria-label="主导航">
       {#each navigation as item}
+        {@const active = item.key === activeNavigation}
         <button
-          class:active={item.active}
+          class:active
           class="nav-item"
-          aria-current={item.active ? "page" : undefined}
-          disabled={navigationDisabled || !item.active}
+          aria-current={active ? "page" : undefined}
+          disabled={navigationDisabled || !active}
         >
           <Icon name={item.name} />
           <span>{item.label}</span>
@@ -86,8 +93,8 @@
       {@render children()}
 
       <footer class="statusbar">
-        <span><Icon name="wifi" size={12} /> 本地模式 · 未进行联网检查</span>
-        <span>无活动任务</span>
+        <span><Icon name="wifi" size={12} /> {connectionStatus}</span>
+        <span>{taskStatus}</span>
         <span class="status-right">
           <Icon name="disk" size={12} /> 数据 {dataDirectory}<b>v0.1.0-preview.1</b>
         </span>

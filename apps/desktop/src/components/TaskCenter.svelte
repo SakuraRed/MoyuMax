@@ -1,0 +1,120 @@
+<script lang="ts">
+  import { installStageLabel } from "../installation";
+  import type {
+    InstallTask,
+    MoyuRuntime,
+    OnboardingSelection,
+    RecoveryDecision,
+    TaskState,
+  } from "../runtime";
+  import AppShell from "./AppShell.svelte";
+  import Icon from "./Icon.svelte";
+
+  interface Props {
+    runtime: MoyuRuntime;
+    settings: OnboardingSelection;
+    tasks: InstallTask[];
+    onBack: () => void;
+    onTasksChanged: () => Promise<void>;
+    onMinimize: () => Promise<void>;
+    onToggleMaximize: () => Promise<void>;
+    onClose: () => Promise<void>;
+  }
+
+  let {
+    runtime,
+    settings,
+    tasks,
+    onBack,
+    onTasksChanged,
+    onMinimize,
+    onToggleMaximize,
+    onClose,
+  }: Props = $props();
+
+  let changingTask = $state("");
+  let errorMessage = $state("");
+
+  async function resolveRecovery(taskId: string, decision: RecoveryDecision): Promise<void> {
+    changingTask = taskId;
+    errorMessage = "";
+    try {
+      await runtime.resolveInstallTaskRecovery(taskId, decision);
+      await onTasksChanged();
+    } catch (error) {
+      errorMessage = error instanceof Error ? error.message : String(error);
+    } finally {
+      changingTask = "";
+    }
+  }
+
+  function stateLabel(state: TaskState): string {
+    const labels: Record<TaskState, string> = {
+      queued: "已排队",
+      running: "正在运行",
+      paused: "已暂停",
+      awaitingRecovery: "等待恢复确认",
+      failed: "失败",
+      completed: "已完成",
+      cancelled: "已取消",
+    };
+    return labels[state];
+  }
+</script>
+
+<AppShell
+  pageTitle="任务中心"
+  dataDirectory={settings.dataDirectory}
+  activeNavigation="tasks"
+  connectionStatus="本地任务队列"
+  taskStatus={`${tasks.filter((task) => !["completed", "cancelled"].includes(task.state)).length} 个未完成任务`}
+  {onMinimize}
+  {onToggleMaximize}
+  {onClose}
+>
+  <main class="content task-center-content">
+    <header class="task-center-heading">
+      <button class="button ghost compact" onclick={onBack}>返回首页</button>
+      <div><h1>任务中心</h1><p>所有长任务使用同一持久化队列；未知总量时不会伪造百分比。</p></div>
+    </header>
+
+    {#if errorMessage}
+      <div class="error-block" role="alert"><strong>无法更新任务</strong><span>{errorMessage}</span></div>
+    {/if}
+
+    {#if tasks.length === 0}
+      <section class="task-empty"><Icon name="task" size={28} /><h2>没有任务</h2><p>安装、迁移、备份和修复会统一出现在这里。</p></section>
+    {:else}
+      <div class="task-list">
+        {#each tasks as task}
+          <article class:recovery={task.state === "awaitingRecovery"} class="task-card">
+            <header>
+              <div><strong>{task.plan.instanceName}</strong><small>安装 Minecraft 实例</small></div>
+              <span class="task-state">{stateLabel(task.state)}</span>
+            </header>
+            {#if task.state === "awaitingRecovery"}
+              <div class="recovery-copy">
+                <Icon name="info" size={16} />
+                <div><strong>上次运行在安装提交前中断</strong><p>继续只会把任务放回队列，不会立即联网。放弃只清理此任务的专用暂存区，不删除共享文件、Java 或已提交实例。</p></div>
+              </div>
+              <div class="task-buttons">
+                <button class="button primary" disabled={changingTask === task.id} onclick={() => void resolveRecovery(task.id, "resume")}>继续任务</button>
+                <button class="button ghost" disabled={changingTask === task.id} onclick={() => void resolveRecovery(task.id, "discard")}>放弃并清理临时文件</button>
+              </div>
+            {:else}
+              <ol class="task-stage-list">
+                {#each task.plan.stages as stage, index}
+                  <li class:current={task.currentStage === stage}><span>{index + 1}</span><b>{installStageLabel(stage)}</b></li>
+                {/each}
+              </ol>
+              {#if task.state === "queued"}
+                <p class="task-boundary">计划与暂存区已建立；文件执行器接入前保持排队，不显示虚假速度或剩余时间。</p>
+              {/if}
+            {/if}
+            <details><summary>任务路径</summary><code>{task.stagingDirectory}</code></details>
+          </article>
+        {/each}
+      </div>
+    {/if}
+  </main>
+</AppShell>

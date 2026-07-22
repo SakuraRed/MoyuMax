@@ -17,6 +17,7 @@ tauri-build.workspace = true
 moyumax-core = { path = "../../../crates/moyumax-core" }
 serde.workspace = true
 tauri.workspace = true
+uuid.workspace = true
 
 [features]
 default = []

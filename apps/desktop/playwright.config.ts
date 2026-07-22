@@ -14,7 +14,7 @@ export default defineConfig({
   webServer: {
     command: "corepack pnpm dev:web",
     url: "http://127.0.0.1:1420",
-    reuseExistingServer: true,
+    reuseExistingServer: false,
     timeout: 30_000,
   },
 });

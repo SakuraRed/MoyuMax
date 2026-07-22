@@ -79,6 +79,83 @@ test("UI-A11Y-001 文本与卡片边缘保持可读内边距", async ({ page }) 
   await expectElementPadding(page, ".summary-list > div", { block: 10, inline: 16 });
 });
 
+test("M2-INSTALL-001 默认配置生成可恢复安装任务", async ({ page }) => {
+  await completeDefaultOnboarding(page);
+
+  await page.getByRole("button", { name: "安装第一个游戏" }).click();
+  await expect(page.getByRole("heading", { name: "安装第一个游戏" })).toBeVisible();
+  await expect(page.getByRole("radio", { name: /1\.21\.8/ })).toHaveAttribute(
+    "aria-checked",
+    "true",
+  );
+  await expect(page.getByRole("radio", { name: /Fabric/ })).toHaveAttribute(
+    "aria-checked",
+    "true",
+  );
+  await expectElementPadding(page, ".install-choice-list", { block: 8, inline: 16 });
+  await expectElementPadding(page, ".install-form-card", { block: 16, inline: 18 });
+  await assertDocumentHasNoHorizontalOverflow(page);
+
+  await page.getByRole("button", { name: "查看安装信息" }).click();
+  await expect(page.getByRole("heading", { name: "确认安装信息" })).toBeVisible();
+  await expect(page.getByText("Azul Zulu 21.0.12+8 · x64")).toBeVisible();
+  await expect(page.getByText("安装游戏环境", { exact: true })).toBeVisible();
+  await expectElementPadding(page, ".install-summary > div", { block: 12, inline: 16 });
+
+  await page.getByRole("button", { name: "开始安装" }).click();
+  await expect(page.getByRole("heading", { name: "安装任务已进入队列" })).toBeVisible();
+  await expect(page.getByText("等待执行器", { exact: true })).toBeVisible();
+  await expect(page.getByText("安装游戏环境", { exact: true })).toBeVisible();
+  await expectElementPadding(page, ".queued-task-card", { block: 16, inline: 18 });
+
+  await page.getByRole("button", { name: "返回首页" }).click();
+  await expect(page.getByRole("button", { name: /1\.21\.8 Fabric.*1 个任务/ })).toBeVisible();
+  await page.getByRole("button", { name: /1\.21\.8 Fabric.*1 个任务/ }).click();
+  await expect(page.getByRole("heading", { name: "任务中心" })).toBeVisible();
+  await expect(page.getByText("计划与暂存区已建立", { exact: false })).toBeVisible();
+
+  await page.reload();
+  await expect(page.getByRole("button", { name: /1\.21\.8 Fabric.*1 个任务/ })).toBeVisible();
+});
+
+test("M2-INSTALL-001 安装页在 960x600 与 200% 放大下不遮挡主操作", async ({ page }) => {
+  await page.setViewportSize({ width: 960, height: 600 });
+  await completeDefaultOnboarding(page);
+  await page.getByRole("button", { name: "安装第一个游戏" }).click();
+  await expect(page.getByRole("button", { name: "查看安装信息" })).toBeVisible();
+
+  await page.evaluate(() => {
+    document.documentElement.style.zoom = "2";
+  });
+
+  await expect(page.getByRole("button", { name: "查看安装信息" })).toBeVisible();
+  await assertDocumentHasNoHorizontalOverflow(page);
+});
+
+test("M2-INSTALL-006 用户拒绝恢复时任务标记取消", async ({ page }) => {
+  await completeDefaultOnboarding(page);
+  await page.getByRole("button", { name: "安装第一个游戏" }).click();
+  await page.getByRole("button", { name: "查看安装信息" }).click();
+  await page.getByRole("button", { name: "开始安装" }).click();
+  await page.getByRole("button", { name: "返回首页" }).click();
+
+  await page.evaluate(() => {
+    const key = "moyumax.browser.installTasks";
+    const tasks = JSON.parse(window.localStorage.getItem(key) ?? "[]") as Array<{
+      state: string;
+    }>;
+    if (!tasks[0]) throw new Error("missing browser install task");
+    tasks[0].state = "awaitingRecovery";
+    window.localStorage.setItem(key, JSON.stringify(tasks));
+  });
+  await page.reload();
+
+  await page.getByRole("button", { name: /等待恢复确认.*1 个任务/ }).click();
+  await expect(page.getByText("上次运行在安装提交前中断", { exact: true })).toBeVisible();
+  await page.getByRole("button", { name: "放弃并清理临时文件" }).click();
+  await expect(page.getByText("已取消", { exact: true })).toBeVisible();
+});
+
 async function expectElementPadding(
   page: import("@playwright/test").Page,
   selector: string,
@@ -132,4 +209,23 @@ async function assertRegionsDoNotOverlap(
   expect(geometry.topbar.bottom).toBeLessThanOrEqual(geometry.content.top);
   expect(geometry.content.bottom).toBeLessThanOrEqual(geometry.statusbar.top);
   expect(geometry.documentWidth).toBeLessThanOrEqual(geometry.viewportWidth);
+}
+
+async function completeDefaultOnboarding(
+  page: import("@playwright/test").Page,
+): Promise<void> {
+  await page.getByRole("button", { name: "下一步" }).click();
+  await page.getByRole("button", { name: "下一步" }).click();
+  await page.getByRole("button", { name: "完成设置" }).click();
+  await page.getByRole("button", { name: "开始使用" }).click();
+}
+
+async function assertDocumentHasNoHorizontalOverflow(
+  page: import("@playwright/test").Page,
+): Promise<void> {
+  const geometry = await page.evaluate(() => ({
+    scrollWidth: document.documentElement.scrollWidth,
+    viewportWidth: window.innerWidth,
+  }));
+  expect(geometry.scrollWidth).toBeLessThanOrEqual(geometry.viewportWidth);
 }

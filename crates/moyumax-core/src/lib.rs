@@ -8,6 +8,12 @@ use rusqlite::{Connection, OptionalExtension, TransactionBehavior, params};
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
+mod catalog;
+mod install;
+
+pub use catalog::*;
+pub use install::*;
+
 const SETTING_ONBOARDING_COMPLETE: &str = "onboarding_complete";
 const SETTING_ONBOARDING_SELECTION: &str = "onboarding_selection";
 
@@ -67,6 +73,14 @@ pub enum CoreError {
     InvalidDataDirectory(String),
     #[error("首次运行状态不完整，请重新完成设置")]
     IncompleteOnboardingState,
+    #[error("游戏元数据不可用：{0}")]
+    Metadata(String),
+    #[error("安装请求无效：{0}")]
+    InvalidInstallRequest(String),
+    #[error("安装状态数据无效：{0}")]
+    InvalidStoredState(String),
+    #[error("无法获取在线元数据：{0}")]
+    Network(#[from] reqwest::Error),
 }
 
 pub type Result<T> = std::result::Result<T, CoreError>;
@@ -88,6 +102,7 @@ impl AppService {
             default_data_directory: path_text(default_data_directory),
         };
         service.migrate()?;
+        service.recover_interrupted_install_tasks()?;
         Ok(service)
     }
 
@@ -138,18 +153,69 @@ impl AppService {
                 key TEXT PRIMARY KEY NOT NULL,
                 value TEXT NOT NULL
             );
-            PRAGMA user_version = 1;
+            CREATE TABLE IF NOT EXISTS metadata_cache (
+                cache_key TEXT PRIMARY KEY NOT NULL,
+                payload_json TEXT NOT NULL,
+                updated_at_unix_seconds INTEGER NOT NULL
+            );
+            CREATE TABLE IF NOT EXISTS managed_java_environments (
+                id TEXT PRIMARY KEY NOT NULL,
+                distribution TEXT NOT NULL,
+                full_version TEXT NOT NULL,
+                architecture TEXT NOT NULL,
+                home_directory TEXT NOT NULL,
+                status TEXT NOT NULL,
+                UNIQUE(distribution, full_version, architecture)
+            );
+            CREATE TABLE IF NOT EXISTS install_tasks (
+                id TEXT PRIMARY KEY NOT NULL,
+                state TEXT NOT NULL,
+                current_stage TEXT,
+                plan_json TEXT NOT NULL,
+                staging_directory TEXT NOT NULL,
+                target_directory TEXT NOT NULL,
+                created_at_unix_seconds INTEGER NOT NULL,
+                updated_at_unix_seconds INTEGER NOT NULL
+            );
+            CREATE INDEX IF NOT EXISTS idx_install_tasks_state_created
+                ON install_tasks(state, created_at_unix_seconds);
+            CREATE TABLE IF NOT EXISTS install_task_java (
+                task_id TEXT PRIMARY KEY NOT NULL REFERENCES install_tasks(id) ON DELETE CASCADE,
+                environment_id TEXT NOT NULL REFERENCES managed_java_environments(id),
+                action TEXT NOT NULL
+            );
+            CREATE TABLE IF NOT EXISTS instances (
+                id TEXT PRIMARY KEY NOT NULL,
+                name TEXT NOT NULL,
+                game_version TEXT NOT NULL,
+                loader_kind TEXT NOT NULL,
+                loader_version TEXT,
+                root_directory TEXT NOT NULL UNIQUE,
+                state TEXT NOT NULL,
+                created_at_unix_seconds INTEGER NOT NULL
+            );
+            PRAGMA user_version = 2;
             ",
         )?;
         Ok(())
     }
 
-    fn connection(&self) -> Result<Connection> {
+    pub(crate) fn connection(&self) -> Result<Connection> {
         let connection = Connection::open(&self.database_path)?;
         connection.busy_timeout(Duration::from_secs(5))?;
         connection.pragma_update(None, "foreign_keys", true)?;
         Ok(connection)
     }
+}
+
+pub(crate) fn unix_timestamp() -> i64 {
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map_or(0, |duration| {
+            i64::try_from(duration.as_secs()).unwrap_or(i64::MAX)
+        })
 }
 
 fn validate_data_directory(value: &str) -> Result<()> {

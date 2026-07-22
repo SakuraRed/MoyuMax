@@ -2,12 +2,14 @@
   import { onMount } from "svelte";
 
   import AppShell from "./components/AppShell.svelte";
+  import GameInstall from "./components/GameInstall.svelte";
   import HomeEmpty from "./components/HomeEmpty.svelte";
   import Onboarding from "./components/Onboarding.svelte";
+  import TaskCenter from "./components/TaskCenter.svelte";
   import { createRuntime } from "./runtime";
-  import type { BootstrapState, OnboardingSelection } from "./runtime";
+  import type { BootstrapState, InstallTask, OnboardingSelection } from "./runtime";
 
-  type Phase = "loading" | "onboarding" | "home" | "fatal";
+  type Phase = "loading" | "onboarding" | "home" | "install" | "tasks" | "fatal";
 
   const runtime = createRuntime();
   let phase = $state<Phase>("loading");
@@ -15,6 +17,7 @@
   let settings = $state<OnboardingSelection | null>(null);
   let fatalMessage = $state("");
   let notice = $state("");
+  let tasks = $state<InstallTask[]>([]);
 
   onMount(() => {
     void initialize();
@@ -24,6 +27,7 @@
     try {
       bootstrap = await runtime.getBootstrapState();
       settings = bootstrap.settings ?? bootstrap.defaults;
+      tasks = await runtime.getInstallTasks();
       phase = bootstrap.requiresOnboarding ? "onboarding" : "home";
     } catch (error) {
       fatalMessage = error instanceof Error ? error.message : String(error);
@@ -46,8 +50,23 @@
     phase = "home";
   }
 
-  function showInstallBoundary(): void {
-    notice = "安装任务核心将在下一个开发增量接入；当前构建不会伪造安装结果。";
+  function openInstaller(): void {
+    notice = "";
+    phase = "install";
+  }
+
+  async function returnHome(): Promise<void> {
+    try {
+      tasks = await runtime.getInstallTasks();
+      notice = "";
+    } catch (error) {
+      notice = `无法刷新任务：${error instanceof Error ? error.message : String(error)}`;
+    }
+    phase = "home";
+  }
+
+  async function refreshTasks(): Promise<void> {
+    tasks = await runtime.getInstallTasks();
   }
 </script>
 
@@ -79,8 +98,30 @@
 {:else if phase === "home" && settings}
   <HomeEmpty
     {settings}
+    {tasks}
     {notice}
-    onInstall={showInstallBoundary}
+    onInstall={openInstaller}
+    onOpenTasks={() => phase = "tasks"}
+    onMinimize={() => runtime.minimizeWindow()}
+    onToggleMaximize={() => runtime.toggleMaximizeWindow()}
+    onClose={() => runtime.closeWindow()}
+  />
+{:else if phase === "install" && settings}
+  <GameInstall
+    {runtime}
+    {settings}
+    onBack={() => void returnHome()}
+    onMinimize={() => runtime.minimizeWindow()}
+    onToggleMaximize={() => runtime.toggleMaximizeWindow()}
+    onClose={() => runtime.closeWindow()}
+  />
+{:else if phase === "tasks" && settings}
+  <TaskCenter
+    {runtime}
+    {settings}
+    {tasks}
+    onBack={() => void returnHome()}
+    onTasksChanged={refreshTasks}
     onMinimize={() => runtime.minimizeWindow()}
     onToggleMaximize={() => runtime.toggleMaximizeWindow()}
     onClose={() => runtime.closeWindow()}
