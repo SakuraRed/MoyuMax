@@ -334,7 +334,7 @@ impl AppService {
         Ok(resource)
     }
 
-    fn ready_instance(&self, instance_id: &str) -> Result<ManagedInstanceSummary> {
+    pub(crate) fn ready_instance(&self, instance_id: &str) -> Result<ManagedInstanceSummary> {
         let instance = self
             .list_instances()?
             .into_iter()

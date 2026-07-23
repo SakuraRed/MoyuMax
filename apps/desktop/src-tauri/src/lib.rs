@@ -12,12 +12,12 @@ use moyumax_core::{
     ContentInstallTask, ContentUpdateInfo, CrashReportSummary, DiagnosticExportPreview,
     DiagnosticExportResult, DownloadInterrupt, ExitImpactSummary, FabricLoaderSummary,
     InstallExecutor, InstallSelection, InstallTask, InstalledContent, InstanceIsolation,
-    InstanceResource, InstanceResourceKind, JavaArchitecture, JavaDeleteOutcome, JavaDistribution,
-    JavaEnvironmentSummary, LaunchAccount, LaunchExecution, LaunchOptions, LaunchSessionSummary,
-    ManagedInstanceSummary, MetadataClient, ModrinthClient, ModrinthSearchPage,
-    ModrinthSearchQuery, OnboardingSelection, RecoveryDecision, RecycleBinItem, RecyclePurgeResult,
-    ResolvedInstallRequest, ResolvedLoader, ShellState, SourcePolicy, VersionCatalog,
-    WindowCloseBehavior, WorldBackupSummary, run_launch_execution,
+    InstanceResource, InstanceResourceKind, InstanceWorldInfo, JavaArchitecture, JavaDeleteOutcome,
+    JavaDistribution, JavaEnvironmentSummary, LaunchAccount, LaunchExecution, LaunchOptions,
+    LaunchSessionSummary, ManagedInstanceSummary, MetadataClient, ModrinthClient,
+    ModrinthSearchPage, ModrinthSearchQuery, OnboardingSelection, RecoveryDecision, RecycleBinItem,
+    RecyclePurgeResult, ResolvedInstallRequest, ResolvedLoader, ShellState, SourcePolicy,
+    VersionCatalog, WindowCloseBehavior, WorldBackupSummary, run_launch_execution,
 };
 use serde::Serialize;
 use tauri::{Emitter, Manager, State};
@@ -719,6 +719,53 @@ fn set_instance_resource_enabled(
 }
 
 #[tauri::command]
+fn list_instance_world_details(
+    service: State<'_, AppService>,
+    instance_id: String,
+) -> Result<Vec<InstanceWorldInfo>, String> {
+    service
+        .list_instance_world_details(&instance_id)
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+fn export_instance_world(
+    service: State<'_, AppService>,
+    instance_id: String,
+    world_name: String,
+    destination: String,
+) -> Result<u64, String> {
+    service
+        .export_instance_world(
+            &instance_id,
+            &world_name,
+            std::path::Path::new(&destination),
+        )
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+fn import_instance_world(
+    service: State<'_, AppService>,
+    instance_id: String,
+    source_path: String,
+) -> Result<InstanceWorldInfo, String> {
+    service
+        .import_instance_world(&instance_id, std::path::Path::new(&source_path))
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+fn rollback_world_backup(
+    service: State<'_, AppService>,
+    backup_id: String,
+) -> Result<WorldBackupSummary, String> {
+    service
+        .rollback_world_backup(&backup_id)
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
 fn retry_content_task(
     service: State<'_, AppService>,
     coordinator: State<'_, TaskCoordinator>,
@@ -1301,6 +1348,10 @@ pub fn run() {
             list_instance_resources,
             import_instance_resource,
             set_instance_resource_enabled,
+            list_instance_world_details,
+            export_instance_world,
+            import_instance_world,
+            rollback_world_backup,
             retry_content_task,
             resolve_content_task_recovery,
             list_instances,

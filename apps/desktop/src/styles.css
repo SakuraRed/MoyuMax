@@ -3103,6 +3103,13 @@ summary:focus-visible {
   margin-bottom: 14px;
 }
 
+.backup-section > header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 18px;
+}
+
 .backup-section h2,
 .backup-section p,
 .recycle-section > header h2,
@@ -3188,6 +3195,34 @@ summary:focus-visible {
 .backup-row > strong {
   color: var(--text-2);
   font-size: 11.5px;
+}
+
+.backup-side {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.backup-side > strong {
+  color: var(--text-2);
+  font-size: 11.5px;
+  white-space: nowrap;
+}
+
+.world-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.world-toolbar select {
+  max-width: 200px;
+  height: 34px;
+  padding: 0 var(--field-content-inset-inline);
+  border: 1px solid var(--border-strong);
+  border-radius: 7px;
+  color: var(--text);
+  background: var(--surface);
 }
 
 .backup-empty-row {
@@ -3409,6 +3444,21 @@ summary:focus-visible {
     align-items: flex-start;
     grid-template-columns: minmax(0, 1fr);
     gap: 6px;
+  }
+
+  .backup-section > header {
+    align-items: stretch;
+    flex-direction: column;
+    gap: 10px;
+  }
+
+  .world-toolbar {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .world-toolbar select {
+    max-width: none;
   }
 
   .recycle-actions {

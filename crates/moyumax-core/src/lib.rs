@@ -21,6 +21,7 @@ mod recycle;
 mod resources;
 mod shell;
 mod source;
+mod worlds;
 
 pub use backup::*;
 pub use catalog::*;
@@ -35,6 +36,7 @@ pub use recycle::*;
 pub use resources::*;
 pub use shell::*;
 pub use source::*;
+pub use worlds::*;
 
 const SETTING_ONBOARDING_COMPLETE: &str = "onboarding_complete";
 const SETTING_ONBOARDING_SELECTION: &str = "onboarding_selection";
@@ -145,6 +147,7 @@ impl AppService {
         service.recover_interrupted_world_backups()?;
         service.recover_interrupted_launch_sessions()?;
         service.recover_interrupted_recycle_operations()?;
+        service.recover_interrupted_world_rollbacks()?;
         service.recover_java_deletions()?;
         service.generate_missing_crash_reports()?;
         Ok(service)

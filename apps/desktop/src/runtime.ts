@@ -326,6 +326,12 @@ export interface InstanceResource {
   importedAtUnixSeconds: number;
 }
 
+export interface InstanceWorldInfo {
+  name: string;
+  sizeBytes: number;
+  lastPlayedUnixSeconds: number | null;
+}
+
 export type BackupTrigger = "preLaunch" | "postExit" | "manual";
 export type BackupState = "staging" | "ready" | "skipped" | "failed";
 
@@ -535,6 +541,18 @@ export interface MoyuRuntime {
     worldName?: string,
   ): Promise<InstanceResource>;
   setInstanceResourceEnabled(resourceId: string, enabled: boolean): Promise<InstanceResource>;
+  listInstanceWorldDetails(instanceId: string): Promise<InstanceWorldInfo[]>;
+  /** 打开原生保存对话框选择世界导出位置；用户取消时返回 null。 */
+  pickWorldExportPath(worldName: string): Promise<string | null>;
+  /** 打开原生文件选择器挑选要导入的世界 ZIP；用户取消时返回 null。 */
+  pickWorldZip(): Promise<string | null>;
+  exportInstanceWorld(
+    instanceId: string,
+    worldName: string,
+    destination: string,
+  ): Promise<number>;
+  importInstanceWorld(instanceId: string, sourcePath: string): Promise<InstanceWorldInfo>;
+  rollbackWorldBackup(backupId: string): Promise<WorldBackupSummary>;
   retryContentTask(taskId: string): Promise<void>;
   resolveContentTaskRecovery(taskId: string, decision: RecoveryDecision): Promise<void>;
   listInstances(): Promise<ManagedInstance[]>;
@@ -598,6 +616,7 @@ const BROWSER_CONTENT_UPDATES_KEY = "moyumax.browser.contentUpdates";
 const BROWSER_CONTENT_AUTO_UPDATE_KEY = "moyumax.browser.contentAutoUpdate";
 const BROWSER_INSTANCE_RESOURCES_KEY = "moyumax.browser.instanceResources";
 const BROWSER_INSTANCE_WORLDS_KEY = "moyumax.browser.instanceWorlds";
+const BROWSER_WORLD_DETAILS_KEY = "moyumax.browser.worldDetails";
 const BROWSER_MODRINTH_OFFLINE_KEY = "moyumax.browser.modrinthOffline";
 const BROWSER_CLOSE_BEHAVIOR_KEY = "moyumax.browser.windowCloseBehavior";
 const BROWSER_SHELL_STATE_KEY = "moyumax.browser.shellState";
@@ -700,6 +719,30 @@ function createTauriRuntime(): MoyuRuntime {
       }),
     setInstanceResourceEnabled: (resourceId, enabled) =>
       invoke<InstanceResource>("set_instance_resource_enabled", { resourceId, enabled }),
+    listInstanceWorldDetails: (instanceId) =>
+      invoke<InstanceWorldInfo[]>("list_instance_world_details", { instanceId }),
+    pickWorldExportPath: async (worldName) => {
+      const { save } = await import("@tauri-apps/plugin-dialog");
+      return await save({
+        defaultPath: `${worldName}.zip`,
+        filters: [{ name: "世界存档", extensions: ["zip"] }],
+      });
+    },
+    pickWorldZip: async () => {
+      const { open } = await import("@tauri-apps/plugin-dialog");
+      const selected = await open({
+        multiple: false,
+        directory: false,
+        filters: [{ name: "世界存档", extensions: ["zip"] }],
+      });
+      return typeof selected === "string" ? selected : null;
+    },
+    exportInstanceWorld: (instanceId, worldName, destination) =>
+      invoke<number>("export_instance_world", { instanceId, worldName, destination }),
+    importInstanceWorld: (instanceId, sourcePath) =>
+      invoke<InstanceWorldInfo>("import_instance_world", { instanceId, sourcePath }),
+    rollbackWorldBackup: (backupId) =>
+      invoke<WorldBackupSummary>("rollback_world_backup", { backupId }),
     retryContentTask: (taskId) => invoke<void>("retry_content_task", { taskId }),
     resolveContentTaskRecovery: (taskId, decision) =>
       invoke<void>("resolve_content_task_recovery", { taskId, decision }),
@@ -1220,6 +1263,69 @@ function createBrowserRuntime(): MoyuRuntime {
         JSON.stringify(resources),
       );
       return resource;
+    },
+    async listInstanceWorldDetails(instanceId) {
+      return browserWorldDetails()[instanceId] ?? [];
+    },
+    async pickWorldExportPath(_worldName) {
+      return window.localStorage.getItem("moyumax.browser.worldExportPath");
+    },
+    async pickWorldZip() {
+      return window.localStorage.getItem("moyumax.browser.pickedWorldZip");
+    },
+    async exportInstanceWorld(instanceId, worldName, _destination) {
+      const worlds = browserWorldDetails()[instanceId] ?? [];
+      if (!worlds.some((world) => world.name === worldName)) {
+        throw new Error(`世界 ${worldName} 不存在`);
+      }
+      return 2048;
+    },
+    async importInstanceWorld(instanceId, sourcePath) {
+      const fileName = sourcePath.split(/[\\/]/).pop() ?? "";
+      if (!fileName.toLowerCase().endsWith(".zip")) {
+        throw new Error("世界 ZIP 无法读取");
+      }
+      const name = fileName.replace(/\.zip$/i, "");
+      const all = browserWorldDetails();
+      const worlds = all[instanceId] ?? [];
+      if (worlds.some((world) => world.name === name)) {
+        throw new Error(`世界 ${name} 已存在，已拒绝导入且未覆盖`);
+      }
+      const imported: InstanceWorldInfo = {
+        name,
+        sizeBytes: 1024,
+        lastPlayedUnixSeconds: Math.floor(Date.now() / 1000),
+      };
+      all[instanceId] = [...worlds, imported].sort((left, right) =>
+        left.name.localeCompare(right.name),
+      );
+      window.localStorage.setItem(BROWSER_WORLD_DETAILS_KEY, JSON.stringify(all));
+      return imported;
+    },
+    async rollbackWorldBackup(backupId) {
+      const backups = browserWorldBackups();
+      const backup = backups.find((candidate) => candidate.id === backupId);
+      if (!backup) throw new Error("备份不存在");
+      if (backup.state !== "ready") throw new Error("只有已完成的备份可以回滚");
+      const now = Math.floor(Date.now() / 1000);
+      const recovery: WorldBackupSummary = {
+        id: `backup-${crypto.randomUUID()}`,
+        instanceId: backup.instanceId,
+        instanceName: backup.instanceName,
+        launchSessionId: null,
+        trigger: "manual",
+        state: "ready",
+        archivePath: `D:\\MoyuMax\\data\\backups\\instances\\${backup.instanceId}\\${now}-manual.zip`,
+        worldCount: backup.worldCount,
+        sourceBytes: backup.sourceBytes,
+        archiveBytes: backup.archiveBytes,
+        createdAtUnixSeconds: now,
+        completedAtUnixSeconds: now,
+        errorSummary: null,
+      };
+      backups.unshift(recovery);
+      window.localStorage.setItem(BROWSER_WORLD_BACKUPS_KEY, JSON.stringify(backups));
+      return recovery;
     },
     async retryContentTask(taskId) {
       const tasks = browserContentTasks();
@@ -1792,6 +1898,11 @@ function browserInstanceResources(): InstanceResource[] {
 function browserInstanceWorlds(): Record<string, string[]> {
   const serialized = window.localStorage.getItem(BROWSER_INSTANCE_WORLDS_KEY);
   return serialized ? (JSON.parse(serialized) as Record<string, string[]>) : {};
+}
+
+function browserWorldDetails(): Record<string, InstanceWorldInfo[]> {
+  const serialized = window.localStorage.getItem(BROWSER_WORLD_DETAILS_KEY);
+  return serialized ? (JSON.parse(serialized) as Record<string, InstanceWorldInfo[]>) : {};
 }
 
 function browserContentEntry(
