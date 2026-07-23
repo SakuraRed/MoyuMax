@@ -618,6 +618,8 @@ export interface MoyuRuntime {
   setUiLanguage(language: string): Promise<void>;
   setUiMotion(motion: string): Promise<void>;
   setUiContrast(contrast: string): Promise<void>;
+  getCliEnabled(): Promise<boolean>;
+  setCliEnabled(enabled: boolean): Promise<void>;
   retryContentTask(taskId: string): Promise<void>;
   resolveContentTaskRecovery(taskId: string, decision: RecoveryDecision): Promise<void>;
   listInstances(): Promise<ManagedInstance[]>;
@@ -854,6 +856,8 @@ function createTauriRuntime(): MoyuRuntime {
     setUiLanguage: (language) => invoke<void>("set_ui_language", { language }),
     setUiMotion: (motion) => invoke<void>("set_ui_motion", { motion }),
     setUiContrast: (contrast) => invoke<void>("set_ui_contrast", { contrast }),
+    getCliEnabled: () => invoke<boolean>("get_cli_enabled"),
+    setCliEnabled: (enabled) => invoke<void>("set_cli_enabled", { enabled }),
     retryContentTask: (taskId) => invoke<void>("retry_content_task", { taskId }),
     resolveContentTaskRecovery: (taskId, decision) =>
       invoke<void>("resolve_content_task_recovery", { taskId, decision }),
@@ -1567,6 +1571,12 @@ function createBrowserRuntime(): MoyuRuntime {
         "moyumax.browser.uiPreferences",
         JSON.stringify(preferences),
       );
+    },
+    async getCliEnabled() {
+      return window.localStorage.getItem("moyumax.browser.cliEnabled") === "true";
+    },
+    async setCliEnabled(enabled) {
+      window.localStorage.setItem("moyumax.browser.cliEnabled", String(enabled));
     },
     async listInstanceScreenshots(instanceId) {
       return browserScreenshots()[instanceId] ?? [];

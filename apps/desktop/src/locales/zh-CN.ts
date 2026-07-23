@@ -135,6 +135,14 @@ export const zhCN: Record<string, string> = {
   "appearance.contrastAria": "对比度偏好",
   "appearance.contrast.standard": "标准",
   "appearance.contrast.high": "高对比",
+  "settings.dev.title": "开发者",
+  "settings.dev.description": "面向高级用户的实验性入口，默认全部关闭。",
+  "settings.dev.cliLabel": "内置命令行（CLI）",
+  "settings.dev.cliHint": "开启后可用 moyumax-desktop.exe --cli 查询实例、任务与备份，支持 dry-run。",
+  "settings.dev.riskWarning": "命令行会修改与图形界面相同的状态；请在了解命令语义后使用。",
+  "settings.dev.usageHint": "写命令支持 --dry-run；输出为版本化 JSON，退出码 0/2/3/4。",
+  "settings.dev.cliEnabled": "内置命令行已开启",
+  "settings.dev.cliDisabled": "内置命令行已关闭",
 
   // 账户区（SettingsCenter）
   "settings.accounts.title": "账户",

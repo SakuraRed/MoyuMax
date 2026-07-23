@@ -72,6 +72,7 @@
   let authlibUser = $state("");
   let authlibPass = $state("");
   let pendingAccountRemove = $state<string | null>(null);
+  let cliEnabled = $state(false);
   let uiPreferencesLoaded = $state(false);
 
   onMount(() => {
@@ -88,9 +89,13 @@
         runtime.listAccounts(),
       ]);
       if (!backupSettingsLoaded) {
-        const backupSettings = await runtime.getWorldBackupSettings();
+        const [backupSettings, cliState] = await Promise.all([
+          runtime.getWorldBackupSettings(),
+          runtime.getCliEnabled(),
+        ]);
         backupInterval = backupSettings.intervalMinutes;
         backupKeep = backupSettings.keepCount;
+        cliEnabled = cliState;
         backupSettingsLoaded = true;
       }
       if (!uiPreferencesLoaded) {
@@ -158,6 +163,20 @@
       await runtime.setUiContrast(value);
       applyUiPreferences({ contrast: value });
     } catch (error) {
+      errorMessage = error instanceof Error ? error.message : String(error);
+    }
+  }
+
+  async function toggleCli(checked: boolean): Promise<void> {
+    const previous = cliEnabled;
+    cliEnabled = checked;
+    errorMessage = "";
+    notice = "";
+    try {
+      await runtime.setCliEnabled(checked);
+      notice = checked ? t("settings.dev.cliEnabled") : t("settings.dev.cliDisabled");
+    } catch (error) {
+      cliEnabled = previous;
       errorMessage = error instanceof Error ? error.message : String(error);
     }
   }
@@ -575,6 +594,34 @@
               </div>
             </article>
           {/each}
+        </div>
+      {/if}
+    </section>
+
+    <section class="backup-settings" aria-labelledby="dev-title">
+      <header>
+        <div>
+          <h2 id="dev-title">{t("settings.dev.title")}</h2>
+          <p>{t("settings.dev.description")}</p>
+        </div>
+      </header>
+      <label class="auto-update-toggle">
+        <input
+          type="checkbox"
+          checked={cliEnabled}
+          aria-label={t("settings.dev.cliLabel")}
+          onchange={(event) => void toggleCli((event.currentTarget as HTMLInputElement).checked)}
+        />
+        <span>
+          <strong>{t("settings.dev.cliLabel")}</strong>
+          <small>{t("settings.dev.cliHint")}</small>
+          <small class="dev-risk">{t("settings.dev.riskWarning")}</small>
+        </span>
+      </label>
+      {#if cliEnabled}
+        <div class="dev-usage">
+          <code>moyumax-desktop.exe --cli instances list</code>
+          <small>{t("settings.dev.usageHint")}</small>
         </div>
       {/if}
     </section>

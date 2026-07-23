@@ -130,6 +130,14 @@ export const zhTW: Record<string, string> = {
   "appearance.contrastAria": "對比度偏好",
   "appearance.contrast.standard": "標準",
   "appearance.contrast.high": "高對比",
+  "settings.dev.title": "開發者",
+  "settings.dev.description": "面向進階使用者的實驗性入口，預設全部關閉。",
+  "settings.dev.cliLabel": "內建命令列（CLI）",
+  "settings.dev.cliHint": "開啟後可用 moyumax-desktop.exe --cli 查詢實例、工作與備份，支援 dry-run。",
+  "settings.dev.riskWarning": "命令列會修改與圖形介面相同的狀態；請在了解命令語意後使用。",
+  "settings.dev.usageHint": "寫入命令支援 --dry-run；輸出為版本化 JSON，結束碼 0/2/3/4。",
+  "settings.dev.cliEnabled": "內建命令列已開啟",
+  "settings.dev.cliDisabled": "內建命令列已關閉",
 
   // 帳戶區（SettingsCenter）
   "settings.accounts.title": "帳戶",

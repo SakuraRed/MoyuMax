@@ -25,6 +25,7 @@ use tauri::{Emitter, Manager, State};
 use tokio::sync::{Semaphore, oneshot};
 use uuid::Uuid;
 
+mod cli;
 mod lifecycle;
 mod tray;
 
@@ -32,6 +33,9 @@ use lifecycle::{
     CLOSE_REQUESTED_EVENT, PendingIntent, ShellCoordinator, WindowStartupKind,
     confirm_graceful_exit, minimize_to_tray, spawn_idle_destroy_task, spawn_smoke_driver,
 };
+
+pub use cli::run_cli;
+pub use cli::{EXIT_DISABLED, EXIT_OK, EXIT_RUNTIME, EXIT_USAGE, execute as execute_cli_command};
 
 #[derive(Debug, Default)]
 struct InstallPreviewStore {
@@ -956,6 +960,18 @@ fn set_ui_contrast(service: State<'_, AppService>, contrast: String) -> Result<(
 }
 
 #[tauri::command]
+fn get_cli_enabled(service: State<'_, AppService>) -> Result<bool, String> {
+    service.cli_enabled().map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+fn set_cli_enabled(service: State<'_, AppService>, enabled: bool) -> Result<(), String> {
+    service
+        .set_cli_enabled(enabled)
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
 fn get_world_backup_settings(
     service: State<'_, AppService>,
 ) -> Result<WorldBackupSettings, String> {
@@ -1598,6 +1614,8 @@ pub fn run() {
             set_ui_language,
             set_ui_motion,
             set_ui_contrast,
+            get_cli_enabled,
+            set_cli_enabled,
             retry_content_task,
             resolve_content_task_recovery,
             list_instances,

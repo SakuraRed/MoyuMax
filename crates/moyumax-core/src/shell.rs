@@ -16,6 +16,7 @@ const SETTING_UI_THEME: &str = "ui_theme";
 const SETTING_UI_LANGUAGE: &str = "ui_language";
 const SETTING_UI_MOTION: &str = "ui_motion";
 const SETTING_UI_CONTRAST: &str = "ui_contrast";
+const SETTING_CLI_ENABLED: &str = "cli_enabled";
 
 /// 关闭主窗口时的行为。默认每次询问。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
@@ -261,6 +262,22 @@ impl AppService {
         }
         let connection = self.connection()?;
         write_setting(&connection, SETTING_UI_CONTRAST, contrast)?;
+        Ok(())
+    }
+
+    /// 内置 CLI 开关（默认关闭；在开发者设置中显式开启）。
+    pub fn cli_enabled(&self) -> Result<bool> {
+        let connection = self.connection()?;
+        Ok(read_setting(&connection, SETTING_CLI_ENABLED)?.is_some_and(|value| value == "true"))
+    }
+
+    pub fn set_cli_enabled(&self, enabled: bool) -> Result<()> {
+        let connection = self.connection()?;
+        write_setting(
+            &connection,
+            SETTING_CLI_ENABLED,
+            if enabled { "true" } else { "false" },
+        )?;
         Ok(())
     }
 

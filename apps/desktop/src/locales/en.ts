@@ -130,6 +130,14 @@ export const en: Record<string, string> = {
   "appearance.contrastAria": "Contrast preference",
   "appearance.contrast.standard": "Standard",
   "appearance.contrast.high": "High contrast",
+  "settings.dev.title": "Developer",
+  "settings.dev.description": "Experimental entries for advanced users; all off by default.",
+  "settings.dev.cliLabel": "Built-in command line (CLI)",
+  "settings.dev.cliHint": "Once enabled, use moyumax-desktop.exe --cli to query instances, tasks, and backups with dry-run support.",
+  "settings.dev.riskWarning": "The CLI modifies the same state as the GUI; use it only if you understand each command.",
+  "settings.dev.usageHint": "Write commands accept --dry-run; output is versioned JSON with exit codes 0/2/3/4.",
+  "settings.dev.cliEnabled": "Built-in CLI enabled",
+  "settings.dev.cliDisabled": "Built-in CLI disabled",
 
   // Accounts section (SettingsCenter)
   "settings.accounts.title": "Accounts",
