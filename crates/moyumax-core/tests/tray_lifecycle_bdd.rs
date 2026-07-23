@@ -673,6 +673,7 @@ impl LifecycleFixture {
             ],
             optional_dependencies: Vec::<ContentDependencyChoice>::new(),
             incompatible_dependencies: Vec::<ContentDependencyChoice>::new(),
+            is_update: false,
         }
     }
 

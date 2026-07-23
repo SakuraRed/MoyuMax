@@ -30,7 +30,7 @@ use crate::{
     CoreError, DownloadCandidate, InstallStage, InstallTask, InstalledContent,
     JavaEnvironmentStatus, JavaPlanAction, ManagedInstanceSummary, ResolvedArtifact,
     ResolvedLoader, Result, SourceCandidates, SourceChannel, SourcePolicy, TaskState,
-    candidates_for,
+    candidates_for, content_update_snapshot_directory,
 };
 
 /// 全局暂停全部任务时的下载中断信号。
@@ -1292,30 +1292,53 @@ impl ContentExecutor {
         };
         write_content_commit_journal(&staging_directory, &journal).await?;
         let mut published = Vec::new();
+        let mut backups: Vec<(PathBuf, PathBuf)> = Vec::new();
         for (entry, artifact) in task.plan.entries.iter().zip(&artifacts) {
             let prepared = safe_join(&publish_directory, &entry.file.filename)?;
             let destination = safe_join(&mods_directory, &entry.file.filename)?;
             if tokio::fs::try_exists(&destination).await? {
-                if !file_matches(&destination, artifact).await? {
+                if file_matches(&destination, artifact).await? {
+                    tokio::fs::remove_file(&prepared).await?;
+                    continue;
+                }
+                if !task.plan.is_update {
                     let error = CoreError::Content(format!(
                         "模组文件冲突：{} 已存在且哈希不同",
                         entry.file.filename
                     ));
-                    return rollback_content_error(error, &published).await;
+                    return rollback_content_error(error, &published, &backups).await;
                 }
-                tokio::fs::remove_file(&prepared).await?;
-                continue;
+                // 更新：先把旧文件移入实例快照区，再发布新文件。
+                let snapshot_directory =
+                    content_update_snapshot_directory(Path::new(&task.target_directory), &task.id);
+                if let Err(error) = tokio::fs::create_dir_all(&snapshot_directory).await {
+                    return rollback_content_error(error.into(), &published, &backups).await;
+                }
+                let backup = safe_join(&snapshot_directory, &entry.file.filename)?;
+                if let Err(error) = tokio::fs::rename(&destination, &backup).await {
+                    return rollback_content_error(error.into(), &published, &backups).await;
+                }
+                backups.push((destination.clone(), backup));
             }
             if let Err(error) = tokio::fs::rename(&prepared, &destination).await {
-                return rollback_content_error(error.into(), &published).await;
+                return rollback_content_error(error.into(), &published, &backups).await;
             }
             published.push(destination);
         }
 
         let installed = match service.publish_installed_content(task) {
             Ok(installed) => installed,
-            Err(error) => return rollback_content_error(error, &published).await,
+            Err(error) => return rollback_content_error(error, &published, &backups).await,
         };
+        if task.plan.is_update {
+            let snapshot_directory =
+                content_update_snapshot_directory(Path::new(&task.target_directory), &task.id);
+            if let Err(error) = tokio::fs::remove_dir_all(&snapshot_directory).await
+                && error.kind() != std::io::ErrorKind::NotFound
+            {
+                let _ = service.note_content_cleanup_pending(&task.id, &error.to_string());
+            }
+        }
         if let Err(error) = tokio::fs::remove_dir_all(&staging_directory).await {
             let _ = service.note_content_cleanup_pending(&task.id, &error.to_string());
         }
@@ -1406,6 +1429,10 @@ async fn preflight_content_destinations(
         return Err(CoreError::Content("目标实例目录不存在".to_owned()));
     }
     let mods_directory = root.join(".minecraft").join("mods");
+    if task.plan.is_update {
+        // 更新任务允许同名异哈希替换，冲突检查由提交阶段的快照替换处理。
+        return Ok(mods_directory);
+    }
     for (entry, artifact) in task.plan.entries.iter().zip(artifacts) {
         let destination = safe_join(&mods_directory, &entry.file.filename)?;
         if tokio::fs::try_exists(&destination).await?
@@ -1420,11 +1447,28 @@ async fn preflight_content_destinations(
     Ok(mods_directory)
 }
 
-async fn rollback_content_error<T>(error: CoreError, published: &[PathBuf]) -> Result<T> {
+async fn rollback_content_error<T>(
+    error: CoreError,
+    published: &[PathBuf],
+    backups: &[(PathBuf, PathBuf)],
+) -> Result<T> {
     let mut rollback_errors = Vec::new();
     for path in published.iter().rev() {
         if let Err(rollback_error) = tokio::fs::remove_file(path).await {
             rollback_errors.push(format!("{}：{rollback_error}", path.display()));
+        }
+    }
+    for (destination, backup) in backups.iter().rev() {
+        if let Err(rollback_error) = tokio::fs::rename(backup, destination).await {
+            rollback_errors.push(format!(
+                "恢复 {} 失败：{rollback_error}",
+                destination.display()
+            ));
+            continue;
+        }
+        if let Some(parent) = backup.parent() {
+            // 旧文件移回后清理空快照目录，不留半成品。
+            let _ = tokio::fs::remove_dir(parent).await;
         }
     }
     if rollback_errors.is_empty() {

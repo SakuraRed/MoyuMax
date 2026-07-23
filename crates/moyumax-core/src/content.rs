@@ -2,7 +2,7 @@ use std::{
     collections::{HashMap, HashSet, VecDeque},
     fs,
     io::Read,
-    path::{Component, Path},
+    path::{Component, Path, PathBuf},
     time::Duration,
 };
 
@@ -131,6 +131,9 @@ pub struct ContentInstallPlan {
     pub entries: Vec<ContentPlanEntry>,
     pub optional_dependencies: Vec<ContentDependencyChoice>,
     pub incompatible_dependencies: Vec<ContentDependencyChoice>,
+    /// 更新计划：允许同名异哈希替换,替换前把旧文件移入实例快照区。
+    #[serde(default)]
+    pub is_update: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -228,6 +231,18 @@ pub struct InstalledContent {
     pub enabled: bool,
     pub auto_update_enabled: bool,
     pub installed_at_unix_seconds: i64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ContentUpdateInfo {
+    pub project_id: String,
+    pub project_title: String,
+    pub current_version_id: String,
+    pub current_version_number: String,
+    pub latest_version_id: String,
+    pub latest_version_number: String,
+    pub file: ContentFilePlan,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -444,6 +459,7 @@ impl ModrinthClient {
             entries,
             optional_dependencies,
             incompatible_dependencies,
+            is_update: false,
         })
     }
 
@@ -573,13 +589,14 @@ impl AppService {
             .iter()
             .map(|entry| entry.project_id.as_str())
             .collect::<HashSet<_>>();
-        if let Some(entry) = plan
-            .entries
-            .iter()
-            .find(|entry| installed_projects.contains(entry.project_id.as_str()))
+        if !plan.is_update
+            && let Some(entry) = plan
+                .entries
+                .iter()
+                .find(|entry| installed_projects.contains(entry.project_id.as_str()))
         {
             return Err(CoreError::Content(format!(
-                "项目 {} 已安装；首个预览版不会静默覆盖或更新模组",
+                "项目 {} 已安装；不会静默覆盖或更新模组",
                 entry.project_title
             )));
         }
@@ -627,6 +644,126 @@ impl AppService {
             let _ = fs::remove_dir_all(&staging_directory);
         }
         result
+    }
+
+    /// 实例的内容自动更新开关（默认关闭）。
+    pub fn instance_content_auto_update(&self, instance_id: &str) -> Result<bool> {
+        let connection = self.connection()?;
+        let enabled: Option<bool> = connection
+            .query_row(
+                "SELECT content_auto_update_enabled FROM instances WHERE id = ?1",
+                params![instance_id],
+                |row| row.get(0),
+            )
+            .optional()?;
+        enabled.ok_or_else(|| CoreError::Content("实例不存在".to_owned()))
+    }
+
+    /// 开关实例的内容自动更新。开启后更新仍需用户明确触发,不做静默修改。
+    pub fn set_instance_content_auto_update(&self, instance_id: &str, enabled: bool) -> Result<()> {
+        let changed = self.connection()?.execute(
+            "UPDATE instances SET content_auto_update_enabled = ?2 WHERE id = ?1",
+            params![instance_id, enabled],
+        )?;
+        if changed == 0 {
+            return Err(CoreError::Content("实例不存在".to_owned()));
+        }
+        Ok(())
+    }
+
+    /// 检查实例已安装内容的可用更新。只解析元数据,不下载任何文件。
+    pub async fn check_content_updates(
+        &self,
+        modrinth: &ModrinthClient,
+        instance_id: &str,
+    ) -> Result<Vec<ContentUpdateInfo>> {
+        let instance = self
+            .list_instances()?
+            .into_iter()
+            .find(|instance| instance.id == instance_id)
+            .ok_or_else(|| CoreError::Content("目标实例不存在".to_owned()))?;
+        validate_target_instance(&instance)?;
+        let installed = self.list_installed_content(instance_id)?;
+        let mut updates = Vec::new();
+        for entry in &installed {
+            let Ok(latest) = modrinth
+                .latest_compatible_version(&entry.project_id, &instance)
+                .await
+            else {
+                continue;
+            };
+            if latest.id != entry.version_id {
+                updates.push(ContentUpdateInfo {
+                    project_id: entry.project_id.clone(),
+                    project_title: entry.project_title.clone(),
+                    current_version_id: entry.version_id.clone(),
+                    current_version_number: entry.version_number.clone(),
+                    latest_version_id: latest.id.clone(),
+                    latest_version_number: latest.version_number.clone(),
+                    file: select_primary_file(&latest)?,
+                });
+            }
+        }
+        updates.sort_by(|left, right| left.project_title.cmp(&right.project_title));
+        Ok(updates)
+    }
+
+    /// 为选定项目生成更新计划（带恢复点语义）并入队。
+    pub async fn plan_content_update(
+        &self,
+        modrinth: &ModrinthClient,
+        instance_id: &str,
+        project_ids: &[String],
+    ) -> Result<ContentInstallTask> {
+        if project_ids.is_empty() {
+            return Err(CoreError::Content("没有选择要更新的项目".to_owned()));
+        }
+        let instance = self
+            .list_instances()?
+            .into_iter()
+            .find(|instance| instance.id == instance_id)
+            .ok_or_else(|| CoreError::Content("目标实例不存在".to_owned()))?;
+        validate_target_instance(&instance)?;
+        let installed = self.list_installed_content(instance_id)?;
+        let mut entries = Vec::with_capacity(project_ids.len());
+        for project_id in project_ids {
+            validate_identifier(project_id, "内容项目 ID")?;
+            let installed_entry = installed
+                .iter()
+                .find(|entry| &entry.project_id == project_id)
+                .ok_or_else(|| CoreError::Content(format!("项目 {project_id} 未安装,不能更新")))?;
+            let latest = modrinth
+                .latest_compatible_version(project_id, &instance)
+                .await?;
+            if latest.id == installed_entry.version_id {
+                continue;
+            }
+            entries.push(ContentPlanEntry {
+                project_id: project_id.clone(),
+                version_id: latest.id.clone(),
+                project_title: installed_entry.project_title.clone(),
+                version_number: latest.version_number.clone(),
+                required_by_project_id: None,
+                file: select_primary_file(&latest)?,
+            });
+        }
+        if entries.is_empty() {
+            return Err(CoreError::Content("所选项目已经是最新兼容版本".to_owned()));
+        }
+        let root_project_id = entries[0].project_id.clone();
+        let plan = ContentInstallPlan {
+            schema_version: 1,
+            instance_id: instance.id.clone(),
+            instance_name: instance.name.clone(),
+            game_version: instance.game_version.clone(),
+            loader: instance.loader_kind.clone(),
+            root_project_id,
+            entries,
+            optional_dependencies: Vec::new(),
+            incompatible_dependencies: Vec::new(),
+            is_update: true,
+        };
+        self.enqueue_content_install_task(&plan)
     }
 
     pub fn list_content_install_tasks(&self) -> Result<Vec<ContentInstallTask>> {
@@ -793,20 +930,54 @@ impl AppService {
 
     pub fn recover_interrupted_content_tasks(&self) -> Result<()> {
         let connection = self.connection()?;
-        connection.execute(
+        let mut statement = connection.prepare(
             "
-            UPDATE content_install_tasks
-            SET state = 'awaiting_recovery', updated_at_unix_seconds = ?1
+            SELECT id, plan_json, target_directory
+            FROM content_install_tasks
             WHERE state IN ('running', 'committing')
             ",
-            params![unix_timestamp()],
         )?;
+        let interrupted = statement
+            .query_map([], |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, String>(2)?,
+                ))
+            })?
+            .collect::<std::result::Result<Vec<_>, _>>()?;
+        drop(statement);
+        for (task_id, plan_json, target_directory) in interrupted {
+            if let Ok(plan) = serde_json::from_str::<ContentInstallPlan>(&plan_json)
+                && plan.is_update
+            {
+                // 更新中断：先把恢复点中的旧文件放回实例，再进入恢复确认。
+                let _ =
+                    restore_content_update_snapshot(&plan, Path::new(&target_directory), &task_id);
+            }
+            connection.execute(
+                "
+                UPDATE content_install_tasks
+                SET state = 'awaiting_recovery', updated_at_unix_seconds = ?1
+                WHERE id = ?2 AND state IN ('running', 'committing')
+                ",
+                params![unix_timestamp(), task_id],
+            )?;
+        }
         let mut statement = connection.prepare(
-            "SELECT id, staging_directory FROM content_install_tasks WHERE state = 'completed'",
+            "
+            SELECT id, staging_directory, target_directory
+            FROM content_install_tasks
+            WHERE state = 'completed'
+            ",
         )?;
         let completed = statement
             .query_map([], |row| {
-                Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, String>(2)?,
+                ))
             })?
             .collect::<std::result::Result<Vec<_>, _>>()?;
         drop(statement);
@@ -815,7 +986,12 @@ impl AppService {
             .selected_data_directory()?
             .join(".staging")
             .join("content");
-        for (task_id, staging_directory) in completed {
+        for (task_id, staging_directory, target_directory) in completed {
+            let snapshot_directory =
+                content_update_snapshot_directory(Path::new(&target_directory), &task_id);
+            if snapshot_directory.exists() {
+                let _ = fs::remove_dir_all(&snapshot_directory);
+            }
             let expected = staging_root.join(&task_id);
             if Path::new(&staging_directory) == expected
                 && expected.exists()
@@ -1041,7 +1217,13 @@ impl AppService {
                 Path::new(&target_directory),
                 &expected_staging,
                 stage,
+                task_id,
             )?;
+            let snapshot_directory =
+                content_update_snapshot_directory(Path::new(&target_directory), task_id);
+            if snapshot_directory.exists() {
+                fs::remove_dir_all(&snapshot_directory)?;
+            }
             if expected_staging.exists() {
                 fs::remove_dir_all(&expected_staging)?;
             }
@@ -1236,6 +1418,41 @@ impl AppService {
             .collect::<Vec<_>>();
         let mut connection = self.connection()?;
         let transaction = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let mut entries = entries;
+        if task.plan.is_update {
+            // 更新：同一事务内替换旧索引行，保留逐项启用与自动更新标志。
+            for entry in &mut entries {
+                let preserved = transaction
+                    .query_row(
+                        "
+                        SELECT enabled, auto_update_enabled FROM installed_content
+                        WHERE instance_id = ?1 AND provider = ?2 AND project_id = ?3
+                        ",
+                        params![
+                            entry.instance_id,
+                            entry.provider.database_value(),
+                            entry.project_id
+                        ],
+                        |row| Ok((row.get::<_, bool>(0)?, row.get::<_, bool>(1)?)),
+                    )
+                    .optional()?;
+                if let Some((enabled, auto_update_enabled)) = preserved {
+                    entry.enabled = enabled;
+                    entry.auto_update_enabled = auto_update_enabled;
+                }
+                transaction.execute(
+                    "
+                    DELETE FROM installed_content
+                    WHERE instance_id = ?1 AND provider = ?2 AND project_id = ?3
+                    ",
+                    params![
+                        entry.instance_id,
+                        entry.provider.database_value(),
+                        entry.project_id
+                    ],
+                )?;
+            }
+        }
         for entry in &entries {
             transaction.execute(
                 "
@@ -1244,7 +1461,7 @@ impl AppService {
                     project_title, version_number, file_name, relative_path,
                     size, sha1, sha512, enabled, auto_update_enabled,
                     installed_at_unix_seconds
-                ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, 1, 0, ?13)
+                ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?14, ?15, ?13)
                 ",
                 params![
                     entry.id,
@@ -1260,6 +1477,8 @@ impl AppService {
                     entry.sha1,
                     entry.sha512,
                     entry.installed_at_unix_seconds,
+                    entry.enabled,
+                    entry.auto_update_enabled,
                 ],
             )?;
         }
@@ -1463,10 +1682,11 @@ fn validate_content_install_plan(plan: &ContentInstallPlan) -> Result<()> {
     }
     validate_instance_term(&plan.game_version, "内容计划游戏版本")?;
     validate_instance_term(&plan.loader, "内容计划加载器")?;
-    if plan.loader != "fabric" {
-        return Err(CoreError::Content(
-            "首个预览版只允许向 Fabric 实例安装 Modrinth 模组".to_owned(),
-        ));
+    if !is_supported_mod_loader(&plan.loader) {
+        return Err(CoreError::Content(format!(
+            "加载器 {} 不支持 Modrinth 模组安装",
+            plan.loader
+        )));
     }
     validate_identifier(&plan.root_project_id, "根项目 ID")?;
     if plan.entries.is_empty() {
@@ -1602,11 +1822,12 @@ fn rollback_interrupted_content_commit(
     target_directory: &Path,
     staging_directory: &Path,
     current_stage: Option<ContentInstallStage>,
+    task_id: &str,
 ) -> Result<()> {
     validate_content_install_plan(plan)?;
     let journal_path = staging_directory.join(CONTENT_COMMIT_JOURNAL_NAME);
     if !journal_path.exists() {
-        if current_stage == Some(ContentInstallStage::CommitFiles) {
+        if current_stage == Some(ContentInstallStage::CommitFiles) && !plan.is_update {
             let mods_directory = target_directory.join(".minecraft").join("mods");
             if plan
                 .entries
@@ -1673,6 +1894,54 @@ fn rollback_interrupted_content_commit(
         }
         fs::remove_file(&destination)?;
     }
+    if plan.is_update {
+        // 放弃更新任务：把恢复点中的旧文件移回实例。
+        restore_content_update_snapshot(plan, target_directory, task_id)?;
+    }
+    Ok(())
+}
+
+/// 更新任务的恢复点目录（实例内快照区）。
+pub(crate) fn content_update_snapshot_directory(target_directory: &Path, task_id: &str) -> PathBuf {
+    target_directory
+        .join(".moyumax")
+        .join("snapshots")
+        .join(format!("content-update-{task_id}"))
+}
+
+/// 把更新恢复点中的旧文件移回实例 mods 目录。
+/// 目标处只允许覆盖与计划哈希一致的半成品新文件；不一致时报错，避免删除用户文件。
+fn restore_content_update_snapshot(
+    plan: &ContentInstallPlan,
+    target_directory: &Path,
+    task_id: &str,
+) -> Result<()> {
+    let snapshot_directory = content_update_snapshot_directory(target_directory, task_id);
+    if !snapshot_directory.exists() {
+        return Ok(());
+    }
+    let mods_directory = target_directory.join(".minecraft").join("mods");
+    for entry in &plan.entries {
+        validate_filename(&entry.file.filename)?;
+        let backup = snapshot_directory.join(&entry.file.filename);
+        if !backup.exists() {
+            continue;
+        }
+        let destination = mods_directory.join(&entry.file.filename);
+        if destination.exists() {
+            if !content_file_matches_sync(&destination, &entry.file)? {
+                return Err(CoreError::Content(format!(
+                    "已发布文件 {} 在中断后发生变化；为避免删除用户文件，已停止恢复",
+                    entry.file.filename
+                )));
+            }
+            fs::remove_file(&destination)?;
+        }
+        fs::rename(&backup, &destination)?;
+    }
+    if fs::read_dir(&snapshot_directory)?.next().is_none() {
+        fs::remove_dir(&snapshot_directory)?;
+    }
     Ok(())
 }
 
@@ -1736,12 +2005,17 @@ fn validate_target_instance(instance: &ManagedInstanceSummary) -> Result<()> {
             instance.name
         )));
     }
-    if instance.loader_kind != "fabric" {
-        return Err(CoreError::Content(
-            "首个预览的 Modrinth 模组安装仅支持 Fabric 实例".to_owned(),
-        ));
+    if !is_supported_mod_loader(&instance.loader_kind) {
+        return Err(CoreError::Content(format!(
+            "加载器 {} 不支持 Modrinth 模组安装",
+            instance.loader_kind
+        )));
     }
     validate_instance_term(&instance.game_version, "实例游戏版本")
+}
+
+fn is_supported_mod_loader(loader_kind: &str) -> bool {
+    matches!(loader_kind, "fabric" | "quilt" | "forge" | "neoforge")
 }
 
 fn validate_instance_term(value: &str, label: &str) -> Result<()> {

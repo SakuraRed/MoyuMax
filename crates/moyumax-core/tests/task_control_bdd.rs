@@ -266,6 +266,7 @@ impl TaskFixture {
             }],
             optional_dependencies: Vec::<ContentDependencyChoice>::new(),
             incompatible_dependencies: Vec::<ContentDependencyChoice>::new(),
+            is_update: false,
         };
         self.service.enqueue_content_install_task(&plan).unwrap().id
     }

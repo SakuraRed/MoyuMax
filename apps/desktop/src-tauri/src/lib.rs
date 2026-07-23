@@ -9,14 +9,14 @@ use std::{
 
 use moyumax_core::{
     AppService, ArtifactDownloader, BootstrapState, ContentExecutor, ContentInstallPlan,
-    ContentInstallTask, CrashReportSummary, DiagnosticExportPreview, DiagnosticExportResult,
-    DownloadInterrupt, ExitImpactSummary, FabricLoaderSummary, InstallExecutor, InstallSelection,
-    InstallTask, InstalledContent, InstanceIsolation, JavaArchitecture, JavaDeleteOutcome,
-    JavaDistribution, JavaEnvironmentSummary, LaunchAccount, LaunchExecution, LaunchOptions,
-    LaunchSessionSummary, ManagedInstanceSummary, MetadataClient, ModrinthClient,
-    ModrinthSearchPage, ModrinthSearchQuery, OnboardingSelection, RecoveryDecision, RecycleBinItem,
-    RecyclePurgeResult, ResolvedInstallRequest, ResolvedLoader, ShellState, SourcePolicy,
-    VersionCatalog, WindowCloseBehavior, WorldBackupSummary, run_launch_execution,
+    ContentInstallTask, ContentUpdateInfo, CrashReportSummary, DiagnosticExportPreview,
+    DiagnosticExportResult, DownloadInterrupt, ExitImpactSummary, FabricLoaderSummary,
+    InstallExecutor, InstallSelection, InstallTask, InstalledContent, InstanceIsolation,
+    JavaArchitecture, JavaDeleteOutcome, JavaDistribution, JavaEnvironmentSummary, LaunchAccount,
+    LaunchExecution, LaunchOptions, LaunchSessionSummary, ManagedInstanceSummary, MetadataClient,
+    ModrinthClient, ModrinthSearchPage, ModrinthSearchQuery, OnboardingSelection, RecoveryDecision,
+    RecycleBinItem, RecyclePurgeResult, ResolvedInstallRequest, ResolvedLoader, ShellState,
+    SourcePolicy, VersionCatalog, WindowCloseBehavior, WorldBackupSummary, run_launch_execution,
 };
 use serde::Serialize;
 use tauri::{Emitter, Manager, State};
@@ -620,6 +620,55 @@ fn get_installed_content(
 }
 
 #[tauri::command]
+async fn check_content_updates(
+    service: State<'_, AppService>,
+    modrinth: State<'_, ModrinthClient>,
+    instance_id: String,
+) -> Result<Vec<ContentUpdateInfo>, String> {
+    service
+        .check_content_updates(&modrinth, &instance_id)
+        .await
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+async fn plan_content_update(
+    service: State<'_, AppService>,
+    modrinth: State<'_, ModrinthClient>,
+    coordinator: State<'_, TaskCoordinator>,
+    instance_id: String,
+    project_ids: Vec<String>,
+) -> Result<ContentInstallTask, String> {
+    let task = service
+        .plan_content_update(&modrinth, &instance_id, &project_ids)
+        .await
+        .map_err(|error| error.to_string())?;
+    coordinator.submit_content(service.inner().clone(), task.id.clone());
+    Ok(task)
+}
+
+#[tauri::command]
+fn get_instance_content_auto_update(
+    service: State<'_, AppService>,
+    instance_id: String,
+) -> Result<bool, String> {
+    service
+        .instance_content_auto_update(&instance_id)
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+fn set_instance_content_auto_update(
+    service: State<'_, AppService>,
+    instance_id: String,
+    enabled: bool,
+) -> Result<(), String> {
+    service
+        .set_instance_content_auto_update(&instance_id, enabled)
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
 fn retry_content_task(
     service: State<'_, AppService>,
     coordinator: State<'_, TaskCoordinator>,
@@ -1193,6 +1242,10 @@ pub fn run() {
             confirm_content_preview,
             get_content_install_tasks,
             get_installed_content,
+            check_content_updates,
+            plan_content_update,
+            get_instance_content_auto_update,
+            set_instance_content_auto_update,
             retry_content_task,
             resolve_content_task_recovery,
             list_instances,

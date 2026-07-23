@@ -3,6 +3,7 @@
 
   import type {
     ContentInstallPreview,
+    ContentUpdateInfo,
     InstalledContent,
     ManagedInstance,
     ModrinthProjectSummary,
@@ -37,15 +38,27 @@
     onClose,
   }: Props = $props();
 
+  const LOADER_NAMES: Record<string, string> = {
+    fabric: "Fabric",
+    quilt: "Quilt",
+    forge: "Forge",
+    neoforge: "NeoForge",
+  };
   const eligibleInstances = $derived(
     instances.filter(
-      (instance) => instance.state === "ready" && instance.loaderKind === "fabric",
+      (instance) => instance.state === "ready" && instance.loaderKind in LOADER_NAMES,
     ),
   );
   let selectedInstanceId = $state("");
   let installed = $state<InstalledContent[]>([]);
   let localLoading = $state(false);
   let localError = $state("");
+  let updates = $state<ContentUpdateInfo[] | null>(null);
+  let checkingUpdates = $state(false);
+  let updateError = $state("");
+  let autoUpdate = $state(false);
+  let updateSubmitting = $state(false);
+  let updateQueued = $state(false);
   let query = $state("");
   let searching = $state(false);
   let searchError = $state("");
@@ -67,6 +80,9 @@
     preview = null;
     searchPage = null;
     queued = false;
+    updates = null;
+    updateError = "";
+    updateQueued = false;
     await loadInstalled();
   }
 
@@ -75,11 +91,61 @@
     localLoading = true;
     localError = "";
     try {
-      installed = await runtime.getInstalledContent(selectedInstanceId);
+      const [content, autoUpdateEnabled] = await Promise.all([
+        runtime.getInstalledContent(selectedInstanceId),
+        runtime.getInstanceContentAutoUpdate(selectedInstanceId),
+      ]);
+      installed = content;
+      autoUpdate = autoUpdateEnabled;
     } catch (error) {
       localError = error instanceof Error ? error.message : String(error);
     } finally {
       localLoading = false;
+    }
+  }
+
+  async function checkUpdates(): Promise<void> {
+    if (!selectedInstanceId) return;
+    checkingUpdates = true;
+    updateError = "";
+    updateQueued = false;
+    try {
+      updates = await runtime.checkContentUpdates(selectedInstanceId);
+    } catch (error) {
+      updates = null;
+      updateError = error instanceof Error ? error.message : String(error);
+    } finally {
+      checkingUpdates = false;
+    }
+  }
+
+  async function planUpdates(projectIds: string[]): Promise<void> {
+    updateSubmitting = true;
+    updateError = "";
+    updateQueued = false;
+    try {
+      await runtime.planContentUpdate(selectedInstanceId, projectIds);
+      updates = (updates ?? []).filter(
+        (update) => !projectIds.includes(update.projectId),
+      );
+      await onTasksChanged();
+      updateQueued = true;
+    } catch (error) {
+      updateError = error instanceof Error ? error.message : String(error);
+    } finally {
+      updateSubmitting = false;
+    }
+  }
+
+  async function toggleAutoUpdate(checked: boolean): Promise<void> {
+    const previous = autoUpdate;
+    autoUpdate = checked;
+    updateError = "";
+    try {
+      await runtime.setInstanceContentAutoUpdate(selectedInstanceId, checked);
+    } catch (error) {
+      autoUpdate = previous;
+      updateError = error instanceof Error ? error.message : String(error);
     }
   }
 
@@ -169,6 +235,10 @@
     }
   }
 
+  function loaderName(kind: string): string {
+    return LOADER_NAMES[kind] ?? kind;
+  }
+
   function bytes(value: number): string {
     if (value >= 1024 * 1024) return `${(value / 1024 / 1024).toFixed(1)} MiB`;
     if (value >= 1024) return `${(value / 1024).toFixed(1)} KiB`;
@@ -199,15 +269,15 @@
     {#if eligibleInstances.length === 0}
       <section class="resource-empty">
         <Icon name="compass" size={28} />
-        <h2>还没有可管理的 Fabric 实例</h2>
-        <p>先安装一个 Fabric 游戏实例，再从 Modrinth 添加兼容模组。</p>
+        <h2>还没有可管理内容的实例</h2>
+        <p>先安装一个 Fabric、Quilt、Forge 或 NeoForge 游戏实例，再从 Modrinth 添加兼容模组。</p>
       </section>
     {:else}
       <label class="resource-instance-field">
         <span>目标实例</span>
         <select value={selectedInstanceId} onchange={(event) => void selectInstance(event)}>
           {#each eligibleInstances as instance}
-            <option value={instance.id}>{instance.name} · Minecraft {instance.gameVersion} · Fabric {instance.loaderVersion ?? ""}</option>
+            <option value={instance.id}>{instance.name} · Minecraft {instance.gameVersion} · {loaderName(instance.loaderKind)} {instance.loaderVersion ?? ""}</option>
           {/each}
         </select>
       </label>
@@ -215,7 +285,10 @@
       <section class="local-content-section" aria-labelledby="local-content-title">
         <header>
           <div><h2 id="local-content-title">本地已安装内容</h2><p>自动更新默认关闭，不会在后台改动实例。</p></div>
-          <button class="button ghost compact" disabled={localLoading} onclick={() => void loadInstalled()}>刷新本地列表</button>
+          <div class="local-content-actions">
+            <button class="button ghost compact" disabled={localLoading || checkingUpdates} onclick={() => void checkUpdates()}>{checkingUpdates ? "正在检查" : "检查更新"}</button>
+            <button class="button ghost compact" disabled={localLoading} onclick={() => void loadInstalled()}>刷新本地列表</button>
+          </div>
         </header>
         {#if localError}
           <div class="error-block" role="alert"><strong>无法读取本地内容索引</strong><span>{localError}</span></div>
@@ -233,10 +306,50 @@
             {/each}
           </div>
         {/if}
+        <label class="auto-update-toggle">
+          <input
+            type="checkbox"
+            checked={autoUpdate}
+            aria-label="按实例自动更新策略"
+            onchange={(event) => void toggleAutoUpdate((event.currentTarget as HTMLInputElement).checked)}
+          />
+          <span><strong>按实例自动更新策略</strong><small>默认关闭。开启后提供“全部更新”入口；更新仍需你明确触发，不会在后台修改实例。</small></span>
+        </label>
+        {#if updateError}
+          <div class="error-block" role="alert"><strong>更新检查或提交失败</strong><span>{updateError}</span></div>
+        {/if}
+        {#if updates !== null}
+          <div class="content-update-panel" aria-label="可用更新清单">
+            {#if updates.length === 0}
+              <div class="local-content-empty">已安装内容均为最新兼容版本。</div>
+            {:else}
+              <div class="content-update-heading">
+                <span>{updates.length} 项可用更新，更新前会自动创建恢复点</span>
+                {#if autoUpdate && updates.length > 1}
+                  <button class="button primary compact" disabled={updateSubmitting} onclick={() => void planUpdates((updates ?? []).map((update) => update.projectId))}>{updateSubmitting ? "正在提交" : "全部更新"}</button>
+                {/if}
+              </div>
+              <div class="installed-content-list">
+                {#each updates as update}
+                  <article class="installed-content-row">
+                    <div><strong>{update.projectTitle}</strong><small>{update.currentVersionNumber} → {update.latestVersionNumber}</small></div>
+                    <button class="button compact" disabled={updateSubmitting} onclick={() => void planUpdates([update.projectId])}>更新</button>
+                  </article>
+                {/each}
+              </div>
+            {/if}
+          </div>
+        {/if}
+        {#if updateQueued}
+          <div class="content-queued" role="status">
+            <div><strong>内容更新任务已进入统一队列</strong><span>替换旧文件前会先创建恢复点，任何失败都会回滚到更新前状态。</span></div>
+            <button class="button primary" onclick={onOpenTasks}>查看任务中心</button>
+          </div>
+        {/if}
       </section>
 
       <section class="remote-content-section" aria-labelledby="remote-content-title">
-        <header><h2 id="remote-content-title">从 Modrinth 添加</h2><p>结果已限定当前实例的 Minecraft 版本、Fabric 和客户端兼容性。</p></header>
+        <header><h2 id="remote-content-title">从 Modrinth 添加</h2><p>结果已限定当前实例的 Minecraft 版本、加载器和客户端兼容性。</p></header>
         <form class="content-search" onsubmit={(event) => void search(event)}>
           <label>
             <span class="sr-live">搜索 Modrinth 模组</span>

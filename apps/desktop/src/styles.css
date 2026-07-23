@@ -2062,6 +2062,62 @@ summary:focus-visible {
   font-size: 11px;
 }
 
+.local-content-actions {
+  display: flex;
+  flex: none;
+  gap: 8px;
+}
+
+.auto-update-toggle {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  margin-top: 14px;
+  padding: var(--frame-row-inset-block) var(--frame-row-inset-inline);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+}
+
+.auto-update-toggle input {
+  margin-top: 3px;
+}
+
+.auto-update-toggle strong,
+.auto-update-toggle small {
+  display: block;
+}
+
+.auto-update-toggle small {
+  margin-top: 2px;
+  color: var(--text-3);
+  font-size: 11.5px;
+}
+
+.content-update-panel {
+  margin-top: 14px;
+}
+
+.content-update-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 9px;
+  color: var(--text-2);
+  font-size: 12.5px;
+  font-weight: 600;
+}
+
+.content-update-panel .error-block,
+.local-content-section .error-block {
+  margin-top: 14px;
+}
+
+.local-content-section .content-queued {
+  margin-top: 14px;
+  margin-bottom: 0;
+}
+
 .content-search {
   display: flex;
   gap: 10px;
@@ -3259,6 +3315,12 @@ summary:focus-visible {
   .content-plan-row,
   .installed-content-row,
   .content-queued {
+    align-items: stretch;
+    flex-direction: column;
+    gap: 10px;
+  }
+
+  .content-update-heading {
     align-items: stretch;
     flex-direction: column;
     gap: 10px;

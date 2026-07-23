@@ -251,6 +251,8 @@ export interface ContentInstallPlan {
   entries: ContentPlanEntry[];
   optionalDependencies: ContentDependencyChoice[];
   incompatibleDependencies: ContentDependencyChoice[];
+  /** 更新计划：允许同名异哈希替换，替换前旧文件移入实例快照区。 */
+  isUpdate: boolean;
 }
 
 export interface ContentInstallPreview {
@@ -296,6 +298,16 @@ export interface InstalledContent {
   enabled: boolean;
   autoUpdateEnabled: boolean;
   installedAtUnixSeconds: number;
+}
+
+export interface ContentUpdateInfo {
+  projectId: string;
+  projectTitle: string;
+  currentVersionId: string;
+  currentVersionNumber: string;
+  latestVersionId: string;
+  latestVersionNumber: string;
+  file: ContentFilePlan;
 }
 
 export type BackupTrigger = "preLaunch" | "postExit" | "manual";
@@ -489,6 +501,13 @@ export interface MoyuRuntime {
   confirmContentPreview(previewId: string): Promise<ContentInstallTask>;
   getContentInstallTasks(): Promise<ContentInstallTask[]>;
   getInstalledContent(instanceId: string): Promise<InstalledContent[]>;
+  checkContentUpdates(instanceId: string): Promise<ContentUpdateInfo[]>;
+  planContentUpdate(
+    instanceId: string,
+    projectIds: string[],
+  ): Promise<ContentInstallTask>;
+  getInstanceContentAutoUpdate(instanceId: string): Promise<boolean>;
+  setInstanceContentAutoUpdate(instanceId: string, enabled: boolean): Promise<void>;
   retryContentTask(taskId: string): Promise<void>;
   resolveContentTaskRecovery(taskId: string, decision: RecoveryDecision): Promise<void>;
   listInstances(): Promise<ManagedInstance[]>;
@@ -548,6 +567,8 @@ const BROWSER_LAUNCH_SESSIONS_KEY = "moyumax.browser.launchSessions";
 const BROWSER_CRASH_REPORTS_KEY = "moyumax.browser.crashReports";
 const BROWSER_CONTENT_TASKS_KEY = "moyumax.browser.contentTasks";
 const BROWSER_INSTALLED_CONTENT_KEY = "moyumax.browser.installedContent";
+const BROWSER_CONTENT_UPDATES_KEY = "moyumax.browser.contentUpdates";
+const BROWSER_CONTENT_AUTO_UPDATE_KEY = "moyumax.browser.contentAutoUpdate";
 const BROWSER_MODRINTH_OFFLINE_KEY = "moyumax.browser.modrinthOffline";
 const BROWSER_CLOSE_BEHAVIOR_KEY = "moyumax.browser.windowCloseBehavior";
 const BROWSER_SHELL_STATE_KEY = "moyumax.browser.shellState";
@@ -614,6 +635,14 @@ function createTauriRuntime(): MoyuRuntime {
       invoke<ContentInstallTask[]>("get_content_install_tasks"),
     getInstalledContent: (instanceId) =>
       invoke<InstalledContent[]>("get_installed_content", { instanceId }),
+    checkContentUpdates: (instanceId) =>
+      invoke<ContentUpdateInfo[]>("check_content_updates", { instanceId }),
+    planContentUpdate: (instanceId, projectIds) =>
+      invoke<ContentInstallTask>("plan_content_update", { instanceId, projectIds }),
+    getInstanceContentAutoUpdate: (instanceId) =>
+      invoke<boolean>("get_instance_content_auto_update", { instanceId }),
+    setInstanceContentAutoUpdate: (instanceId, enabled) =>
+      invoke<void>("set_instance_content_auto_update", { instanceId, enabled }),
     retryContentTask: (taskId) => invoke<void>("retry_content_task", { taskId }),
     resolveContentTaskRecovery: (taskId, decision) =>
       invoke<void>("resolve_content_task_recovery", { taskId, decision }),
@@ -881,8 +910,13 @@ function createBrowserRuntime(): MoyuRuntime {
     },
     async previewModrinthInstall(instanceId, projectId, selectedOptionalProjects) {
       const instance = browserInstances().find((candidate) => candidate.id === instanceId);
-      if (!instance || instance.loaderKind !== "fabric" || instance.state !== "ready") {
-        throw new Error("目标实例不存在或不是可用的 Fabric 实例");
+      const supportedLoaders = ["fabric", "quilt", "forge", "neoforge"];
+      if (
+        !instance ||
+        !supportedLoaders.includes(instance.loaderKind) ||
+        instance.state !== "ready"
+      ) {
+        throw new Error("目标实例不存在或加载器不支持 Modrinth 模组安装");
       }
       if (projectId !== "ROOT0001") throw new Error("浏览器测试来源中没有该项目");
       const optionalSelected = selectedOptionalProjects.includes("OPT00001");
@@ -930,6 +964,7 @@ function createBrowserRuntime(): MoyuRuntime {
           },
         ],
         incompatibleDependencies: [],
+        isUpdate: false,
       };
       const id = crypto.randomUUID();
       browserContentPreviews.set(id, plan);
@@ -971,6 +1006,89 @@ function createBrowserRuntime(): MoyuRuntime {
     },
     async getInstalledContent(instanceId) {
       return browserInstalledContent().filter((entry) => entry.instanceId === instanceId);
+    },
+    async checkContentUpdates(instanceId) {
+      if (window.localStorage.getItem(BROWSER_MODRINTH_OFFLINE_KEY) === "true") {
+        throw new Error("无法连接 Modrinth：浏览器测试环境处于离线状态");
+      }
+      const installed = browserInstalledContent().filter(
+        (entry) => entry.instanceId === instanceId,
+      );
+      const installedProjects = new Set(installed.map((entry) => entry.projectId));
+      return browserContentUpdates().filter(
+        (update) =>
+          update.instanceId === instanceId && installedProjects.has(update.projectId),
+      );
+    },
+    async planContentUpdate(instanceId, projectIds) {
+      if (projectIds.length === 0) throw new Error("没有选择要更新的项目");
+      const instance = browserInstances().find((candidate) => candidate.id === instanceId);
+      if (!instance) throw new Error("目标实例不存在");
+      const updates = browserContentUpdates().filter(
+        (update) => update.instanceId === instanceId,
+      );
+      const entries: ContentPlanEntry[] = [];
+      for (const projectId of projectIds) {
+        const update = updates.find((candidate) => candidate.projectId === projectId);
+        if (!update) throw new Error(`项目 ${projectId} 没有可用更新`);
+        entries.push({
+          projectId: update.projectId,
+          versionId: update.latestVersionId,
+          projectTitle: update.projectTitle,
+          versionNumber: update.latestVersionNumber,
+          requiredByProjectId: null,
+          file: update.file,
+        });
+      }
+      const plan: ContentInstallPlan = {
+        schemaVersion: 1,
+        instanceId,
+        instanceName: instance.name,
+        gameVersion: instance.gameVersion,
+        loader: instance.loaderKind,
+        rootProjectId: entries[0]!.projectId,
+        entries,
+        optionalDependencies: [],
+        incompatibleDependencies: [],
+        isUpdate: true,
+      };
+      const id = crypto.randomUUID();
+      const now = Math.floor(Date.now() / 1000);
+      const totalBytes = plan.entries.reduce((total, entry) => total + entry.file.size, 0);
+      const task: ContentInstallTask = {
+        id,
+        state: "queued",
+        currentStage: "prepare",
+        plan,
+        stagingDirectory: `D:\\MoyuMax\\data\\.staging\\content\\${id}`,
+        targetDirectory: `D:\\MoyuMax\\data\\instances\\${plan.instanceId}`,
+        sharedStoreDirectory: "D:\\MoyuMax\\data\\store",
+        createdAtUnixSeconds: now,
+        updatedAtUnixSeconds: now,
+        priority: 0,
+        pausedBy: null,
+        progress: {
+          completedBytes: 0,
+          totalBytes,
+          currentItem: "等待执行",
+          errorSummary: null,
+        },
+      };
+      const tasks = browserContentTasks();
+      tasks.push(task);
+      window.localStorage.setItem(BROWSER_CONTENT_TASKS_KEY, JSON.stringify(tasks));
+      return task;
+    },
+    async getInstanceContentAutoUpdate(instanceId) {
+      return browserContentAutoUpdate()[instanceId] ?? false;
+    },
+    async setInstanceContentAutoUpdate(instanceId, enabled) {
+      const flags = browserContentAutoUpdate();
+      flags[instanceId] = enabled;
+      window.localStorage.setItem(
+        BROWSER_CONTENT_AUTO_UPDATE_KEY,
+        JSON.stringify(flags),
+      );
     },
     async retryContentTask(taskId) {
       const tasks = browserContentTasks();
@@ -1519,6 +1637,20 @@ function browserContentTasks(): ContentInstallTask[] {
 function browserInstalledContent(): InstalledContent[] {
   const serialized = window.localStorage.getItem(BROWSER_INSTALLED_CONTENT_KEY);
   return serialized ? (JSON.parse(serialized) as InstalledContent[]) : [];
+}
+
+interface BrowserContentUpdate extends ContentUpdateInfo {
+  instanceId: string;
+}
+
+function browserContentUpdates(): BrowserContentUpdate[] {
+  const serialized = window.localStorage.getItem(BROWSER_CONTENT_UPDATES_KEY);
+  return serialized ? (JSON.parse(serialized) as BrowserContentUpdate[]) : [];
+}
+
+function browserContentAutoUpdate(): Record<string, boolean> {
+  const serialized = window.localStorage.getItem(BROWSER_CONTENT_AUTO_UPDATE_KEY);
+  return serialized ? (JSON.parse(serialized) as Record<string, boolean>) : {};
 }
 
 function browserContentEntry(

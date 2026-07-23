@@ -380,6 +380,16 @@ impl AppService {
                 ",
             )?;
         }
+        // v11:实例级内容自动更新开关（默认关闭）。
+        let version: i64 = connection.query_row("PRAGMA user_version", [], |row| row.get(0))?;
+        if version < 11 {
+            connection.execute_batch(
+                "
+                ALTER TABLE instances ADD COLUMN content_auto_update_enabled INTEGER NOT NULL DEFAULT 0;
+                PRAGMA user_version = 11;
+                ",
+            )?;
+        }
         Ok(())
     }
 

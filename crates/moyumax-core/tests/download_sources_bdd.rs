@@ -334,6 +334,7 @@ async fn m10_source_001_content_task_records_source_detail() {
         ],
         optional_dependencies: Vec::<ContentDependencyChoice>::new(),
         incompatible_dependencies: Vec::<ContentDependencyChoice>::new(),
+        is_update: false,
     };
     // 默认镜像优先策略下,fixture 域名(Other)只保留官方候选,
     // 任务完成后必须在进度中持久化真实来源与尝试记录。
