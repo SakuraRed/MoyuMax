@@ -23,6 +23,8 @@ export function defaultInstanceName(
 ): string {
   if (loader.kind === "fabric") return `${gameVersion} Fabric`;
   if (loader.kind === "quilt") return `${gameVersion} Quilt`;
+  if (loader.kind === "forge") return `${gameVersion} Forge`;
+  if (loader.kind === "neoforge") return `${gameVersion} NeoForge`;
   return `${gameVersion} 原版`;
 }
 

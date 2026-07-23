@@ -173,6 +173,22 @@ pub enum ResolvedLoader {
         profile_sha256: String,
         profile: Value,
     },
+    Forge {
+        version: String,
+        installer_url: String,
+        installer_sha1: String,
+        installer_size: u64,
+        install_profile: Value,
+        version_json: Value,
+    },
+    NeoForge {
+        version: String,
+        installer_url: String,
+        installer_sha1: String,
+        installer_size: u64,
+        install_profile: Value,
+        version_json: Value,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -181,6 +197,8 @@ pub enum LoaderChoice {
     Vanilla,
     Fabric { version: String },
     Quilt { version: String },
+    Forge { version: String },
+    NeoForge { version: String },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -979,6 +997,8 @@ impl AppService {
             ResolvedLoader::Vanilla => ("vanilla", None),
             ResolvedLoader::Fabric { version, .. } => ("fabric", Some(version.as_str())),
             ResolvedLoader::Quilt { version, .. } => ("quilt", Some(version.as_str())),
+            ResolvedLoader::Forge { version, .. } => ("forge", Some(version.as_str())),
+            ResolvedLoader::NeoForge { version, .. } => ("neoforge", Some(version.as_str())),
         };
         let instance = ManagedInstanceSummary {
             id: task.plan.instance_id.clone(),

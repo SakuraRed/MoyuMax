@@ -8,9 +8,9 @@ use sha1::{Digest as Sha1Digest, Sha1};
 use sha2::{Digest as Sha2Digest, Sha256};
 
 use crate::{
-    AppService, ArtifactKind, CoreError, InstallSelection, JavaArchitecture, JavaDistribution,
-    LoaderChoice, ResolvedArtifact, ResolvedGameVersion, ResolvedInstallRequest,
-    ResolvedJavaPackage, ResolvedLoader, Result, unix_timestamp,
+    AppService, ArtifactKind, CoreError, InstallProfile, InstallSelection, JavaArchitecture,
+    JavaDistribution, LoaderChoice, ResolvedArtifact, ResolvedGameVersion, ResolvedInstallRequest,
+    ResolvedJavaPackage, ResolvedLoader, Result, read_install_profile, unix_timestamp,
 };
 
 const VERSION_MANIFEST_CACHE_KEY: &str = "mojang-version-manifest-v2";
@@ -19,6 +19,7 @@ const VERSION_MANIFEST_URL: &str =
 const FABRIC_META_BASE_URL: &str = "https://meta.fabricmc.net/v2";
 const QUILT_META_BASE_URL: &str = "https://meta.quiltmc.org/v3";
 const AZUL_META_BASE_URL: &str = "https://api.azul.com/metadata/v1/zulu";
+const BMCLAPI_BASE_URL: &str = "https://bmclapi2.bangbang93.com";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -180,6 +181,40 @@ struct RawQuiltLoader {
 }
 
 #[derive(Debug, Deserialize)]
+struct RawForgeVersion {
+    version: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct RawNeoForgeVersion {
+    version: String,
+    #[serde(rename = "installerPath")]
+    installer_path: String,
+}
+
+/// 校验安装器声明的目标与所选一致,防止装错对象。
+fn validate_installer_target(
+    profile: &InstallProfile,
+    game_version: &str,
+    loader_version: &str,
+    loader_name: &str,
+) -> Result<()> {
+    if !profile.minecraft.is_empty() && profile.minecraft != game_version {
+        return Err(CoreError::InvalidInstallRequest(format!(
+            "{loader_name} 安装器目标 Minecraft {} 与所选 {game_version} 不一致",
+            profile.minecraft
+        )));
+    }
+    if !profile.version.is_empty() && !profile.version.contains(loader_version) {
+        return Err(CoreError::InvalidInstallRequest(format!(
+            "{loader_name} 安装器版本 {} 与所选 {loader_version} 不一致",
+            profile.version
+        )));
+    }
+    Ok(())
+}
+
+#[derive(Debug, Deserialize)]
 struct RawAzulPackageSummary {
     package_uuid: String,
 }
@@ -270,6 +305,9 @@ impl AppService {
 pub struct MetadataClient {
     client: Client,
     quilt_meta_base: String,
+    bmclapi_base: String,
+    forge_maven_base: String,
+    neoforge_maven_base: String,
 }
 
 impl MetadataClient {
@@ -282,6 +320,9 @@ impl MetadataClient {
         Ok(Self {
             client,
             quilt_meta_base: QUILT_META_BASE_URL.to_owned(),
+            bmclapi_base: BMCLAPI_BASE_URL.to_owned(),
+            forge_maven_base: "https://maven.minecraftforge.net".to_owned(),
+            neoforge_maven_base: "https://maven.neoforged.net/releases".to_owned(),
         })
     }
 
@@ -290,6 +331,30 @@ impl MetadataClient {
     #[must_use]
     pub fn with_quilt_meta_base(mut self, base: String) -> Self {
         self.quilt_meta_base = base.trim_end_matches('/').to_owned();
+        self
+    }
+
+    /// 覆盖 BMCLAPI 基址,供本地契约测试使用。生产保持官方默认值。
+    #[doc(hidden)]
+    #[must_use]
+    pub fn with_bmclapi_base(mut self, base: String) -> Self {
+        self.bmclapi_base = base.trim_end_matches('/').to_owned();
+        self
+    }
+
+    /// 覆盖 Forge Maven 基址,供本地契约测试使用。生产保持官方默认值。
+    #[doc(hidden)]
+    #[must_use]
+    pub fn with_forge_maven_base(mut self, base: String) -> Self {
+        self.forge_maven_base = base.trim_end_matches('/').to_owned();
+        self
+    }
+
+    /// 覆盖 NeoForge Maven 基址,供本地契约测试使用。生产保持官方默认值。
+    #[doc(hidden)]
+    #[must_use]
+    pub fn with_neoforge_maven_base(mut self, base: String) -> Self {
+        self.neoforge_maven_base = base.trim_end_matches('/').to_owned();
         self
     }
 
@@ -377,6 +442,13 @@ impl MetadataClient {
             }
             LoaderChoice::Quilt { version } => {
                 self.resolve_quilt_loader(&game.version.id, version).await?
+            }
+            LoaderChoice::Forge { version } => {
+                self.resolve_forge_loader(&game.version.id, version).await?
+            }
+            LoaderChoice::NeoForge { version } => {
+                self.resolve_neoforge_loader(&game.version.id, version)
+                    .await?
             }
         };
         let java = self.resolve_zulu_jdk(game.java_major_version).await?;
@@ -562,6 +634,154 @@ impl MetadataClient {
             profile_sha256,
             profile,
         })
+    }
+
+    /// Forge 版本列表：BMCLAPI 按构建升序返回，推荐最新构建。
+    pub async fn compatible_forge_versions(
+        &self,
+        game_version: &str,
+    ) -> Result<Vec<FabricLoaderSummary>> {
+        validate_metadata_component(game_version, "Minecraft 版本")?;
+        let url = format!("{}/forge/minecraft/{game_version}", self.bmclapi_base);
+        let entries = self
+            .client
+            .get(url)
+            .send()
+            .await?
+            .error_for_status()?
+            .json::<Vec<RawForgeVersion>>()
+            .await?;
+        let recommended_index = entries.len().checked_sub(1);
+        Ok(entries
+            .into_iter()
+            .enumerate()
+            .map(|(index, entry)| FabricLoaderSummary {
+                version: entry.version,
+                stable: true,
+                recommended: Some(index) == recommended_index,
+            })
+            .collect())
+    }
+
+    /// NeoForge 版本列表：BMCLAPI 按版本升序返回，推荐最新版本。
+    pub async fn compatible_neoforge_versions(
+        &self,
+        game_version: &str,
+    ) -> Result<Vec<FabricLoaderSummary>> {
+        validate_metadata_component(game_version, "Minecraft 版本")?;
+        let url = format!("{}/neoforge/list/{game_version}", self.bmclapi_base);
+        let entries = self
+            .client
+            .get(url)
+            .send()
+            .await?
+            .error_for_status()?
+            .json::<Vec<RawNeoForgeVersion>>()
+            .await?;
+        let recommended_index = entries.len().checked_sub(1);
+        Ok(entries
+            .into_iter()
+            .enumerate()
+            .map(|(index, entry)| FabricLoaderSummary {
+                version: entry.version,
+                stable: true,
+                recommended: Some(index) == recommended_index,
+            })
+            .collect())
+    }
+
+    /// 解析 Forge 加载器：校验兼容列表后下载安装器并读取 spec-1 profile。
+    pub async fn resolve_forge_loader(
+        &self,
+        game_version: &str,
+        loader_version: &str,
+    ) -> Result<ResolvedLoader> {
+        validate_metadata_component(game_version, "Minecraft 版本")?;
+        validate_metadata_component(loader_version, "Forge 版本")?;
+        let compatible = self.compatible_forge_versions(game_version).await?;
+        let selected = compatible
+            .into_iter()
+            .find(|candidate| candidate.version == loader_version)
+            .ok_or_else(|| {
+                CoreError::InvalidInstallRequest(format!(
+                    "Forge {loader_version} 不在 Minecraft {game_version} 的兼容列表中"
+                ))
+            })?;
+        let installer_url = format!(
+            "{}/net/minecraftforge/forge/{game_version}-{loader_version}/forge-{game_version}-{loader_version}-installer.jar",
+            self.forge_maven_base
+        );
+        let (profile, version_json, installer_sha1, installer_size) =
+            self.download_installer(&installer_url).await?;
+        validate_installer_target(&profile, game_version, &selected.version, "Forge")?;
+        Ok(ResolvedLoader::Forge {
+            version: selected.version,
+            installer_url,
+            installer_sha1,
+            installer_size,
+            install_profile: serde_json::to_value(profile)?,
+            version_json,
+        })
+    }
+
+    /// 解析 NeoForge 加载器：兼容列表提供安装器路径，下载后读取 spec-1 profile。
+    pub async fn resolve_neoforge_loader(
+        &self,
+        game_version: &str,
+        loader_version: &str,
+    ) -> Result<ResolvedLoader> {
+        validate_metadata_component(game_version, "Minecraft 版本")?;
+        validate_metadata_component(loader_version, "NeoForge 版本")?;
+        let url = format!("{}/neoforge/list/{game_version}", self.bmclapi_base);
+        let entries = self
+            .client
+            .get(url)
+            .send()
+            .await?
+            .error_for_status()?
+            .json::<Vec<RawNeoForgeVersion>>()
+            .await?;
+        let selected = entries
+            .into_iter()
+            .find(|entry| entry.version == loader_version)
+            .ok_or_else(|| {
+                CoreError::InvalidInstallRequest(format!(
+                    "NeoForge {loader_version} 不在 Minecraft {game_version} 的兼容列表中"
+                ))
+            })?;
+        let installer_url = format!("{}{}", self.neoforge_maven_base, selected.installer_path);
+        let (profile, version_json, installer_sha1, installer_size) =
+            self.download_installer(&installer_url).await?;
+        validate_installer_target(&profile, game_version, &selected.version, "NeoForge")?;
+        Ok(ResolvedLoader::NeoForge {
+            version: selected.version,
+            installer_url,
+            installer_sha1,
+            installer_size,
+            install_profile: serde_json::to_value(profile)?,
+            version_json,
+        })
+    }
+
+    /// 下载安装器并在内存中解析 spec-1 profile,返回 profile、version.json 与校验信息。
+    async fn download_installer(
+        &self,
+        url: &str,
+    ) -> Result<(InstallProfile, serde_json::Value, String, u64)> {
+        let payload = self
+            .client
+            .get(url)
+            .send()
+            .await?
+            .error_for_status()?
+            .bytes()
+            .await?;
+        let mut hasher = Sha1::new();
+        Sha1Digest::update(&mut hasher, &payload);
+        let installer_sha1 = encode_hex(Sha1Digest::finalize(hasher));
+        let installer_size = payload.len() as u64;
+        let (profile, version_json) = read_install_profile(std::io::Cursor::new(payload))?;
+        Ok((profile, version_json, installer_sha1, installer_size))
     }
 
     async fn resolve_zulu_jdk(&self, java_major: u16) -> Result<ResolvedJavaPackage> {

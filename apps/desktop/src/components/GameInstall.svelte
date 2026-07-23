@@ -46,6 +46,8 @@
   let selectedVersion = $state<GameVersionSummary | null>(null);
   let fabricLoaders = $state<FabricLoaderSummary[]>([]);
   let quiltLoaders = $state<FabricLoaderSummary[]>([]);
+  let forgeVersions = $state<FabricLoaderSummary[]>([]);
+  let neoforgeVersions = $state<FabricLoaderSummary[]>([]);
   let loader = $state<LoaderChoice>({ kind: "vanilla" });
   let instanceName = $state("");
   let nameEdited = $state(false);
@@ -101,6 +103,8 @@
     loader = { kind: "vanilla" };
     fabricLoaders = [];
     quiltLoaders = [];
+    forgeVersions = [];
+    neoforgeVersions = [];
     updateGeneratedName();
     await loadLoaders(version, false);
   }
@@ -108,7 +112,9 @@
   async function loadLoaders(version: GameVersionSummary, selectRecommended: boolean): Promise<void> {
     await Promise.all([
       loadFabric(version, selectRecommended),
-      loadQuilt(version, selectRecommended),
+      loadQuilt(version),
+      loadForge(version),
+      loadNeoForge(version),
     ]);
   }
 
@@ -133,7 +139,7 @@
     }
   }
 
-  async function loadQuilt(version: GameVersionSummary, _selectRecommended: boolean): Promise<void> {
+  async function loadQuilt(version: GameVersionSummary): Promise<void> {
     try {
       const compatibleLoaders = await runtime.getQuiltLoaders(version.id);
       if (selectedVersion?.id !== version.id) return;
@@ -142,6 +148,30 @@
     } catch {
       if (selectedVersion?.id !== version.id) return;
       quiltLoaders = [];
+    }
+  }
+
+  async function loadForge(version: GameVersionSummary): Promise<void> {
+    try {
+      const versions = await runtime.getForgeVersions(version.id);
+      if (selectedVersion?.id !== version.id) return;
+      forgeVersions = versions;
+      updateGeneratedName();
+    } catch {
+      if (selectedVersion?.id !== version.id) return;
+      forgeVersions = [];
+    }
+  }
+
+  async function loadNeoForge(version: GameVersionSummary): Promise<void> {
+    try {
+      const versions = await runtime.getNeoForgeVersions(version.id);
+      if (selectedVersion?.id !== version.id) return;
+      neoforgeVersions = versions;
+      updateGeneratedName();
+    } catch {
+      if (selectedVersion?.id !== version.id) return;
+      neoforgeVersions = [];
     }
   }
 
@@ -164,6 +194,20 @@
     updateGeneratedName();
   }
 
+  function selectForge(): void {
+    const recommended = recommendedFabricLoader(forgeVersions);
+    if (!recommended) return;
+    loader = { kind: "forge", version: recommended.version };
+    updateGeneratedName();
+  }
+
+  function selectNeoForge(): void {
+    const recommended = recommendedFabricLoader(neoforgeVersions);
+    if (!recommended) return;
+    loader = { kind: "neoforge", version: recommended.version };
+    updateGeneratedName();
+  }
+
   function selectFabricVersion(version: string): void {
     loader = { kind: "fabric", version };
     updateGeneratedName();
@@ -171,6 +215,16 @@
 
   function selectQuiltVersion(version: string): void {
     loader = { kind: "quilt", version };
+    updateGeneratedName();
+  }
+
+  function selectForgeVersion(version: string): void {
+    loader = { kind: "forge", version };
+    updateGeneratedName();
+  }
+
+  function selectNeoForgeVersion(version: string): void {
+    loader = { kind: "neoforge", version };
     updateGeneratedName();
   }
 
@@ -334,15 +388,18 @@
                 <button class:selected={loader.kind === "vanilla"} class="loader-card" role="radio" aria-checked={loader.kind === "vanilla"} onclick={selectVanilla}>
                   <span class="radio-mark"></span><strong>不安装</strong><small>原版</small>
                 </button>
+                <button class:selected={loader.kind === "forge"} class="loader-card" role="radio" aria-checked={loader.kind === "forge"} disabled={forgeVersions.length === 0} onclick={selectForge}>
+                  <span class="radio-mark"></span><strong>Forge</strong><small>{recommendedFabricLoader(forgeVersions)?.version ?? "不可用"} · 推荐</small>
+                </button>
+                <button class:selected={loader.kind === "neoforge"} class="loader-card" role="radio" aria-checked={loader.kind === "neoforge"} disabled={neoforgeVersions.length === 0} onclick={selectNeoForge}>
+                  <span class="radio-mark"></span><strong>NeoForge</strong><small>{recommendedFabricLoader(neoforgeVersions)?.version ?? "不可用"} · 推荐</small>
+                </button>
                 <button class:selected={loader.kind === "fabric"} class="loader-card" role="radio" aria-checked={loader.kind === "fabric"} disabled={fabricLoaders.length === 0} onclick={selectFabric}>
                   <span class="radio-mark"></span><strong>Fabric</strong><small>{recommendedFabricLoader(fabricLoaders)?.version ?? "不可用"} · 推荐</small>
                 </button>
                 <button class:selected={loader.kind === "quilt"} class="loader-card" role="radio" aria-checked={loader.kind === "quilt"} disabled={quiltLoaders.length === 0} onclick={selectQuilt}>
                   <span class="radio-mark"></span><strong>Quilt</strong><small>{recommendedFabricLoader(quiltLoaders)?.version ?? "不可用"} · 推荐</small>
                 </button>
-                {#each ["Forge", "NeoForge"] as pendingLoader}
-                  <button class="loader-card pending" disabled><strong>{pendingLoader}</strong><small>接口接入中</small></button>
-                {/each}
               </div>
               {#if loader.kind === "fabric"}
                 <label class="loader-version-field">
@@ -364,6 +421,28 @@
                     {/each}
                   </select>
                   <small>列表仅包含 Quilt 元数据服务为 Minecraft {selectedVersion.id} 返回的兼容版本。</small>
+                </label>
+              {/if}
+              {#if loader.kind === "forge"}
+                <label class="loader-version-field">
+                  Forge 版本
+                  <select value={loader.version} onchange={(event) => selectForgeVersion(event.currentTarget.value)}>
+                    {#each forgeVersions as candidate}
+                      <option value={candidate.version}>{candidate.version}{candidate.recommended ? "（推荐）" : ""}</option>
+                    {/each}
+                  </select>
+                  <small>列表仅包含与 Minecraft {selectedVersion.id} 兼容的 Forge 构建。</small>
+                </label>
+              {/if}
+              {#if loader.kind === "neoforge"}
+                <label class="loader-version-field">
+                  NeoForge 版本
+                  <select value={loader.version} onchange={(event) => selectNeoForgeVersion(event.currentTarget.value)}>
+                    {#each neoforgeVersions as candidate}
+                      <option value={candidate.version}>{candidate.version}{candidate.recommended ? "（推荐）" : ""}</option>
+                    {/each}
+                  </select>
+                  <small>列表仅包含与 Minecraft {selectedVersion.id} 兼容的 NeoForge 构建。</small>
                 </label>
               {/if}
               {#if loaderMessage}<p class="hint">{loaderMessage}</p>{/if}

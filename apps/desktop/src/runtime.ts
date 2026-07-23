@@ -49,7 +49,9 @@ export interface FabricLoaderSummary {
 export type LoaderChoice =
   | { kind: "vanilla" }
   | { kind: "fabric"; version: string }
-  | { kind: "quilt"; version: string };
+  | { kind: "quilt"; version: string }
+  | { kind: "forge"; version: string }
+  | { kind: "neoforge"; version: string };
 
 export type InstanceIsolation = "full" | "sharedBase" | "disabled";
 
@@ -435,6 +437,8 @@ export interface MoyuRuntime {
   getGameVersionCatalog(): Promise<VersionCatalog>;
   getFabricLoaders(gameVersion: string): Promise<FabricLoaderSummary[]>;
   getQuiltLoaders(gameVersion: string): Promise<FabricLoaderSummary[]>;
+  getForgeVersions(gameVersion: string): Promise<FabricLoaderSummary[]>;
+  getNeoForgeVersions(gameVersion: string): Promise<FabricLoaderSummary[]>;
   previewInstall(selection: InstallSelection): Promise<InstallPreview>;
   confirmInstallPreview(previewId: string): Promise<InstallTask>;
   getInstallTasks(): Promise<InstallTask[]>;
@@ -534,6 +538,10 @@ function createTauriRuntime(): MoyuRuntime {
       invoke<FabricLoaderSummary[]>("get_fabric_loaders", { gameVersion }),
     getQuiltLoaders: (gameVersion) =>
       invoke<FabricLoaderSummary[]>("get_quilt_loaders", { gameVersion }),
+    getForgeVersions: (gameVersion) =>
+      invoke<FabricLoaderSummary[]>("get_forge_versions", { gameVersion }),
+    getNeoForgeVersions: (gameVersion) =>
+      invoke<FabricLoaderSummary[]>("get_neoforge_versions", { gameVersion }),
     previewInstall: (selection) =>
       invoke<InstallPreview>("preview_install", { selection }),
     confirmInstallPreview: (previewId) =>
@@ -668,6 +676,18 @@ function createBrowserRuntime(): MoyuRuntime {
         { version: "0.30.1-beta.1", stable: false, recommended: false },
       ];
     },
+    async getForgeVersions() {
+      return [
+        { version: "58.1.19", stable: true, recommended: false },
+        { version: "58.1.20", stable: true, recommended: true },
+      ];
+    },
+    async getNeoForgeVersions() {
+      return [
+        { version: "21.8.53", stable: true, recommended: false },
+        { version: "21.8.54", stable: true, recommended: true },
+      ];
+    },
     async previewInstall(selection) {
       const id = crypto.randomUUID();
       browserPreviews.set(id, selection);
@@ -676,7 +696,11 @@ function createBrowserRuntime(): MoyuRuntime {
           ? "Fabric"
           : selection.loader.kind === "quilt"
             ? "Quilt"
-            : "原版";
+            : selection.loader.kind === "forge"
+              ? "Forge"
+              : selection.loader.kind === "neoforge"
+                ? "NeoForge"
+                : "原版";
       const loaderVersion =
         selection.loader.kind === "vanilla" ? null : selection.loader.version;
       return {

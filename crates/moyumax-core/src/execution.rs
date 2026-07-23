@@ -1179,11 +1179,21 @@ async fn write_content_commit_journal(
     Ok(())
 }
 
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct InstallExecutor {
     downloader: ArtifactDownloader,
     max_concurrent_downloads: usize,
     asset_base_url: String,
+    processor_runner: Option<Arc<crate::ProcessorRunner>>,
+}
+
+impl std::fmt::Debug for InstallExecutor {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("InstallExecutor")
+            .field("max_concurrent_downloads", &self.max_concurrent_downloads)
+            .finish_non_exhaustive()
+    }
 }
 
 impl InstallExecutor {
@@ -1192,7 +1202,16 @@ impl InstallExecutor {
             downloader: ArtifactDownloader::new(max_concurrent_downloads)?,
             max_concurrent_downloads,
             asset_base_url: "https://resources.download.minecraft.net".to_owned(),
+            processor_runner: None,
         })
+    }
+
+    /// 注入确定性处理器运行器,供 BDD 测试使用;生产保持托管 Java 子进程。
+    #[doc(hidden)]
+    #[must_use]
+    pub fn with_processor_runner(mut self, runner: Arc<crate::ProcessorRunner>) -> Self {
+        self.processor_runner = Some(runner);
+        self
     }
 
     pub fn with_asset_base_url(mut self, asset_base_url: String) -> Result<Self> {
@@ -1376,6 +1395,12 @@ impl InstallExecutor {
             InstallStage::ApplyLoader,
             "正在准备实例运行时",
         )?;
+        if let Some((patched_artifact, patched_report)) = self
+            .run_loader_processors(service, task, &java_home, &staging_directory)
+            .await?
+        {
+            downloads.push((patched_artifact, patched_report));
+        }
         let runtime = build_runtime_manifest(task, &java_home, &downloads);
         let staged_instance = prepare_instance_directory(task, &runtime, &staging_directory)?;
         extract_native_libraries(&downloads, &staged_instance, &staging_directory)?;
@@ -1487,6 +1512,44 @@ impl InstallExecutor {
     ) -> Result<Vec<ResolvedArtifact>> {
         let profile_json = match loader {
             ResolvedLoader::Vanilla => return Ok(Vec::new()),
+            ResolvedLoader::Forge {
+                install_profile,
+                version_json,
+                installer_url,
+                installer_sha1,
+                installer_size,
+                ..
+            }
+            | ResolvedLoader::NeoForge {
+                install_profile,
+                version_json,
+                installer_url,
+                installer_sha1,
+                installer_size,
+                ..
+            } => {
+                let mut artifacts = version_json_library_artifacts(version_json)?;
+                let profile: crate::InstallProfile =
+                    serde_json::from_value(install_profile.clone())?;
+                artifacts.extend(profile_library_artifacts(&profile)?);
+                let file_name = installer_url
+                    .rsplit('/')
+                    .next()
+                    .filter(|name| !name.is_empty())
+                    .ok_or_else(|| {
+                        CoreError::InvalidInstallRequest("安装器 URL 缺少文件名".to_owned())
+                    })?;
+                artifacts.push(ResolvedArtifact {
+                    kind: ArtifactKind::LoaderLibrary,
+                    relative_path: format!("minecraft/loader-installers/{file_name}"),
+                    url: installer_url.clone(),
+                    size: *installer_size,
+                    sha1: Some(installer_sha1.clone()),
+                    sha256: None,
+                    sha512: None,
+                });
+                return Ok(artifacts);
+            }
             ResolvedLoader::Fabric { profile, .. } | ResolvedLoader::Quilt { profile, .. } => {
                 profile.clone()
             }
@@ -1545,6 +1608,112 @@ impl InstallExecutor {
             });
         }
         Ok(artifacts)
+    }
+
+    /// Forge/NeoForge:按 install_profile 执行客户端处理器并产出校验过的客户端 JAR。
+    /// 其他加载器返回 None。
+    async fn run_loader_processors(
+        &self,
+        service: &AppService,
+        task: &InstallTask,
+        java_home: &str,
+        staging_directory: &Path,
+    ) -> Result<Option<(ResolvedArtifact, FetchReport)>> {
+        let install_profile_json = match &task.plan.loader {
+            ResolvedLoader::Forge {
+                install_profile, ..
+            }
+            | ResolvedLoader::NeoForge {
+                install_profile, ..
+            } => install_profile.clone(),
+            ResolvedLoader::Vanilla
+            | ResolvedLoader::Fabric { .. }
+            | ResolvedLoader::Quilt { .. } => {
+                return Ok(None);
+            }
+        };
+        service.set_task_phase(
+            &task.id,
+            TaskState::Running,
+            InstallStage::ApplyLoader,
+            "正在执行加载器安装器处理器",
+        )?;
+        let profile: crate::InstallProfile = serde_json::from_value(install_profile_json)?;
+        let download_staging = staging_directory.join("downloads");
+        let library_dir = download_staging.join("minecraft/libraries");
+        let work_dir = staging_directory.join("loader-work");
+        let installer_url = match &task.plan.loader {
+            ResolvedLoader::Forge { installer_url, .. }
+            | ResolvedLoader::NeoForge { installer_url, .. } => installer_url.clone(),
+            _ => unreachable!(),
+        };
+        let file_name = installer_url
+            .rsplit('/')
+            .next()
+            .ok_or_else(|| CoreError::InvalidInstallRequest("安装器 URL 缺少文件名".to_owned()))?;
+        let installer_path = download_staging
+            .join("minecraft/loader-installers")
+            .join(file_name);
+        if !installer_path.is_file() {
+            return Err(CoreError::InvalidInstallRequest(
+                "安装器未完成下载，无法执行处理器".to_owned(),
+            ));
+        }
+        let shared_store = PathBuf::from(&task.plan.shared_store_directory);
+        let minecraft_jar_relative =
+            format!("minecraft/versions/{0}/{0}.jar", task.plan.game.version.id);
+        let minecraft_jar = {
+            let shared_candidate = shared_store.join(&minecraft_jar_relative);
+            if shared_candidate.is_file() {
+                shared_candidate
+            } else {
+                download_staging.join(&minecraft_jar_relative)
+            }
+        };
+        let plan = crate::plan_loader_processors(
+            &profile,
+            &installer_path,
+            &library_dir,
+            &minecraft_jar,
+            &task.plan.game.version.id,
+            &work_dir,
+        )?;
+        let runner: Box<crate::ProcessorRunner> = match &self.processor_runner {
+            Some(runner) => {
+                let runner = Arc::clone(runner);
+                Box::new(move |invocation, work| runner(invocation, work))
+            }
+            None => crate::java_processor_runner(Path::new(java_home).join("bin/java.exe")),
+        };
+        crate::run_loader_processors(&plan, runner.as_ref(), &work_dir)?;
+        let patched_metadata = std::fs::metadata(&plan.patched_output)?;
+        let patched_artifact = ResolvedArtifact {
+            kind: ArtifactKind::LoaderLibrary,
+            relative_path: format!(
+                "minecraft/libraries/{}",
+                plan.patched_coordinate.relative_path()
+            ),
+            url: String::new(),
+            size: patched_metadata.len(),
+            sha1: plan.patched_sha1.clone(),
+            sha256: None,
+            sha512: None,
+        };
+        let patched_report = FetchReport {
+            result: DownloadResult {
+                staged_file: plan.patched_output.clone(),
+                disposition: DownloadDisposition::Downloaded,
+                bytes: patched_metadata.len(),
+            },
+            final_label: "本地处理器产出".to_owned(),
+            channel: crate::SourceChannel::Official,
+            attempts: Vec::new(),
+            segmented: false,
+            segment_count: 0,
+            degraded_reason: None,
+            reused_local: true,
+        };
+        Ok(Some((patched_artifact, patched_report)))
     }
 
     async fn prepare_java(
@@ -2028,6 +2197,15 @@ fn build_runtime_manifest(
                 .to_owned(),
             Some(profile.clone()),
         ),
+        ResolvedLoader::Forge { version_json, .. }
+        | ResolvedLoader::NeoForge { version_json, .. } => (
+            version_json
+                .get("mainClass")
+                .and_then(serde_json::Value::as_str)
+                .unwrap_or(&task.plan.game.main_class)
+                .to_owned(),
+            Some(version_json.clone()),
+        ),
     };
     serde_json::json!({
         "schemaVersion": 1,
@@ -2064,35 +2242,114 @@ fn validate_hash(value: &str, length: usize, label: &str) -> Result<()> {
 }
 
 fn maven_path(coordinate: &str) -> Result<String> {
-    let (coordinate, extension) = coordinate
-        .rsplit_once('@')
-        .map_or((coordinate, "jar"), |(value, extension)| (value, extension));
-    let parts: Vec<&str> = coordinate.split(':').collect();
-    if !(3..=4).contains(&parts.len())
-        || parts.iter().any(|part| {
-            part.is_empty()
-                || !part.chars().all(|character| {
-                    character.is_ascii_alphanumeric() || ".-_+".contains(character)
-                })
-        })
-        || extension.is_empty()
-        || !extension
-            .chars()
-            .all(|character| character.is_ascii_alphanumeric())
-    {
-        return Err(CoreError::Metadata(format!(
-            "Fabric Maven 坐标无效：{coordinate}"
-        )));
+    Ok(crate::MavenCoordinate::parse(coordinate)?.relative_path())
+}
+
+/// 解析 version.json 中的游戏库下载工件。URL 为空的条目由处理器本地产出,跳过。
+fn version_json_library_artifacts(
+    version_json: &serde_json::Value,
+) -> Result<Vec<ResolvedArtifact>> {
+    let libraries = version_json
+        .get("libraries")
+        .and_then(serde_json::Value::as_array)
+        .ok_or_else(|| {
+            CoreError::InvalidInstallRequest("version.json 缺少 libraries".to_owned())
+        })?;
+    let mut artifacts = Vec::with_capacity(libraries.len());
+    for library in libraries {
+        let name = library
+            .get("name")
+            .and_then(serde_json::Value::as_str)
+            .ok_or_else(|| {
+                CoreError::InvalidInstallRequest("version.json 库缺少 name".to_owned())
+            })?;
+        let Some(download) = library.pointer("/downloads/artifact") else {
+            continue;
+        };
+        let url = download
+            .get("url")
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or_default();
+        if url.is_empty() {
+            continue;
+        }
+        let path = download
+            .get("path")
+            .and_then(serde_json::Value::as_str)
+            .filter(|path| !path.is_empty())
+            .map(str::to_owned)
+            .map_or_else(|| maven_path(name), Ok)?;
+        let sha1 = download
+            .get("sha1")
+            .and_then(serde_json::Value::as_str)
+            .map(str::to_owned);
+        if let Some(value) = &sha1 {
+            validate_hash(value, 40, "加载器库 SHA-1")?;
+        }
+        let size = download
+            .get("size")
+            .and_then(serde_json::Value::as_u64)
+            .unwrap_or(0);
+        if size == 0 {
+            return Err(CoreError::Metadata(format!(
+                "加载器库 {name} 没有提供可验证大小"
+            )));
+        }
+        artifacts.push(ResolvedArtifact {
+            kind: ArtifactKind::LoaderLibrary,
+            relative_path: format!("minecraft/libraries/{path}"),
+            url: url.to_owned(),
+            size,
+            sha1,
+            sha256: None,
+            sha512: None,
+        });
     }
-    let group = parts[0].replace('.', "/");
-    let artifact = parts[1];
-    let version = parts[2];
-    let classifier = parts
-        .get(3)
-        .map_or(String::new(), |value| format!("-{value}"));
-    Ok(format!(
-        "{group}/{artifact}/{version}/{artifact}-{version}{classifier}.{extension}"
-    ))
+    Ok(artifacts)
+}
+
+/// 解析 install_profile 中的处理器库下载工件。
+fn profile_library_artifacts(profile: &crate::InstallProfile) -> Result<Vec<ResolvedArtifact>> {
+    let mut artifacts = Vec::with_capacity(profile.libraries.len());
+    for library in &profile.libraries {
+        let relative = maven_path(&library.name)?;
+        let Some(artifact) = library
+            .downloads
+            .as_ref()
+            .and_then(|downloads| downloads.artifact.as_ref())
+        else {
+            continue;
+        };
+        if artifact.url.is_empty() {
+            return Err(CoreError::InvalidInstallRequest(format!(
+                "处理器库 {} 缺少下载 URL",
+                library.name
+            )));
+        }
+        if artifact.sha1.is_empty() {
+            return Err(CoreError::InvalidInstallRequest(format!(
+                "处理器库 {} 缺少 SHA-1",
+                library.name
+            )));
+        }
+        validate_hash(&artifact.sha1, 40, "处理器库 SHA-1")?;
+        if artifact.size == 0 {
+            return Err(CoreError::Metadata(format!(
+                "处理器库 {} 没有提供可验证大小",
+                library.name
+            )));
+        }
+        artifacts.push(ResolvedArtifact {
+            kind: ArtifactKind::LoaderLibrary,
+            relative_path: format!("minecraft/libraries/{relative}"),
+            url: artifact.url.clone(),
+            size: artifact.size,
+            sha1: Some(artifact.sha1.clone()),
+            sha256: None,
+            sha512: None,
+        });
+    }
+    Ok(artifacts)
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
