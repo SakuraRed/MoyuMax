@@ -388,6 +388,22 @@ export interface UiPreferences {
   contrast: string;
 }
 
+export interface UpdateAsset {
+  name: string;
+  url: string;
+  size: number;
+  sha256: string | null;
+}
+
+export interface ReleaseInfo {
+  tag: string;
+  name: string;
+  notes: string;
+  pageUrl: string;
+  minAppVersion: string | null;
+  installer: UpdateAsset | null;
+}
+
 export const LITTLESKIN_YGGDRASIL_URL = "https://littleskin.cn/api/yggdrasil";
 
 export type LaunchSessionState =
@@ -620,6 +636,11 @@ export interface MoyuRuntime {
   setUiContrast(contrast: string): Promise<void>;
   getCliEnabled(): Promise<boolean>;
   setCliEnabled(enabled: boolean): Promise<void>;
+  getUpdateChecksEnabled(): Promise<boolean>;
+  setUpdateChecksEnabled(enabled: boolean): Promise<void>;
+  checkForUpdates(): Promise<ReleaseInfo | null>;
+  downloadUpdateInstaller(release: ReleaseInfo): Promise<string>;
+  openUpdateLocation(path: string): Promise<void>;
   retryContentTask(taskId: string): Promise<void>;
   resolveContentTaskRecovery(taskId: string, decision: RecoveryDecision): Promise<void>;
   listInstances(): Promise<ManagedInstance[]>;
@@ -858,6 +879,13 @@ function createTauriRuntime(): MoyuRuntime {
     setUiContrast: (contrast) => invoke<void>("set_ui_contrast", { contrast }),
     getCliEnabled: () => invoke<boolean>("get_cli_enabled"),
     setCliEnabled: (enabled) => invoke<void>("set_cli_enabled", { enabled }),
+    getUpdateChecksEnabled: () => invoke<boolean>("get_update_checks_enabled"),
+    setUpdateChecksEnabled: (enabled) =>
+      invoke<void>("set_update_checks_enabled", { enabled }),
+    checkForUpdates: () => invoke<ReleaseInfo | null>("check_for_updates"),
+    downloadUpdateInstaller: (release) =>
+      invoke<string>("download_update_installer", { release }),
+    openUpdateLocation: (path) => invoke<void>("open_update_location", { path }),
     retryContentTask: (taskId) => invoke<void>("retry_content_task", { taskId }),
     resolveContentTaskRecovery: (taskId, decision) =>
       invoke<void>("resolve_content_task_recovery", { taskId, decision }),
@@ -1577,6 +1605,29 @@ function createBrowserRuntime(): MoyuRuntime {
     },
     async setCliEnabled(enabled) {
       window.localStorage.setItem("moyumax.browser.cliEnabled", String(enabled));
+    },
+    async getUpdateChecksEnabled() {
+      return window.localStorage.getItem("moyumax.browser.updateChecks") !== "false";
+    },
+    async setUpdateChecksEnabled(enabled) {
+      window.localStorage.setItem("moyumax.browser.updateChecks", String(enabled));
+    },
+    async checkForUpdates() {
+      if (window.localStorage.getItem("moyumax.browser.updateChecks") === "false") {
+        throw new Error("更新提示已关闭；可在设置中重新开启");
+      }
+      const serialized = window.localStorage.getItem("moyumax.browser.latestRelease");
+      return serialized ? (JSON.parse(serialized) as ReleaseInfo) : null;
+    },
+    async downloadUpdateInstaller(release) {
+      if (window.localStorage.getItem("moyumax.browser.updateDownloadFails") === "true") {
+        throw new Error("安装包 SHA-256 校验失败");
+      }
+      if (!release.installer) throw new Error("该发布没有 Windows 安装包资产");
+      return `D:\\MoyuMax\\data\\updates\\${release.tag}\\${release.installer.name}`;
+    },
+    async openUpdateLocation(path) {
+      window.localStorage.setItem("moyumax.browser.openedLocation", path);
     },
     async listInstanceScreenshots(instanceId) {
       return browserScreenshots()[instanceId] ?? [];

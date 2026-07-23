@@ -17,8 +17,9 @@ use moyumax_core::{
     JavaEnvironmentSummary, LaunchExecution, LaunchOptions, LaunchSessionSummary,
     ManagedInstanceSummary, MetadataClient, ModrinthClient, ModrinthSearchPage,
     ModrinthSearchQuery, OnboardingSelection, RecoveryDecision, RecycleBinItem, RecyclePurgeResult,
-    ResolvedInstallRequest, ResolvedLoader, ShellState, SourcePolicy, VersionCatalog,
-    WindowCloseBehavior, WorldBackupSummary, YggdrasilClient, run_launch_execution,
+    ReleaseInfo, ResolvedInstallRequest, ResolvedLoader, ShellState, SourcePolicy, UpdateClient,
+    VersionCatalog, WindowCloseBehavior, WorldBackupSummary, YggdrasilClient, min_version_block,
+    run_launch_execution,
 };
 use serde::Serialize;
 use tauri::{Emitter, Manager, State};
@@ -972,6 +973,73 @@ fn set_cli_enabled(service: State<'_, AppService>, enabled: bool) -> Result<(), 
 }
 
 #[tauri::command]
+fn get_update_checks_enabled(service: State<'_, AppService>) -> Result<bool, String> {
+    service
+        .update_checks_enabled()
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+fn set_update_checks_enabled(service: State<'_, AppService>, enabled: bool) -> Result<(), String> {
+    service
+        .set_update_checks_enabled(enabled)
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+async fn check_for_updates(service: State<'_, AppService>) -> Result<Option<ReleaseInfo>, String> {
+    if !service
+        .update_checks_enabled()
+        .map_err(|error| error.to_string())?
+    {
+        return Err("更新提示已关闭；可在设置中重新开启".to_owned());
+    }
+    let client = UpdateClient::new().map_err(|error| error.to_string())?;
+    client
+        .check_latest(env!("CARGO_PKG_VERSION"))
+        .await
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+async fn download_update_installer(
+    service: State<'_, AppService>,
+    release: ReleaseInfo,
+) -> Result<String, String> {
+    if let Some(block) = min_version_block(env!("CARGO_PKG_VERSION"), &release) {
+        return Err(block);
+    }
+    let asset = release
+        .installer
+        .ok_or_else(|| "该发布没有 Windows 安装包资产".to_owned())?;
+    let client = UpdateClient::new().map_err(|error| error.to_string())?;
+    let directory = service
+        .selected_data_directory()
+        .map_err(|error| error.to_string())?
+        .join("updates")
+        .join(&release.tag);
+    let path = client
+        .download_installer(&asset, &directory)
+        .await
+        .map_err(|error| error.to_string())?;
+    Ok(path.to_string_lossy().into_owned())
+}
+
+#[tauri::command]
+fn open_update_location(path: String) -> Result<(), String> {
+    let path = std::path::PathBuf::from(&path);
+    if !path.is_file() {
+        return Err("安装包位置不存在或已删除".to_owned());
+    }
+    std::process::Command::new("explorer.exe")
+        .arg("/select,")
+        .arg(&path)
+        .spawn()
+        .map_err(|error| format!("无法打开安装包位置：{error}"))?;
+    Ok(())
+}
+
+#[tauri::command]
 fn get_world_backup_settings(
     service: State<'_, AppService>,
 ) -> Result<WorldBackupSettings, String> {
@@ -1616,6 +1684,11 @@ pub fn run() {
             set_ui_contrast,
             get_cli_enabled,
             set_cli_enabled,
+            get_update_checks_enabled,
+            set_update_checks_enabled,
+            check_for_updates,
+            download_update_installer,
+            open_update_location,
             retry_content_task,
             resolve_content_task_recovery,
             list_instances,

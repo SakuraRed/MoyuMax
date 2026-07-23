@@ -26,6 +26,7 @@
     MoyuRuntime,
     OnboardingSelection,
     ReferencingInstance,
+    ReleaseInfo,
   } from "../runtime";
   import { LITTLESKIN_YGGDRASIL_URL } from "../runtime";
   import AppShell from "./AppShell.svelte";
@@ -73,6 +74,11 @@
   let authlibPass = $state("");
   let pendingAccountRemove = $state<string | null>(null);
   let cliEnabled = $state(false);
+  let updateChecks = $state(true);
+  let checkingUpdates = $state(false);
+  let updateResult = $state<"none" | ReleaseInfo | null>("none");
+  let downloading = $state(false);
+  let downloadedPath = $state("");
   let uiPreferencesLoaded = $state(false);
 
   onMount(() => {
@@ -89,13 +95,15 @@
         runtime.listAccounts(),
       ]);
       if (!backupSettingsLoaded) {
-        const [backupSettings, cliState] = await Promise.all([
+        const [backupSettings, cliState, updateChecksState] = await Promise.all([
           runtime.getWorldBackupSettings(),
           runtime.getCliEnabled(),
+          runtime.getUpdateChecksEnabled(),
         ]);
         backupInterval = backupSettings.intervalMinutes;
         backupKeep = backupSettings.keepCount;
         cliEnabled = cliState;
+        updateChecks = updateChecksState;
         backupSettingsLoaded = true;
       }
       if (!uiPreferencesLoaded) {
@@ -177,6 +185,63 @@
       notice = checked ? t("settings.dev.cliEnabled") : t("settings.dev.cliDisabled");
     } catch (error) {
       cliEnabled = previous;
+      errorMessage = error instanceof Error ? error.message : String(error);
+    }
+  }
+
+  async function toggleUpdateChecks(checked: boolean): Promise<void> {
+    const previous = updateChecks;
+    updateChecks = checked;
+    errorMessage = "";
+    notice = "";
+    try {
+      await runtime.setUpdateChecksEnabled(checked);
+    } catch (error) {
+      updateChecks = previous;
+      errorMessage = error instanceof Error ? error.message : String(error);
+    }
+  }
+
+  async function checkUpdates(): Promise<void> {
+    checkingUpdates = true;
+    errorMessage = "";
+    notice = "";
+    updateResult = "none";
+    downloadedPath = "";
+    try {
+      updateResult = await runtime.checkForUpdates();
+      if (updateResult === null) {
+        notice = t("settings.update.upToDate");
+      }
+    } catch (error) {
+      errorMessage = error instanceof Error ? error.message : String(error);
+    } finally {
+      checkingUpdates = false;
+    }
+  }
+
+  async function downloadUpdate(): Promise<void> {
+    if (updateResult === "none" || updateResult === null) return;
+    downloading = true;
+    errorMessage = "";
+    notice = "";
+    downloadedPath = "";
+    try {
+      downloadedPath = await runtime.downloadUpdateInstaller(updateResult);
+      notice = t("settings.update.downloadDone");
+    } catch (error) {
+      errorMessage = error instanceof Error ? error.message : String(error);
+    } finally {
+      downloading = false;
+    }
+  }
+
+  async function openDownloaded(): Promise<void> {
+    if (!downloadedPath) return;
+    errorMessage = "";
+    try {
+      await runtime.openUpdateLocation(downloadedPath);
+    } catch (error) {
       errorMessage = error instanceof Error ? error.message : String(error);
     }
   }
@@ -594,6 +659,63 @@
               </div>
             </article>
           {/each}
+        </div>
+      {/if}
+    </section>
+
+    <section class="backup-settings" aria-labelledby="update-title">
+      <header>
+        <div>
+          <h2 id="update-title">{t("settings.update.title")}</h2>
+          <p>{t("settings.update.description")}</p>
+        </div>
+        <div class="local-content-actions">
+          <button class="button ghost compact" disabled={checkingUpdates || !updateChecks} onclick={() => void checkUpdates()}>
+            {checkingUpdates ? t("settings.update.checking") : t("settings.update.check")}
+          </button>
+        </div>
+      </header>
+      <div class="update-current">
+        <span>{t("settings.update.currentVersion")}</span>
+        <strong>0.1.0-preview.1</strong>
+      </div>
+      <label class="auto-update-toggle">
+        <input
+          type="checkbox"
+          checked={updateChecks}
+          aria-label={t("settings.update.promptLabel")}
+          onchange={(event) => void toggleUpdateChecks((event.currentTarget as HTMLInputElement).checked)}
+        />
+        <span>
+          <strong>{t("settings.update.promptLabel")}</strong>
+          <small>{t("settings.update.promptHint")}</small>
+        </span>
+      </label>
+      {#if updateResult !== "none" && updateResult !== null}
+        <div class="update-result" role="status">
+          <div class="backup-title-line">
+            <h3>{updateResult.tag}</h3>
+            <span>{t("settings.update.available")}</span>
+          </div>
+          {#if updateResult.notes}
+            <p class="update-notes">{updateResult.notes}</p>
+          {/if}
+          {#if updateResult.minAppVersion}
+            <p class="update-notes">{t("settings.update.minVersion").replace("{version}", updateResult.minAppVersion)}</p>
+          {/if}
+          <div class="local-content-actions">
+            <button
+              class="button primary compact"
+              disabled={downloading || !updateResult.installer}
+              onclick={() => void downloadUpdate()}
+            >{downloading ? t("settings.update.downloading") : t("settings.update.download")}</button>
+            {#if downloadedPath}
+              <button class="button ghost compact" onclick={() => void openDownloaded()}>{t("settings.update.openLocation")}</button>
+            {/if}
+          </div>
+          {#if downloadedPath}
+            <small class="update-path">{downloadedPath}</small>
+          {/if}
         </div>
       {/if}
     </section>

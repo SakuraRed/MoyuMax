@@ -23,6 +23,7 @@ mod resources;
 mod screenshots;
 mod shell;
 mod source;
+mod updates;
 mod worlds;
 
 pub use accounts::*;
@@ -40,6 +41,7 @@ pub use resources::*;
 pub use screenshots::*;
 pub use shell::*;
 pub use source::*;
+pub use updates::*;
 pub use worlds::*;
 
 const SETTING_ONBOARDING_COMPLETE: &str = "onboarding_complete";

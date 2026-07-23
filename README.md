@@ -51,6 +51,7 @@ corepack pnpm --filter @moyumax/desktop tauri dev
 - [全页面文案外置](docs/plans/MILESTONE-22-FULL-I18N.md)
 - [无障碍增强与性能正式验收](docs/plans/MILESTONE-23-A11Y-PERFORMANCE.md)
 - [内置 CLI（开发者模式）](docs/plans/MILESTONE-24-CLI.md)
+- [启动器更新检查与安全下载](docs/plans/MILESTONE-25-SELF-UPDATE.md)
 - [下载来源统一与多线程加速计划](docs/plans/DOWNLOAD-SOURCES-AND-ACCELERATION.md)
 - [技术栈决策](docs/architecture/ADR-0001-DESKTOP-STACK.md)
 
