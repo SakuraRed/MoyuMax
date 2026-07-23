@@ -310,6 +310,22 @@ export interface ContentUpdateInfo {
   file: ContentFilePlan;
 }
 
+export type InstanceResourceKind = "resourcepack" | "shader" | "datapack";
+
+export interface InstanceResource {
+  id: string;
+  instanceId: string;
+  kind: InstanceResourceKind;
+  displayName: string;
+  fileName: string;
+  relativePath: string;
+  size: number;
+  sha256: string;
+  enabled: boolean;
+  worldName: string | null;
+  importedAtUnixSeconds: number;
+}
+
 export type BackupTrigger = "preLaunch" | "postExit" | "manual";
 export type BackupState = "staging" | "ready" | "skipped" | "failed";
 
@@ -508,6 +524,17 @@ export interface MoyuRuntime {
   ): Promise<ContentInstallTask>;
   getInstanceContentAutoUpdate(instanceId: string): Promise<boolean>;
   setInstanceContentAutoUpdate(instanceId: string, enabled: boolean): Promise<void>;
+  listInstanceWorlds(instanceId: string): Promise<string[]>;
+  listInstanceResources(instanceId: string): Promise<InstanceResource[]>;
+  /** 打开原生文件选择器挑选要导入的资源文件；用户取消时返回 null。 */
+  pickResourceFile(kind: InstanceResourceKind): Promise<string | null>;
+  importInstanceResource(
+    instanceId: string,
+    kind: InstanceResourceKind,
+    sourcePath: string,
+    worldName?: string,
+  ): Promise<InstanceResource>;
+  setInstanceResourceEnabled(resourceId: string, enabled: boolean): Promise<InstanceResource>;
   retryContentTask(taskId: string): Promise<void>;
   resolveContentTaskRecovery(taskId: string, decision: RecoveryDecision): Promise<void>;
   listInstances(): Promise<ManagedInstance[]>;
@@ -569,6 +596,8 @@ const BROWSER_CONTENT_TASKS_KEY = "moyumax.browser.contentTasks";
 const BROWSER_INSTALLED_CONTENT_KEY = "moyumax.browser.installedContent";
 const BROWSER_CONTENT_UPDATES_KEY = "moyumax.browser.contentUpdates";
 const BROWSER_CONTENT_AUTO_UPDATE_KEY = "moyumax.browser.contentAutoUpdate";
+const BROWSER_INSTANCE_RESOURCES_KEY = "moyumax.browser.instanceResources";
+const BROWSER_INSTANCE_WORLDS_KEY = "moyumax.browser.instanceWorlds";
 const BROWSER_MODRINTH_OFFLINE_KEY = "moyumax.browser.modrinthOffline";
 const BROWSER_CLOSE_BEHAVIOR_KEY = "moyumax.browser.windowCloseBehavior";
 const BROWSER_SHELL_STATE_KEY = "moyumax.browser.shellState";
@@ -643,6 +672,34 @@ function createTauriRuntime(): MoyuRuntime {
       invoke<boolean>("get_instance_content_auto_update", { instanceId }),
     setInstanceContentAutoUpdate: (instanceId, enabled) =>
       invoke<void>("set_instance_content_auto_update", { instanceId, enabled }),
+    listInstanceWorlds: (instanceId) =>
+      invoke<string[]>("list_instance_worlds", { instanceId }),
+    listInstanceResources: (instanceId) =>
+      invoke<InstanceResource[]>("list_instance_resources", { instanceId }),
+    pickResourceFile: async (kind) => {
+      const { open } = await import("@tauri-apps/plugin-dialog");
+      const selected = await open({
+        multiple: false,
+        directory: false,
+        filters: [
+          {
+            name:
+              kind === "datapack" ? "数据包" : kind === "shader" ? "光影包" : "资源包",
+            extensions: ["zip", "jar"],
+          },
+        ],
+      });
+      return typeof selected === "string" ? selected : null;
+    },
+    importInstanceResource: (instanceId, kind, sourcePath, worldName) =>
+      invoke<InstanceResource>("import_instance_resource", {
+        instanceId,
+        kind,
+        sourcePath,
+        worldName: worldName ?? null,
+      }),
+    setInstanceResourceEnabled: (resourceId, enabled) =>
+      invoke<InstanceResource>("set_instance_resource_enabled", { resourceId, enabled }),
     retryContentTask: (taskId) => invoke<void>("retry_content_task", { taskId }),
     resolveContentTaskRecovery: (taskId, decision) =>
       invoke<void>("resolve_content_task_recovery", { taskId, decision }),
@@ -1089,6 +1146,80 @@ function createBrowserRuntime(): MoyuRuntime {
         BROWSER_CONTENT_AUTO_UPDATE_KEY,
         JSON.stringify(flags),
       );
+    },
+    async listInstanceWorlds(instanceId) {
+      return browserInstanceWorlds()[instanceId] ?? [];
+    },
+    async listInstanceResources(instanceId) {
+      return browserInstanceResources().filter(
+        (resource) => resource.instanceId === instanceId,
+      );
+    },
+    async pickResourceFile(_kind) {
+      // 浏览器测试运行时没有原生选择器，由测试预置待导入路径。
+      return window.localStorage.getItem("moyumax.browser.pickedResourceFile");
+    },
+    async importInstanceResource(instanceId, kind, sourcePath, worldName) {
+      const instance = browserInstances().find((candidate) => candidate.id === instanceId);
+      if (!instance) throw new Error("目标实例不存在");
+      const fileName = sourcePath.split(/[\\/]/).pop() ?? "";
+      const lowered = fileName.toLowerCase();
+      if (!lowered.endsWith(".zip") && !lowered.endsWith(".jar")) {
+        throw new Error("资源文件名不安全或不是 ZIP/JAR");
+      }
+      if (kind === "datapack") {
+        const worlds = browserInstanceWorlds()[instanceId] ?? [];
+        if (!worldName) throw new Error("导入数据包必须先选择目标世界");
+        if (!worlds.includes(worldName)) {
+          throw new Error(`世界 ${worldName} 不存在，数据包必须装入用户选择的世界`);
+        }
+      }
+      const resources = browserInstanceResources();
+      if (
+        resources.some(
+          (resource) =>
+            resource.instanceId === instanceId &&
+            resource.kind === kind &&
+            resource.fileName.toLowerCase() === fileName.toLowerCase(),
+        )
+      ) {
+        throw new Error(`同名文件 ${fileName} 已存在，已拒绝导入且未覆盖`);
+      }
+      const resource: InstanceResource = {
+        id: crypto.randomUUID(),
+        instanceId,
+        kind,
+        displayName: fileName.replace(/\.(zip|jar)$/i, ""),
+        fileName,
+        relativePath:
+          kind === "datapack"
+            ? `.minecraft/saves/${worldName}/datapacks/${fileName}`
+            : kind === "shader"
+              ? `.minecraft/shaderpacks/${fileName}`
+              : `.minecraft/resourcepacks/${fileName}`,
+        size: 1024,
+        sha256: "3".repeat(64),
+        enabled: true,
+        worldName: kind === "datapack" ? (worldName ?? null) : null,
+        importedAtUnixSeconds: Math.floor(Date.now() / 1000),
+      };
+      resources.push(resource);
+      window.localStorage.setItem(
+        BROWSER_INSTANCE_RESOURCES_KEY,
+        JSON.stringify(resources),
+      );
+      return resource;
+    },
+    async setInstanceResourceEnabled(resourceId, enabled) {
+      const resources = browserInstanceResources();
+      const resource = resources.find((candidate) => candidate.id === resourceId);
+      if (!resource) throw new Error("资源项不存在");
+      resource.enabled = enabled;
+      window.localStorage.setItem(
+        BROWSER_INSTANCE_RESOURCES_KEY,
+        JSON.stringify(resources),
+      );
+      return resource;
     },
     async retryContentTask(taskId) {
       const tasks = browserContentTasks();
@@ -1651,6 +1782,16 @@ function browserContentUpdates(): BrowserContentUpdate[] {
 function browserContentAutoUpdate(): Record<string, boolean> {
   const serialized = window.localStorage.getItem(BROWSER_CONTENT_AUTO_UPDATE_KEY);
   return serialized ? (JSON.parse(serialized) as Record<string, boolean>) : {};
+}
+
+function browserInstanceResources(): InstanceResource[] {
+  const serialized = window.localStorage.getItem(BROWSER_INSTANCE_RESOURCES_KEY);
+  return serialized ? (JSON.parse(serialized) as InstanceResource[]) : [];
+}
+
+function browserInstanceWorlds(): Record<string, string[]> {
+  const serialized = window.localStorage.getItem(BROWSER_INSTANCE_WORLDS_KEY);
+  return serialized ? (JSON.parse(serialized) as Record<string, string[]>) : {};
 }
 
 function browserContentEntry(

@@ -12,11 +12,12 @@ use moyumax_core::{
     ContentInstallTask, ContentUpdateInfo, CrashReportSummary, DiagnosticExportPreview,
     DiagnosticExportResult, DownloadInterrupt, ExitImpactSummary, FabricLoaderSummary,
     InstallExecutor, InstallSelection, InstallTask, InstalledContent, InstanceIsolation,
-    JavaArchitecture, JavaDeleteOutcome, JavaDistribution, JavaEnvironmentSummary, LaunchAccount,
-    LaunchExecution, LaunchOptions, LaunchSessionSummary, ManagedInstanceSummary, MetadataClient,
-    ModrinthClient, ModrinthSearchPage, ModrinthSearchQuery, OnboardingSelection, RecoveryDecision,
-    RecycleBinItem, RecyclePurgeResult, ResolvedInstallRequest, ResolvedLoader, ShellState,
-    SourcePolicy, VersionCatalog, WindowCloseBehavior, WorldBackupSummary, run_launch_execution,
+    InstanceResource, InstanceResourceKind, JavaArchitecture, JavaDeleteOutcome, JavaDistribution,
+    JavaEnvironmentSummary, LaunchAccount, LaunchExecution, LaunchOptions, LaunchSessionSummary,
+    ManagedInstanceSummary, MetadataClient, ModrinthClient, ModrinthSearchPage,
+    ModrinthSearchQuery, OnboardingSelection, RecoveryDecision, RecycleBinItem, RecyclePurgeResult,
+    ResolvedInstallRequest, ResolvedLoader, ShellState, SourcePolicy, VersionCatalog,
+    WindowCloseBehavior, WorldBackupSummary, run_launch_execution,
 };
 use serde::Serialize;
 use tauri::{Emitter, Manager, State};
@@ -669,6 +670,55 @@ fn set_instance_content_auto_update(
 }
 
 #[tauri::command]
+fn list_instance_worlds(
+    service: State<'_, AppService>,
+    instance_id: String,
+) -> Result<Vec<String>, String> {
+    service
+        .list_instance_worlds(&instance_id)
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+fn list_instance_resources(
+    service: State<'_, AppService>,
+    instance_id: String,
+) -> Result<Vec<InstanceResource>, String> {
+    service
+        .list_instance_resources(&instance_id, None)
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+fn import_instance_resource(
+    service: State<'_, AppService>,
+    instance_id: String,
+    kind: InstanceResourceKind,
+    source_path: String,
+    world_name: Option<String>,
+) -> Result<InstanceResource, String> {
+    service
+        .import_instance_resource(
+            &instance_id,
+            kind,
+            std::path::Path::new(&source_path),
+            world_name.as_deref(),
+        )
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+fn set_instance_resource_enabled(
+    service: State<'_, AppService>,
+    resource_id: String,
+    enabled: bool,
+) -> Result<InstanceResource, String> {
+    service
+        .set_instance_resource_enabled(&resource_id, enabled)
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
 fn retry_content_task(
     service: State<'_, AppService>,
     coordinator: State<'_, TaskCoordinator>,
@@ -1170,6 +1220,7 @@ fn open_java_location(
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
+        .plugin(tauri_plugin_dialog::init())
         .setup(|app| {
             let state_directory = std::env::var_os("MOYUMAX_STATE_DIR")
                 .map(PathBuf::from)
@@ -1246,6 +1297,10 @@ pub fn run() {
             plan_content_update,
             get_instance_content_auto_update,
             set_instance_content_auto_update,
+            list_instance_worlds,
+            list_instance_resources,
+            import_instance_resource,
+            set_instance_resource_enabled,
             retry_content_task,
             resolve_content_task_recovery,
             list_instances,

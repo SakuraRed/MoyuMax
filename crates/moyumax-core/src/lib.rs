@@ -18,6 +18,7 @@ mod java_env;
 mod launch;
 mod loader_install;
 mod recycle;
+mod resources;
 mod shell;
 mod source;
 
@@ -31,6 +32,7 @@ pub use java_env::*;
 pub use launch::*;
 pub use loader_install::*;
 pub use recycle::*;
+pub use resources::*;
 pub use shell::*;
 pub use source::*;
 
@@ -387,6 +389,31 @@ impl AppService {
                 "
                 ALTER TABLE instances ADD COLUMN content_auto_update_enabled INTEGER NOT NULL DEFAULT 0;
                 PRAGMA user_version = 11;
+                ",
+            )?;
+        }
+        // v12:实例资源内容（资源包/光影/数据包）索引。
+        let version: i64 = connection.query_row("PRAGMA user_version", [], |row| row.get(0))?;
+        if version < 12 {
+            connection.execute_batch(
+                "
+                CREATE TABLE IF NOT EXISTS instance_resources (
+                    id TEXT PRIMARY KEY NOT NULL,
+                    instance_id TEXT NOT NULL REFERENCES instances(id) ON DELETE CASCADE,
+                    kind TEXT NOT NULL,
+                    display_name TEXT NOT NULL,
+                    file_name TEXT NOT NULL COLLATE NOCASE,
+                    relative_path TEXT NOT NULL,
+                    size INTEGER NOT NULL,
+                    sha256 TEXT NOT NULL,
+                    enabled INTEGER NOT NULL DEFAULT 1,
+                    world_name TEXT,
+                    imported_at_unix_seconds INTEGER NOT NULL,
+                    UNIQUE(instance_id, kind, file_name)
+                );
+                CREATE INDEX IF NOT EXISTS idx_instance_resources_instance
+                    ON instance_resources(instance_id, kind, display_name);
+                PRAGMA user_version = 12;
                 ",
             )?;
         }

@@ -2118,6 +2118,47 @@ summary:focus-visible {
   margin-bottom: 0;
 }
 
+.resource-enable-toggle {
+  display: flex;
+  flex: none;
+  align-items: center;
+  gap: 7px;
+  color: var(--text-2);
+  font-size: 11.5px;
+}
+
+.datapack-import-form {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 14px;
+  padding: var(--frame-row-inset-block) var(--frame-row-inset-inline);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+}
+
+.datapack-import-form label {
+  display: flex;
+  min-width: 0;
+  flex: 1;
+  flex-direction: column;
+  gap: 6px;
+  color: var(--text-2);
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.datapack-import-form select {
+  width: 100%;
+  height: 34px;
+  padding: 0 var(--field-content-inset-inline);
+  border: 1px solid var(--border-strong);
+  border-radius: 7px;
+  color: var(--text);
+  background: var(--surface);
+}
+
 .content-search {
   display: flex;
   gap: 10px;
@@ -3324,6 +3365,11 @@ summary:focus-visible {
     align-items: stretch;
     flex-direction: column;
     gap: 10px;
+  }
+
+  .datapack-import-form {
+    align-items: stretch;
+    flex-direction: column;
   }
 
   .resource-instance-field,

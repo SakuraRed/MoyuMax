@@ -5,6 +5,8 @@
     ContentInstallPreview,
     ContentUpdateInfo,
     InstalledContent,
+    InstanceResource,
+    InstanceResourceKind,
     ManagedInstance,
     ModrinthProjectSummary,
     ModrinthSearchPage,
@@ -59,6 +61,12 @@
   let autoUpdate = $state(false);
   let updateSubmitting = $state(false);
   let updateQueued = $state(false);
+  let resources = $state<InstanceResource[]>([]);
+  let worlds = $state<string[]>([]);
+  let resourceError = $state("");
+  let importing = $state(false);
+  let datapackImportOpen = $state(false);
+  let selectedWorld = $state("");
   let query = $state("");
   let searching = $state(false);
   let searchError = $state("");
@@ -83,6 +91,8 @@
     updates = null;
     updateError = "";
     updateQueued = false;
+    datapackImportOpen = false;
+    resourceError = "";
     await loadInstalled();
   }
 
@@ -91,12 +101,16 @@
     localLoading = true;
     localError = "";
     try {
-      const [content, autoUpdateEnabled] = await Promise.all([
+      const [content, autoUpdateEnabled, resourceList, worldList] = await Promise.all([
         runtime.getInstalledContent(selectedInstanceId),
         runtime.getInstanceContentAutoUpdate(selectedInstanceId),
+        runtime.listInstanceResources(selectedInstanceId),
+        runtime.listInstanceWorlds(selectedInstanceId),
       ]);
       installed = content;
       autoUpdate = autoUpdateEnabled;
+      resources = resourceList;
+      worlds = worldList;
     } catch (error) {
       localError = error instanceof Error ? error.message : String(error);
     } finally {
@@ -146,6 +160,50 @@
     } catch (error) {
       autoUpdate = previous;
       updateError = error instanceof Error ? error.message : String(error);
+    }
+  }
+
+  function kindLabel(kind: InstanceResourceKind): string {
+    return kind === "resourcepack" ? "资源包" : kind === "shader" ? "光影包" : "数据包";
+  }
+
+  async function importResource(kind: InstanceResourceKind, worldName?: string): Promise<void> {
+    importing = true;
+    resourceError = "";
+    try {
+      const path = await runtime.pickResourceFile(kind);
+      if (!path) return;
+      await runtime.importInstanceResource(selectedInstanceId, kind, path, worldName);
+      resources = await runtime.listInstanceResources(selectedInstanceId);
+      datapackImportOpen = false;
+      selectedWorld = "";
+    } catch (error) {
+      resourceError = error instanceof Error ? error.message : String(error);
+    } finally {
+      importing = false;
+    }
+  }
+
+  function openDatapackImport(): void {
+    if (worlds.length === 0) {
+      resourceError = "这个实例还没有世界，数据包需要先进入一个世界存档";
+      return;
+    }
+    resourceError = "";
+    selectedWorld = worlds[0] ?? "";
+    datapackImportOpen = true;
+  }
+
+  async function toggleResource(resource: InstanceResource, enabled: boolean): Promise<void> {
+    resourceError = "";
+    try {
+      const updated = await runtime.setInstanceResourceEnabled(resource.id, enabled);
+      resources = resources.map((candidate) =>
+        candidate.id === updated.id ? updated : candidate,
+      );
+    } catch (error) {
+      resourceError = error instanceof Error ? error.message : String(error);
+      resources = await runtime.listInstanceResources(selectedInstanceId);
     }
   }
 
@@ -344,6 +402,59 @@
           <div class="content-queued" role="status">
             <div><strong>内容更新任务已进入统一队列</strong><span>替换旧文件前会先创建恢复点，任何失败都会回滚到更新前状态。</span></div>
             <button class="button primary" onclick={onOpenTasks}>查看任务中心</button>
+          </div>
+        {/if}
+      </section>
+
+      <section class="local-content-section" aria-labelledby="instance-resource-title">
+        <header>
+          <div><h2 id="instance-resource-title">资源内容</h2><p>资源包、光影与数据包和实例隔离存放；游戏内仍需在选项中确认选用。</p></div>
+          <div class="local-content-actions">
+            <button class="button ghost compact" disabled={importing} onclick={() => void importResource("resourcepack")}>导入资源包</button>
+            <button class="button ghost compact" disabled={importing} onclick={() => void importResource("shader")}>导入光影</button>
+            <button class="button ghost compact" disabled={importing} onclick={openDatapackImport}>导入数据包</button>
+          </div>
+        </header>
+        {#if resourceError}
+          <div class="error-block" role="alert"><strong>资源操作失败</strong><span>{resourceError}</span></div>
+        {/if}
+        {#if datapackImportOpen}
+          <div class="datapack-import-form" role="group" aria-label="选择数据包目标世界">
+            <label>
+              <span>目标世界</span>
+              <select value={selectedWorld} onchange={(event) => { selectedWorld = (event.currentTarget as HTMLSelectElement).value; }}>
+                {#each worlds as world}
+                  <option value={world}>{world}</option>
+                {/each}
+              </select>
+            </label>
+            <div class="local-content-actions">
+              <button class="button primary compact" disabled={importing || !selectedWorld} onclick={() => void importResource("datapack", selectedWorld)}>{importing ? "正在导入" : "选择文件并导入"}</button>
+              <button class="button ghost compact" disabled={importing} onclick={() => { datapackImportOpen = false; }}>取消</button>
+            </div>
+          </div>
+        {/if}
+        {#if resources.length === 0}
+          <div class="local-content-empty">还没有导入资源包、光影或数据包。删除与回收站能力随后续里程碑提供。</div>
+        {:else}
+          <div class="installed-content-list">
+            {#each resources as resource}
+              <article class="installed-content-row">
+                <div>
+                  <strong>{resource.displayName}</strong>
+                  <small>{kindLabel(resource.kind)}{resource.worldName ? ` · 世界 ${resource.worldName}` : ""} · {resource.fileName}</small>
+                </div>
+                <label class="resource-enable-toggle">
+                  <input
+                    type="checkbox"
+                    checked={resource.enabled}
+                    aria-label={`${resource.displayName} 启用开关`}
+                    onchange={(event) => void toggleResource(resource, (event.currentTarget as HTMLInputElement).checked)}
+                  />
+                  <span>{resource.enabled ? "已启用" : "已停用"}</span>
+                </label>
+              </article>
+            {/each}
           </div>
         {/if}
       </section>

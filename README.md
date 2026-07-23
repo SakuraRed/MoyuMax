@@ -42,6 +42,7 @@ corepack pnpm --filter @moyumax/desktop tauri dev
 - [Java 环境管理与删除/恢复闭环](docs/plans/MILESTONE-13-JAVA-ENVIRONMENT.md)
 - [任务控制完整化](docs/plans/MILESTONE-14-TASK-CONTROL.md)
 - [Modrinth 全加载器与按实例更新策略](docs/plans/MILESTONE-15-CONTENT-UPDATES.md)
+- [实例资源内容管理](docs/plans/MILESTONE-16-INSTANCE-RESOURCES.md)
 - [下载来源统一与多线程加速计划](docs/plans/DOWNLOAD-SOURCES-AND-ACCELERATION.md)
 - [技术栈决策](docs/architecture/ADR-0001-DESKTOP-STACK.md)
 

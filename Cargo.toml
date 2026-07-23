@@ -23,6 +23,7 @@ sha1 = "=0.11.0"
 sha2 = "=0.11.0"
 tauri = { version = "=2.11.5", features = ["image-png", "tray-icon"] }
 tauri-build = "=2.6.3"
+tauri-plugin-dialog = "=2.7.2"
 tempfile = "=3.27.0"
 thiserror = "=2.0.19"
 tokio = { version = "=1.53.1", features = ["fs", "io-util", "macros", "process", "rt-multi-thread", "sync", "time"] }
