@@ -11,6 +11,7 @@ use crate::{AppService, CoreError, Result, read_setting, write_setting};
 const SETTING_WINDOW_CLOSE_BEHAVIOR: &str = "window_close_behavior";
 const SETTING_SHELL_STATE: &str = "shell_state";
 const SETTING_TASKS_PAUSED: &str = "tasks_paused";
+const SETTING_DOWNLOAD_SPEED_LIMIT: &str = "download_speed_limit_bytes";
 
 /// 关闭主窗口时的行为。默认每次询问。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
@@ -141,6 +142,29 @@ impl AppService {
         let serialized = serde_json::to_string(state)?;
         let connection = self.connection()?;
         write_setting(&connection, SETTING_SHELL_STATE, &serialized)?;
+        Ok(())
+    }
+
+    /// 全局下载限速（字节/秒,0 为不限速）。持久化并在启动时应用到全局限速器。
+    pub fn download_speed_limit(&self) -> Result<u64> {
+        let connection = self.connection()?;
+        let value = read_setting(&connection, SETTING_DOWNLOAD_SPEED_LIMIT)?;
+        match value {
+            None => Ok(0),
+            Some(text) => text
+                .parse::<u64>()
+                .map_err(|_| CoreError::InvalidStoredState("下载限速设置已损坏".to_owned())),
+        }
+    }
+
+    pub fn set_download_speed_limit(&self, bytes_per_sec: u64) -> Result<()> {
+        let connection = self.connection()?;
+        write_setting(
+            &connection,
+            SETTING_DOWNLOAD_SPEED_LIMIT,
+            &bytes_per_sec.to_string(),
+        )?;
+        crate::global_rate_limiter().set_rate(bytes_per_sec);
         Ok(())
     }
 

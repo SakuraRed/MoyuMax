@@ -119,6 +119,7 @@ export interface TaskSourceDetail {
   segmented: boolean;
   segmentCount: number;
   degradedReason: string | null;
+  effectiveConnections?: number;
 }
 
 export interface TaskProgress {
@@ -128,6 +129,8 @@ export interface TaskProgress {
   errorSummary: string | null;
   sourceDetail?: TaskSourceDetail | null;
 }
+
+export type TaskKind = "install" | "content";
 
 export interface InstallTask {
   id: string;
@@ -145,6 +148,8 @@ export interface InstallTask {
   targetDirectory: string;
   createdAtUnixSeconds: number;
   updatedAtUnixSeconds: number;
+  priority: number;
+  pausedBy: string | null;
   progress: TaskProgress;
 }
 
@@ -270,6 +275,8 @@ export interface ContentInstallTask {
   sharedStoreDirectory: string;
   createdAtUnixSeconds: number;
   updatedAtUnixSeconds: number;
+  priority: number;
+  pausedBy: string | null;
   progress: TaskProgress;
 }
 
@@ -512,6 +519,11 @@ export interface MoyuRuntime {
   getTasksPaused(): Promise<boolean>;
   pauseAllTasks(): Promise<void>;
   resumeAllTasks(): Promise<void>;
+  pauseTask(taskId: string, kind: TaskKind): Promise<void>;
+  resumeTask(taskId: string, kind: TaskKind): Promise<void>;
+  setTaskPriority(taskId: string, kind: TaskKind, priority: number): Promise<void>;
+  getDownloadSpeedLimit(): Promise<number>;
+  setDownloadSpeedLimit(bytesPerSec: number): Promise<void>;
   getDownloadSourcePolicy(): Promise<SourcePolicy>;
   setDownloadSourcePolicy(policy: SourcePolicy): Promise<void>;
   listJavaEnvironments(): Promise<JavaEnvironment[]>;
@@ -545,6 +557,7 @@ const BROWSER_TASKS_PAUSED_KEY = "moyumax.browser.tasksPaused";
 const BROWSER_WINDOW_STATE_KEY = "moyumax.browser.windowState";
 const BROWSER_SOURCE_POLICY_KEY = "moyumax.browser.sourcePolicy";
 const BROWSER_JAVA_ENVIRONMENTS_KEY = "moyumax.browser.javaEnvironments";
+const BROWSER_SPEED_LIMIT_KEY = "moyumax.browser.speedLimit";
 const browserPreviews = new Map<string, InstallSelection>();
 const browserContentPreviews = new Map<string, ContentInstallPlan>();
 const browserDiagnosticPreviews = new Map<string, string>();
@@ -649,6 +662,13 @@ function createTauriRuntime(): MoyuRuntime {
     getTasksPaused: () => invoke<boolean>("get_tasks_paused"),
     pauseAllTasks: () => invoke<void>("pause_all_tasks"),
     resumeAllTasks: () => invoke<void>("resume_all_tasks"),
+    pauseTask: (taskId, kind) => invoke<void>("pause_task", { taskId, kind }),
+    resumeTask: (taskId, kind) => invoke<void>("resume_task", { taskId, kind }),
+    setTaskPriority: (taskId, kind, priority) =>
+      invoke<void>("set_task_priority", { taskId, kind, priority }),
+    getDownloadSpeedLimit: () => invoke<number>("get_download_speed_limit"),
+    setDownloadSpeedLimit: (bytesPerSec) =>
+      invoke<void>("set_download_speed_limit", { bytesPerSec }),
     getDownloadSourcePolicy: () =>
       invoke<SourcePolicy>("get_download_source_policy"),
     setDownloadSourcePolicy: (policy) =>
@@ -798,6 +818,8 @@ function createBrowserRuntime(): MoyuRuntime {
         targetDirectory: `D:\\MoyuMax\\data\\instances\\${id}`,
         createdAtUnixSeconds: now,
         updatedAtUnixSeconds: now,
+        priority: 0,
+        pausedBy: null,
         progress: {
           completedBytes: 0,
           totalBytes: 1_934_524_416,
@@ -930,6 +952,8 @@ function createBrowserRuntime(): MoyuRuntime {
         sharedStoreDirectory: "D:\\MoyuMax\\data\\store",
         createdAtUnixSeconds: now,
         updatedAtUnixSeconds: now,
+        priority: 0,
+        pausedBy: null,
         progress: {
           completedBytes: 0,
           totalBytes,
@@ -1280,12 +1304,18 @@ function createBrowserRuntime(): MoyuRuntime {
       window.localStorage.setItem(BROWSER_TASKS_PAUSED_KEY, "true");
       const installTasks = browserInstallTasks();
       for (const task of installTasks) {
-        if (task.state === "running") task.state = "paused";
+        if (task.state === "running") {
+          task.state = "paused";
+          task.pausedBy = "global";
+        }
       }
       window.localStorage.setItem(BROWSER_TASKS_KEY, JSON.stringify(installTasks));
       const contentTasks = browserContentTasks();
       for (const task of contentTasks) {
-        if (task.state === "running") task.state = "paused";
+        if (task.state === "running") {
+          task.state = "paused";
+          task.pausedBy = "global";
+        }
       }
       window.localStorage.setItem(
         BROWSER_CONTENT_TASKS_KEY,
@@ -1296,17 +1326,58 @@ function createBrowserRuntime(): MoyuRuntime {
       window.localStorage.setItem(BROWSER_TASKS_PAUSED_KEY, "false");
       const installTasks = browserInstallTasks();
       for (const task of installTasks) {
-        if (task.state === "paused") task.state = "queued";
+        if (task.state === "paused" && task.pausedBy === "global") task.state = "queued";
+        if (task.state === "paused") task.pausedBy = null;
       }
       window.localStorage.setItem(BROWSER_TASKS_KEY, JSON.stringify(installTasks));
       const contentTasks = browserContentTasks();
       for (const task of contentTasks) {
-        if (task.state === "paused") task.state = "queued";
+        if (task.state === "paused" && task.pausedBy === "global") task.state = "queued";
+        if (task.state === "paused") task.pausedBy = null;
       }
       window.localStorage.setItem(
         BROWSER_CONTENT_TASKS_KEY,
         JSON.stringify(contentTasks),
       );
+    },
+    async pauseTask(taskId, kind) {
+      const key = kind === "content" ? BROWSER_CONTENT_TASKS_KEY : BROWSER_TASKS_KEY;
+      const tasks = kind === "content" ? browserContentTasks() : browserInstallTasks();
+      const task = tasks.find((entry) => entry.id === taskId);
+      if (!task || !["queued", "running"].includes(task.state)) {
+        throw new Error("任务不存在或当前状态不能暂停");
+      }
+      task.state = "paused";
+      task.pausedBy = "user";
+      window.localStorage.setItem(key, JSON.stringify(tasks));
+    },
+    async resumeTask(taskId, kind) {
+      const key = kind === "content" ? BROWSER_CONTENT_TASKS_KEY : BROWSER_TASKS_KEY;
+      const tasks = kind === "content" ? browserContentTasks() : browserInstallTasks();
+      const task = tasks.find((entry) => entry.id === taskId);
+      if (!task || task.state !== "paused") {
+        throw new Error("任务不存在或当前不是暂停状态");
+      }
+      task.state = "queued";
+      task.pausedBy = null;
+      window.localStorage.setItem(key, JSON.stringify(tasks));
+    },
+    async setTaskPriority(taskId, kind, priority) {
+      const key = kind === "content" ? BROWSER_CONTENT_TASKS_KEY : BROWSER_TASKS_KEY;
+      const tasks = kind === "content" ? browserContentTasks() : browserInstallTasks();
+      const task = tasks.find((entry) => entry.id === taskId);
+      if (!task || !["queued", "paused"].includes(task.state)) {
+        throw new Error("任务不存在或当前状态不能调整优先级");
+      }
+      task.priority = priority;
+      window.localStorage.setItem(key, JSON.stringify(tasks));
+    },
+    async getDownloadSpeedLimit() {
+      const value = window.localStorage.getItem(BROWSER_SPEED_LIMIT_KEY);
+      return value ? Number(value) : 0;
+    },
+    async setDownloadSpeedLimit(bytesPerSec) {
+      window.localStorage.setItem(BROWSER_SPEED_LIMIT_KEY, String(bytesPerSec));
     },
     async getDownloadSourcePolicy() {
       const serialized = window.localStorage.getItem(BROWSER_SOURCE_POLICY_KEY);

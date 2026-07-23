@@ -368,6 +368,10 @@ pub struct InstallTask {
     pub target_directory: String,
     pub created_at_unix_seconds: i64,
     pub updated_at_unix_seconds: i64,
+    #[serde(default)]
+    pub priority: i64,
+    #[serde(default)]
+    pub paused_by: Option<String>,
     pub progress: TaskProgress,
 }
 
@@ -471,7 +475,8 @@ impl AppService {
                    task.staging_directory, task.target_directory,
                    task.created_at_unix_seconds, task.updated_at_unix_seconds,
                    COALESCE(progress.completed_bytes, 0), progress.total_bytes,
-                   progress.current_item, progress.error_summary, progress.source_detail
+                   progress.current_item, progress.error_summary, progress.source_detail,
+                   task.priority, task.paused_by
             FROM install_tasks
             AS task
             LEFT JOIN task_progress AS progress ON progress.task_id = task.id
@@ -493,6 +498,8 @@ impl AppService {
                 row.get::<_, Option<String>>(10)?,
                 row.get::<_, Option<String>>(11)?,
                 row.get::<_, Option<String>>(12)?,
+                row.get::<_, i64>(13)?,
+                row.get::<_, Option<String>>(14)?,
             ))
         })?;
 
@@ -511,6 +518,8 @@ impl AppService {
                 current_item,
                 error_summary,
                 source_detail,
+                priority,
+                paused_by,
             ) = row?;
             Ok(InstallTask {
                 id,
@@ -524,6 +533,8 @@ impl AppService {
                 target_directory: target,
                 created_at_unix_seconds: created_at,
                 updated_at_unix_seconds: updated_at,
+                priority,
+                paused_by,
                 progress: TaskProgress {
                     completed_bytes: sqlite_unsigned(completed_bytes, "已完成字节数")?,
                     total_bytes: total_bytes
@@ -589,18 +600,19 @@ impl AppService {
         Ok(())
     }
 
-    /// 下载被暂停中断后，把执行中的任务标记为可恢复的暂停状态。
-    /// 已完成校验进入提交阶段的任务不经过此路径，会继续完成原子提交。
-    pub fn mark_install_task_paused(&self, task_id: &str) -> Result<()> {
+    /// 下载被中断后把任务标记为可恢复的暂停状态。
+    /// `paused_by` 区分全局暂停（`global`）与用户单任务暂停（`user`）,
+    /// 全局恢复只重入被全局暂停打断的任务。
+    pub fn mark_install_task_paused(&self, task_id: &str, paused_by: &str) -> Result<()> {
         let mut connection = self.connection()?;
         let transaction = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
         let changed = transaction.execute(
             "
             UPDATE install_tasks
-            SET state = 'paused', updated_at_unix_seconds = ?2
-            WHERE id = ?1 AND state = 'running'
+            SET state = 'paused', paused_by = ?3, updated_at_unix_seconds = ?2
+            WHERE id = ?1 AND state IN ('queued', 'running')
             ",
-            params![task_id, unix_timestamp()],
+            params![task_id, unix_timestamp(), paused_by],
         )?;
         if changed == 0 {
             return Err(CoreError::InvalidInstallRequest(
@@ -610,7 +622,7 @@ impl AppService {
         transaction.execute(
             "
             UPDATE task_progress
-            SET current_item = '已暂停，可在恢复全部任务后继续', error_summary = NULL
+            SET current_item = '已暂停，可在恢复后继续', error_summary = NULL
             WHERE task_id = ?1
             ",
             params![task_id],
@@ -619,13 +631,16 @@ impl AppService {
         Ok(())
     }
 
-    /// 恢复全部任务时，把所有暂停的安装任务重新入队，返回任务 ID 供调度器提交。
-    /// 已写入暂存的分段保留，执行器会先校验可续传内容再继续下载。
+    /// 全局恢复：只把被全局暂停打断的任务重新入队，按优先级与创建时间返回。
     pub fn requeue_paused_install_tasks(&self) -> Result<Vec<String>> {
         let mut connection = self.connection()?;
         let transaction = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
         let mut statement = transaction.prepare(
-            "SELECT id FROM install_tasks WHERE state = 'paused' ORDER BY created_at_unix_seconds, id",
+            "
+            SELECT id FROM install_tasks
+            WHERE state = 'paused' AND paused_by = 'global'
+            ORDER BY priority DESC, created_at_unix_seconds, id
+            ",
         )?;
         let task_ids = statement
             .query_map([], |row| row.get::<_, String>(0))?
@@ -638,20 +653,83 @@ impl AppService {
             "
             UPDATE task_progress
             SET current_item = '等待恢复执行', error_summary = NULL
-            WHERE task_id IN (SELECT id FROM install_tasks WHERE state = 'paused')
+            WHERE task_id IN (SELECT id FROM install_tasks WHERE state = 'paused' AND paused_by = 'global')
             ",
             [],
         )?;
         transaction.execute(
             "
             UPDATE install_tasks
-            SET state = 'queued', current_stage = 'prepare', updated_at_unix_seconds = ?1
-            WHERE state = 'paused'
+            SET state = 'queued', paused_by = NULL, current_stage = 'prepare', updated_at_unix_seconds = ?1
+            WHERE state = 'paused' AND paused_by = 'global'
             ",
             params![unix_timestamp()],
         )?;
         transaction.commit()?;
         Ok(task_ids)
+    }
+
+    /// 单任务恢复：任意暂停来源的任务重新入队。
+    pub fn requeue_paused_install_task(&self, task_id: &str) -> Result<()> {
+        let mut connection = self.connection()?;
+        let transaction = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let changed = transaction.execute(
+            "
+            UPDATE install_tasks
+            SET state = 'queued', paused_by = NULL, current_stage = 'prepare', updated_at_unix_seconds = ?2
+            WHERE id = ?1 AND state = 'paused'
+            ",
+            params![task_id, unix_timestamp()],
+        )?;
+        if changed == 0 {
+            return Err(CoreError::InvalidInstallRequest(
+                "任务不存在或当前不是暂停状态".to_owned(),
+            ));
+        }
+        transaction.execute(
+            "
+            UPDATE task_progress
+            SET current_item = '等待恢复执行', error_summary = NULL
+            WHERE task_id = ?1
+            ",
+            params![task_id],
+        )?;
+        transaction.commit()?;
+        Ok(())
+    }
+
+    /// 调整排队任务的优先级；只影响后续出队顺序。
+    pub fn set_install_task_priority(&self, task_id: &str, priority: i64) -> Result<()> {
+        let changed = self.connection()?.execute(
+            "
+            UPDATE install_tasks
+            SET priority = ?2, updated_at_unix_seconds = ?3
+            WHERE id = ?1 AND state IN ('queued', 'paused')
+            ",
+            params![task_id, priority, unix_timestamp()],
+        )?;
+        if changed == 0 {
+            return Err(CoreError::InvalidInstallRequest(
+                "任务不存在或当前状态不能调整优先级".to_owned(),
+            ));
+        }
+        Ok(())
+    }
+
+    /// 共享执行槽的候选：按优先级与创建时间返回排队任务。
+    pub fn queued_install_tasks_by_priority(&self) -> Result<Vec<String>> {
+        let connection = self.connection()?;
+        let mut statement = connection.prepare(
+            "
+            SELECT id FROM install_tasks
+            WHERE state = 'queued'
+            ORDER BY priority DESC, created_at_unix_seconds, id
+            ",
+        )?;
+        let rows = statement
+            .query_map([], |row| row.get::<_, String>(0))?
+            .collect::<std::result::Result<Vec<_>, _>>()?;
+        Ok(rows)
     }
 
     pub fn recover_interrupted_install_tasks(&self) -> Result<()> {
@@ -861,7 +939,7 @@ impl AppService {
             .map_err(CoreError::from)
     }
 
-    pub(crate) fn install_task(&self, task_id: &str) -> Result<InstallTask> {
+    pub fn install_task(&self, task_id: &str) -> Result<InstallTask> {
         self.list_install_tasks()?
             .into_iter()
             .find(|task| task.id == task_id)
@@ -1128,6 +1206,8 @@ impl AppService {
             target_directory: target_text,
             created_at_unix_seconds: now,
             updated_at_unix_seconds: now,
+            priority: 0,
+            paused_by: None,
             progress: TaskProgress {
                 completed_bytes: 0,
                 total_bytes: Some(progress_total),

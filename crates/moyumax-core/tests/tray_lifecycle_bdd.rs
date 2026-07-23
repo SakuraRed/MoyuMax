@@ -411,7 +411,7 @@ fn m9_task_002_paused_survives_restart_while_running_enters_recovery() {
     fixture.set_task_running("content_install_tasks", &paused_task.id);
     fixture
         .service
-        .mark_content_task_paused(&paused_task.id)
+        .mark_content_task_paused(&paused_task.id, "global")
         .unwrap();
 
     let mut running_plan =
@@ -481,7 +481,10 @@ fn m9_tray_004_exit_impact_summarizes_sessions_and_tasks() {
     assert!(impact.requires_confirmation());
 
     fixture.set_task_running("content_install_tasks", &task.id);
-    fixture.service.mark_content_task_paused(&task.id).unwrap();
+    fixture
+        .service
+        .mark_content_task_paused(&task.id, "global")
+        .unwrap();
     Connection::open(&fixture.database_path)
         .unwrap()
         .execute(

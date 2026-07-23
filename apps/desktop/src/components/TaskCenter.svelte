@@ -1,4 +1,6 @@
 <script lang="ts">
+  import { onMount } from "svelte";
+
   import { installStageLabel } from "../installation";
   import type {
     ContentInstallStage,
@@ -45,6 +47,77 @@
   let changingTask = $state("");
   let pauseChanging = $state(false);
   let errorMessage = $state("");
+  let speedLimitMib = $state("");
+  let speedLimitBytes = $state(0);
+
+  onMount(async () => {
+    try {
+      const limit = await runtime.getDownloadSpeedLimit();
+      speedLimitBytes = limit;
+      speedLimitMib = limit > 0 ? String(Math.round(limit / 1024 / 1024)) : "";
+    } catch {
+      // 限速读取失败不阻塞任务中心。
+    }
+  });
+
+  async function pauseOne(taskId: string, kind: "install" | "content"): Promise<void> {
+    changingTask = taskId;
+    errorMessage = "";
+    try {
+      await runtime.pauseTask(taskId, kind);
+      await onTasksChanged();
+    } catch (error) {
+      errorMessage = error instanceof Error ? error.message : String(error);
+    } finally {
+      changingTask = "";
+    }
+  }
+
+  async function resumeOne(taskId: string, kind: "install" | "content"): Promise<void> {
+    changingTask = taskId;
+    errorMessage = "";
+    try {
+      await runtime.resumeTask(taskId, kind);
+      await onTasksChanged();
+    } catch (error) {
+      errorMessage = error instanceof Error ? error.message : String(error);
+    } finally {
+      changingTask = "";
+    }
+  }
+
+  async function movePriority(
+    task: InstallTask | ContentInstallTask,
+    kind: "install" | "content",
+    direction: 1 | -1,
+  ): Promise<void> {
+    changingTask = task.id;
+    errorMessage = "";
+    try {
+      await runtime.setTaskPriority(task.id, kind, task.priority + direction);
+      await onTasksChanged();
+    } catch (error) {
+      errorMessage = error instanceof Error ? error.message : String(error);
+    } finally {
+      changingTask = "";
+    }
+  }
+
+  async function applySpeedLimit(): Promise<void> {
+    errorMessage = "";
+    const value = speedLimitMib.trim() === "" ? 0 : Number(speedLimitMib);
+    if (!Number.isFinite(value) || value < 0) {
+      errorMessage = "限速必须是不小于 0 的数字";
+      return;
+    }
+    try {
+      const bytesPerSec = Math.round(value * 1024 * 1024);
+      await runtime.setDownloadSpeedLimit(bytesPerSec);
+      speedLimitBytes = bytesPerSec;
+    } catch (error) {
+      errorMessage = error instanceof Error ? error.message : String(error);
+    }
+  }
   const contentStages: ContentInstallStage[] = [
     "prepare",
     "downloadFiles",
@@ -158,6 +231,9 @@
     );
     if (failed) parts.push(`已从 ${failed.label} 回退`);
     if (detail.segmented) parts.push(`${detail.segmentCount} 个分段并行`);
+    if (detail.effectiveConnections && detail.effectiveConnections > 0) {
+      parts.push(`有效连接 ${detail.effectiveConnections}`);
+    }
     if (detail.degradedReason) parts.push(`已降级单连接:${detail.degradedReason}`);
     return parts.join(" · ");
   }
@@ -196,6 +272,26 @@
       <button class="button ghost compact" disabled={pauseChanging} onclick={() => void togglePaused()}>
         {tasksPaused ? "恢复全部任务" : "暂停全部任务"}
       </button>
+    </div>
+
+    <div class="task-limit-bar" role="group" aria-label="全局下载限速">
+      <span>
+        {#if speedLimitBytes > 0}
+          当前限速:{Math.round(speedLimitBytes / 1024 / 1024)} MiB/s(全部分段连接共享)
+        {:else}
+          当前不限速;分段下载也遵守此上限。
+        {/if}
+      </span>
+      <label class="task-limit-field">
+        限速(MiB/s,留空不限)
+        <input
+          value={speedLimitMib}
+          inputmode="decimal"
+          placeholder="不限"
+          oninput={(event) => (speedLimitMib = event.currentTarget.value)}
+        />
+      </label>
+      <button class="button ghost compact" onclick={() => void applySpeedLimit()}>应用</button>
     </div>
 
     {#if tasks.length === 0 && contentTasks.length === 0}
@@ -240,6 +336,19 @@
                   <button class="button primary compact" disabled={changingTask === task.id} onclick={() => void retryTask(task.id)}>重试未完成内容</button>
                 </div>
               {/if}
+              <div class="task-actions">
+                {#if task.state === "running" || task.state === "queued"}
+                  <button class="button ghost compact" disabled={changingTask === task.id} onclick={() => void pauseOne(task.id, "install")}>暂停</button>
+                {/if}
+                {#if task.state === "paused"}
+                  <button class="button primary compact" disabled={changingTask === task.id} onclick={() => void resumeOne(task.id, "install")}>恢复</button>
+                {/if}
+                {#if task.state === "queued"}
+                  <button class="button ghost compact" aria-label="提高优先级" disabled={changingTask === task.id} onclick={() => void movePriority(task, "install", 1)}>上移</button>
+                  <button class="button ghost compact" aria-label="降低优先级" disabled={changingTask === task.id} onclick={() => void movePriority(task, "install", -1)}>下移</button>
+                  <span class="task-priority">优先级 {task.priority}</span>
+                {/if}
+              </div>
             {/if}
             {#if sourceDetailLine(task)}
               <p class="task-source">{sourceDetailLine(task)}</p>
@@ -285,6 +394,19 @@
                   <button class="button primary compact" disabled={changingTask === task.id} onclick={() => void retryContentTask(task.id)}>重试未完成内容</button>
                 </div>
               {/if}
+              <div class="task-actions">
+                {#if task.state === "running" || task.state === "queued"}
+                  <button class="button ghost compact" disabled={changingTask === task.id} onclick={() => void pauseOne(task.id, "content")}>暂停</button>
+                {/if}
+                {#if task.state === "paused"}
+                  <button class="button primary compact" disabled={changingTask === task.id} onclick={() => void resumeOne(task.id, "content")}>恢复</button>
+                {/if}
+                {#if task.state === "queued"}
+                  <button class="button ghost compact" aria-label="提高优先级" disabled={changingTask === task.id} onclick={() => void movePriority(task, "content", 1)}>上移</button>
+                  <button class="button ghost compact" aria-label="降低优先级" disabled={changingTask === task.id} onclick={() => void movePriority(task, "content", -1)}>下移</button>
+                  <span class="task-priority">优先级 {task.priority}</span>
+                {/if}
+              </div>
             {/if}
             {#if sourceDetailLine(task)}
               <p class="task-source">{sourceDetailLine(task)}</p>

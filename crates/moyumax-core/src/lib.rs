@@ -367,6 +367,19 @@ impl AppService {
                 ",
             )?;
         }
+        // v10:任务优先级与暂停来源（全局/用户）。
+        let version: i64 = connection.query_row("PRAGMA user_version", [], |row| row.get(0))?;
+        if version < 10 {
+            connection.execute_batch(
+                "
+                ALTER TABLE install_tasks ADD COLUMN priority INTEGER NOT NULL DEFAULT 0;
+                ALTER TABLE content_install_tasks ADD COLUMN priority INTEGER NOT NULL DEFAULT 0;
+                ALTER TABLE install_tasks ADD COLUMN paused_by TEXT;
+                ALTER TABLE content_install_tasks ADD COLUMN paused_by TEXT;
+                PRAGMA user_version = 10;
+                ",
+            )?;
+        }
         Ok(())
     }
 

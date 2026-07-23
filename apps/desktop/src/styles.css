@@ -2826,6 +2826,56 @@ summary:focus-visible {
   font-size: 12.5px;
 }
 
+.task-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 10px;
+}
+
+.task-priority {
+  color: var(--text-3);
+  font-family: "Cascadia Mono", Consolas, monospace;
+  font-size: 11px;
+}
+
+.task-limit-bar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin: 0 0 12px;
+  padding: var(--frame-row-inset-block) var(--frame-row-inset-inline);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface-2);
+  color: var(--text-2);
+  font-size: 12.5px;
+}
+
+.task-limit-bar > span {
+  min-width: 0;
+  flex: 1;
+  line-height: 1.5;
+}
+
+.task-limit-field {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex: none;
+  color: var(--text-2);
+  font-size: 12px;
+}
+
+.task-limit-field input {
+  width: 84px;
+  padding: 5px 8px;
+  border: 1px solid var(--border-strong);
+  border-radius: 6px;
+  background: var(--surface);
+  color: var(--text);
+}
+
 .task-source {
   margin: 8px 0 0;
   padding: 6px 10px;

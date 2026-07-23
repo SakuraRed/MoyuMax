@@ -40,6 +40,7 @@ corepack pnpm --filter @moyumax/desktop tauri dev
 - [Quilt 加载器安装与启动](docs/plans/MILESTONE-11-QUILT-LOADER.md)
 - [Forge 与 NeoForge 安装器处理器执行](docs/plans/MILESTONE-12-FORGE-NEOFORGE.md)
 - [Java 环境管理与删除/恢复闭环](docs/plans/MILESTONE-13-JAVA-ENVIRONMENT.md)
+- [任务控制完整化](docs/plans/MILESTONE-14-TASK-CONTROL.md)
 - [下载来源统一与多线程加速计划](docs/plans/DOWNLOAD-SOURCES-AND-ACCELERATION.md)
 - [技术栈决策](docs/architecture/ADR-0001-DESKTOP-STACK.md)
 

@@ -6,9 +6,9 @@ use std::{
     path::{Component, Path, PathBuf},
     sync::{
         Arc,
-        atomic::{AtomicBool, AtomicU64, Ordering},
+        atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering},
     },
-    time::Duration,
+    time::{Duration, Instant},
 };
 
 use futures_util::{StreamExt, TryStreamExt, stream};
@@ -71,6 +71,217 @@ impl DownloadInterrupt {
     }
 }
 
+/// 全局下载限速器：所有下载连接共用的令牌桶。
+/// `rate = 0` 表示不限速;分段下载也经过同一令牌桶,不会系统性突破上限。
+#[derive(Debug)]
+pub struct RateLimiter {
+    rate_bytes_per_sec: AtomicU64,
+    state: tokio::sync::Mutex<(f64, Instant)>,
+}
+
+impl RateLimiter {
+    #[must_use]
+    pub fn new() -> Self {
+        Self {
+            rate_bytes_per_sec: AtomicU64::new(0),
+            state: tokio::sync::Mutex::new((0.0, Instant::now())),
+        }
+    }
+
+    pub fn set_rate(&self, bytes_per_sec: u64) {
+        self.rate_bytes_per_sec
+            .store(bytes_per_sec, Ordering::Release);
+    }
+
+    #[must_use]
+    pub fn rate(&self) -> u64 {
+        self.rate_bytes_per_sec.load(Ordering::Acquire)
+    }
+
+    /// 获取 bytes 额度;不限速时立即返回。暂停中断可打断等待。
+    pub async fn acquire(&self, bytes: u64, interrupt: Option<&DownloadInterrupt>) -> Result<()> {
+        let rate = self.rate();
+        if rate == 0 {
+            return Ok(());
+        }
+        let rate = rate as f64;
+        let needed = bytes as f64;
+        loop {
+            if interrupt.is_some_and(DownloadInterrupt::is_interrupted) {
+                return Err(CoreError::TaskPaused);
+            }
+            let wait = {
+                let mut state = self.state.lock().await;
+                let elapsed = state.1.elapsed().as_secs_f64();
+                state.0 = (state.0 + elapsed * rate).min(rate);
+                state.1 = Instant::now();
+                if state.0 >= needed {
+                    state.0 -= needed;
+                    return Ok(());
+                }
+                (needed - state.0) / rate
+            };
+            let wait = Duration::from_secs_f64(wait.clamp(0.005, 1.0));
+            match interrupt {
+                Some(signal) => {
+                    tokio::select! {
+                        () = tokio::time::sleep(wait) => {}
+                        () = signal.wait() => return Err(CoreError::TaskPaused),
+                    }
+                }
+                None => tokio::time::sleep(wait).await,
+            }
+        }
+    }
+}
+
+impl Default for RateLimiter {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+static GLOBAL_RATE_LIMITER: std::sync::OnceLock<Arc<RateLimiter>> = std::sync::OnceLock::new();
+
+/// 全局共享限速器:桌面、执行器与未来 CLI 使用同一令牌桶。
+pub fn global_rate_limiter() -> Arc<RateLimiter> {
+    GLOBAL_RATE_LIMITER
+        .get_or_init(|| Arc::new(RateLimiter::new()))
+        .clone()
+}
+
+/// 压力感知并发控制器:按每连接吞吐与失败信号收缩有效连接数,
+/// 恢复稳定后缓慢回升。压力信号只来自网络行为(吞吐与失败)。
+#[derive(Debug)]
+pub struct AdaptiveConcurrency {
+    max: usize,
+    current: AtomicUsize,
+    in_flight: AtomicUsize,
+    samples: std::sync::Mutex<std::collections::VecDeque<AdaptiveSample>>,
+    healthy_streak: AtomicUsize,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct AdaptiveSample {
+    bytes_per_sec: f64,
+}
+
+const ADAPTIVE_WINDOW: usize = 16;
+const ADAPTIVE_SLOW_BPS: f64 = 256.0 * 1024.0;
+
+impl AdaptiveConcurrency {
+    #[must_use]
+    pub fn new(max: usize) -> Self {
+        Self {
+            max,
+            current: AtomicUsize::new(max.max(1)),
+            in_flight: AtomicUsize::new(0),
+            samples: std::sync::Mutex::new(std::collections::VecDeque::new()),
+            healthy_streak: AtomicUsize::new(0),
+        }
+    }
+
+    #[must_use]
+    pub fn current_limit(&self) -> usize {
+        self.current.load(Ordering::Acquire)
+    }
+
+    /// 等到有自适应额度;返回在途计数守卫。
+    pub async fn acquire(
+        &self,
+        interrupt: Option<&DownloadInterrupt>,
+    ) -> Result<AdaptivePermit<'_>> {
+        loop {
+            if interrupt.is_some_and(DownloadInterrupt::is_interrupted) {
+                return Err(CoreError::TaskPaused);
+            }
+            let limit = self.current_limit();
+            let in_flight = self.in_flight.load(Ordering::Acquire);
+            if in_flight < limit {
+                if self
+                    .in_flight
+                    .compare_exchange(
+                        in_flight,
+                        in_flight + 1,
+                        Ordering::AcqRel,
+                        Ordering::Acquire,
+                    )
+                    .is_ok()
+                {
+                    return Ok(AdaptivePermit { controller: self });
+                }
+                continue;
+            }
+            tokio::time::sleep(Duration::from_millis(25)).await;
+        }
+    }
+
+    fn release(&self) {
+        self.in_flight.fetch_sub(1, Ordering::AcqRel);
+    }
+
+    /// 记录一次下载结果。失败或吞吐显著劣化时收缩,稳定健康时缓慢回升。
+    pub fn record(&self, bytes_per_sec: f64, success: bool) {
+        let mut shrink = false;
+        let mut grow = false;
+        {
+            let mut samples = self
+                .samples
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            samples.push_back(AdaptiveSample { bytes_per_sec });
+            if samples.len() > ADAPTIVE_WINDOW {
+                samples.pop_front();
+            }
+            if !success {
+                shrink = true;
+                self.healthy_streak.store(0, Ordering::Release);
+            } else {
+                let recent: Vec<f64> = samples
+                    .iter()
+                    .rev()
+                    .take(4)
+                    .map(|sample| sample.bytes_per_sec)
+                    .collect();
+                let slow = recent.len() >= 4
+                    && recent
+                        .iter()
+                        .all(|bps| *bps > 0.0 && *bps < ADAPTIVE_SLOW_BPS);
+                if slow {
+                    shrink = true;
+                    self.healthy_streak.store(0, Ordering::Release);
+                } else {
+                    let streak = self.healthy_streak.fetch_add(1, Ordering::AcqRel) + 1;
+                    if streak >= 6 {
+                        grow = true;
+                        self.healthy_streak.store(0, Ordering::Release);
+                    }
+                }
+            }
+        }
+        if shrink {
+            let current = self.current.load(Ordering::Acquire);
+            let next = (current / 2).max(1);
+            self.current.store(next, Ordering::Release);
+        } else if grow {
+            let current = self.current.load(Ordering::Acquire);
+            let next = (current + 1).min(self.max);
+            self.current.store(next, Ordering::Release);
+        }
+    }
+}
+
+/// 在途额度守卫:释放时归还在途计数。
+pub struct AdaptivePermit<'a> {
+    controller: &'a AdaptiveConcurrency,
+}
+
+impl Drop for AdaptivePermit<'_> {
+    fn drop(&mut self) {
+        self.controller.release();
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub enum DownloadDisposition {
@@ -118,6 +329,7 @@ pub struct FetchReport {
     pub segment_count: u32,
     pub degraded_reason: Option<String>,
     pub reused_local: bool,
+    pub effective_connections: usize,
 }
 
 /// 持久化在任务暂存区的分段清单，重启后据此复用有效分段。
@@ -217,6 +429,8 @@ pub struct ArtifactDownloader {
     client: Client,
     permits: Arc<Semaphore>,
     segment_target_bytes: u64,
+    rate_limiter: Arc<RateLimiter>,
+    adaptive: Arc<AdaptiveConcurrency>,
 }
 
 impl ArtifactDownloader {
@@ -234,6 +448,8 @@ impl ArtifactDownloader {
             client,
             permits: Arc::new(Semaphore::new(max_concurrent_downloads)),
             segment_target_bytes: SEGMENT_TARGET_BYTES,
+            rate_limiter: global_rate_limiter(),
+            adaptive: Arc::new(AdaptiveConcurrency::new(max_concurrent_downloads)),
         })
     }
 
@@ -242,6 +458,20 @@ impl ArtifactDownloader {
     pub fn with_segment_target_bytes(mut self, bytes: u64) -> Self {
         self.segment_target_bytes = bytes.max(1024 * 1024);
         self
+    }
+
+    /// 注入独立限速器,供限速测试隔离使用;生产共享全局限速器。
+    #[doc(hidden)]
+    #[must_use]
+    pub fn with_rate_limiter(mut self, limiter: Arc<RateLimiter>) -> Self {
+        self.rate_limiter = limiter;
+        self
+    }
+
+    /// 当前压力感知有效连接数。
+    #[must_use]
+    pub fn effective_connections(&self) -> usize {
+        self.adaptive.current_limit()
     }
 
     pub async fn fetch(
@@ -394,6 +624,7 @@ impl ArtifactDownloader {
                 segment_count: 0,
                 degraded_reason: None,
                 reused_local: true,
+                effective_connections: self.effective_connections(),
             });
         }
         let has_trusted_hash =
@@ -421,6 +652,7 @@ impl ArtifactDownloader {
                         segment_count,
                         degraded_reason: None,
                         reused_local: false,
+                        effective_connections: self.effective_connections(),
                     });
                 }
                 SegmentedFetch::Degrade { reason } => {
@@ -438,6 +670,7 @@ impl ArtifactDownloader {
                         segment_count: 0,
                         degraded_reason: Some(reason),
                         reused_local: false,
+                        effective_connections: self.effective_connections(),
                     });
                 }
             }
@@ -454,6 +687,7 @@ impl ArtifactDownloader {
             segment_count: 0,
             degraded_reason: None,
             reused_local: false,
+            effective_connections: self.effective_connections(),
         })
     }
 
@@ -495,6 +729,8 @@ impl ArtifactDownloader {
             .map(|segment| {
                 let client = self.client.clone();
                 let permits = Arc::clone(&self.permits);
+                let rate_limiter = Arc::clone(&self.rate_limiter);
+                let adaptive = Arc::clone(&self.adaptive);
                 let segments_dir = segments_dir.clone();
                 let expected_etag = manifest.etag.clone();
                 let expected_last_modified = manifest.last_modified.clone();
@@ -502,6 +738,8 @@ impl ArtifactDownloader {
                     download_segment(
                         client,
                         permits,
+                        rate_limiter,
+                        adaptive,
                         &candidate.url,
                         &segment,
                         total,
@@ -579,6 +817,7 @@ impl ArtifactDownloader {
             .acquire()
             .await
             .map_err(|_| CoreError::Download("下载协调器已经关闭".to_owned()))?;
+        let _adaptive = self.adaptive.acquire(interrupt).await?;
         if let Some(parent) = staged_file.parent() {
             tokio::fs::create_dir_all(parent).await?;
         }
@@ -600,48 +839,72 @@ impl ArtifactDownloader {
             });
         }
 
-        let mut request = self.client.get(url);
-        if existing_length > 0 {
-            request = request.header(header::RANGE, format!("bytes={existing_length}-"));
-        }
-        let response = request.send().await?;
-        let status = response.status();
-        let (append, disposition) = if status == StatusCode::PARTIAL_CONTENT {
-            validate_content_range(response.headers(), existing_length)?;
-            (
-                true,
-                if existing_length > 0 {
-                    DownloadDisposition::Resumed
-                } else {
-                    DownloadDisposition::Downloaded
-                },
-            )
-        } else if status == StatusCode::OK {
-            (
-                false,
-                if existing_length > 0 || forced_restart {
-                    DownloadDisposition::Restarted
-                } else {
-                    DownloadDisposition::Downloaded
-                },
-            )
-        } else if status == StatusCode::RANGE_NOT_SATISFIABLE && existing_length > 0 {
-            truncate_file(&partial_file).await?;
-            return self
-                .fetch_without_resume(artifact, url, &partial_file, staged_file, interrupt)
-                .await;
-        } else {
-            return Err(CoreError::Download(format!("{} 返回 HTTP {}", url, status)));
-        };
+        let started = Instant::now();
+        let download_start = existing_length;
+        let result = async {
+            let mut request = self.client.get(url);
+            if existing_length > 0 {
+                request = request.header(header::RANGE, format!("bytes={existing_length}-"));
+            }
+            let response = request.send().await?;
+            let status = response.status();
+            let (append, disposition) = if status == StatusCode::PARTIAL_CONTENT {
+                validate_content_range(response.headers(), existing_length)?;
+                (
+                    true,
+                    if existing_length > 0 {
+                        DownloadDisposition::Resumed
+                    } else {
+                        DownloadDisposition::Downloaded
+                    },
+                )
+            } else if status == StatusCode::OK {
+                (
+                    false,
+                    if existing_length > 0 || forced_restart {
+                        DownloadDisposition::Restarted
+                    } else {
+                        DownloadDisposition::Downloaded
+                    },
+                )
+            } else if status == StatusCode::RANGE_NOT_SATISFIABLE && existing_length > 0 {
+                truncate_file(&partial_file).await?;
+                return self
+                    .fetch_without_resume(artifact, url, &partial_file, staged_file, interrupt)
+                    .await;
+            } else {
+                return Err(CoreError::Download(format!("{} 返回 HTTP {}", url, status)));
+            };
 
-        write_response(response, &partial_file, append, interrupt).await?;
-        verify_file(&partial_file, artifact).await?;
-        replace_file(&partial_file, staged_file).await?;
-        Ok(DownloadResult {
-            staged_file: staged_file.to_path_buf(),
-            disposition,
-            bytes: artifact.size,
-        })
+            write_response(
+                response,
+                &partial_file,
+                append,
+                interrupt,
+                &self.rate_limiter,
+            )
+            .await?;
+            verify_file(&partial_file, artifact).await?;
+            replace_file(&partial_file, staged_file).await?;
+            Ok(DownloadResult {
+                staged_file: staged_file.to_path_buf(),
+                disposition,
+                bytes: artifact.size,
+            })
+        }
+        .await;
+        match &result {
+            Ok(_) => {
+                let bytes = artifact.size.saturating_sub(download_start);
+                let seconds = started.elapsed().as_secs_f64().max(0.001);
+                self.adaptive.record(bytes as f64 / seconds, true);
+            }
+            Err(CoreError::TaskPaused) => {}
+            Err(_) => {
+                self.adaptive.record(0.0, false);
+            }
+        }
+        result
     }
 
     async fn fetch_without_resume(
@@ -663,7 +926,7 @@ impl ArtifactDownloader {
                 response.status()
             )));
         }
-        write_response(response, partial_file, false, interrupt).await?;
+        write_response(response, partial_file, false, interrupt, &self.rate_limiter).await?;
         verify_file(partial_file, artifact).await?;
         replace_file(partial_file, staged_file).await?;
         Ok(DownloadResult {
@@ -711,6 +974,8 @@ enum SegmentOutcome {
 async fn download_segment(
     client: Client,
     permits: Arc<Semaphore>,
+    rate_limiter: Arc<RateLimiter>,
+    adaptive: Arc<AdaptiveConcurrency>,
     url: &str,
     segment: &SegmentState,
     total: u64,
@@ -736,6 +1001,9 @@ async fn download_segment(
         .acquire()
         .await
         .map_err(|_| CoreError::Download("下载协调器已经关闭".to_owned()))?;
+    let _adaptive = adaptive.acquire(interrupt).await?;
+    let started = Instant::now();
+    let download_start = completed;
     let range_start = segment.start + completed;
     let response = client
         .get(url)
@@ -757,6 +1025,7 @@ async fn download_segment(
         });
     }
     if status != StatusCode::PARTIAL_CONTENT {
+        adaptive.record(0.0, false);
         return Err(CoreError::Download(format!(
             "{url} 分段请求返回 HTTP {status}"
         )));
@@ -791,7 +1060,10 @@ async fn download_segment(
             reason: "远端对象 Last-Modified 已变化,废弃旧分段".to_owned(),
         });
     }
-    write_response(response, &seg_path, true, interrupt).await?;
+    write_response(response, &seg_path, true, interrupt, &rate_limiter).await?;
+    let bytes = (segment.end - segment.start).saturating_sub(download_start);
+    let seconds = started.elapsed().as_secs_f64().max(0.001);
+    adaptive.record(bytes as f64 / seconds, true);
     Ok(SegmentOutcome::Completed {
         index: segment.index,
         etag,
@@ -912,7 +1184,7 @@ impl ContentExecutor {
         let result = self.execute_task_inner(service, &task, interrupt).await;
         if let Err(error) = &result {
             if matches!(error, CoreError::TaskPaused) {
-                let _ = service.mark_content_task_paused(task_id);
+                let _ = service.mark_content_task_paused(task_id, "global");
             } else {
                 let _ = service.mark_content_task_failed(task_id, &error.to_string());
             }
@@ -1257,7 +1529,7 @@ impl InstallExecutor {
         let result = self.execute_task_inner(service, &task, interrupt).await;
         if let Err(error) = &result {
             if matches!(error, CoreError::TaskPaused) {
-                let _ = service.mark_install_task_paused(task_id);
+                let _ = service.mark_install_task_paused(task_id, "global");
             } else {
                 if let JavaPlanAction::Install { environment_id, .. } = &task.plan.java_action {
                     let is_ready = service
@@ -1712,6 +1984,7 @@ impl InstallExecutor {
             segment_count: 0,
             degraded_reason: None,
             reused_local: true,
+            effective_connections: 1,
         };
         Ok(Some((patched_artifact, patched_report)))
     }
@@ -2504,6 +2777,7 @@ async fn write_response(
     partial_file: &Path,
     append: bool,
     interrupt: Option<&DownloadInterrupt>,
+    rate_limiter: &RateLimiter,
 ) -> Result<()> {
     let mut output = OpenOptions::new()
         .create(true)
@@ -2529,7 +2803,11 @@ async fn write_response(
             None => stream.next().await,
         };
         let Some(chunk) = chunk else { break };
-        output.write_all(&chunk?).await?;
+        let chunk = chunk?;
+        let chunk_len = u64::try_from(chunk.len()).unwrap_or(u64::MAX);
+        output.write_all(&chunk).await?;
+        // 全局限速:所有连接共用同一令牌桶,分段下载也不会系统性突破上限。
+        rate_limiter.acquire(chunk_len, interrupt).await?;
     }
     output.flush().await?;
     output.sync_data().await?;

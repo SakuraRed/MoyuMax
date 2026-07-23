@@ -16,7 +16,7 @@ use moyumax_core::{
     LaunchSessionSummary, ManagedInstanceSummary, MetadataClient, ModrinthClient,
     ModrinthSearchPage, ModrinthSearchQuery, OnboardingSelection, RecoveryDecision, RecycleBinItem,
     RecyclePurgeResult, ResolvedInstallRequest, ResolvedLoader, ShellState, SourcePolicy,
-    TaskState, VersionCatalog, WindowCloseBehavior, WorldBackupSummary, run_launch_execution,
+    VersionCatalog, WindowCloseBehavior, WorldBackupSummary, run_launch_execution,
 };
 use serde::Serialize;
 use tauri::{Emitter, Manager, State};
@@ -53,6 +53,14 @@ struct TaskCoordinator {
     task_permits: Arc<Semaphore>,
     scheduling_enabled: Arc<AtomicBool>,
     current_interrupt: Arc<Mutex<Option<DownloadInterrupt>>>,
+    current_task: Arc<Mutex<Option<(String, TaskKind)>>>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Deserialize, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+enum TaskKind {
+    Install,
+    Content,
 }
 
 impl TaskCoordinator {
@@ -63,6 +71,7 @@ impl TaskCoordinator {
             task_permits: Arc::new(Semaphore::new(1)),
             scheduling_enabled: Arc::new(AtomicBool::new(scheduling_enabled)),
             current_interrupt: Arc::new(Mutex::new(None)),
+            current_task: Arc::new(Mutex::new(None)),
         })
     }
 
@@ -82,15 +91,29 @@ impl TaskCoordinator {
             if !coordinator.scheduling_enabled() {
                 return;
             }
+            // 提交到执行之间用户可能暂停了该任务,只有排队状态才执行。
+            let executable = service
+                .install_task(&task_id)
+                .map(|task| task.state == moyumax_core::TaskState::Queued)
+                .unwrap_or(false);
+            if !executable {
+                return;
+            }
             let interrupt = DownloadInterrupt::new();
             if let Ok(mut current) = coordinator.current_interrupt.lock() {
                 *current = Some(interrupt.clone());
+            }
+            if let Ok(mut current) = coordinator.current_task.lock() {
+                *current = Some((task_id.clone(), TaskKind::Install));
             }
             let _ = coordinator
                 .install_executor
                 .execute_task_with_interrupt(&service, &task_id, Some(interrupt))
                 .await;
             if let Ok(mut current) = coordinator.current_interrupt.lock() {
+                *current = None;
+            }
+            if let Ok(mut current) = coordinator.current_task.lock() {
                 *current = None;
             }
         });
@@ -108,15 +131,28 @@ impl TaskCoordinator {
             if !coordinator.scheduling_enabled() {
                 return;
             }
+            let executable = service
+                .content_install_task(&task_id)
+                .map(|task| task.state == moyumax_core::TaskState::Queued)
+                .unwrap_or(false);
+            if !executable {
+                return;
+            }
             let interrupt = DownloadInterrupt::new();
             if let Ok(mut current) = coordinator.current_interrupt.lock() {
                 *current = Some(interrupt.clone());
+            }
+            if let Ok(mut current) = coordinator.current_task.lock() {
+                *current = Some((task_id.clone(), TaskKind::Content));
             }
             let _ = coordinator
                 .content_executor
                 .execute_task_with_interrupt(&service, &task_id, Some(interrupt))
                 .await;
             if let Ok(mut current) = coordinator.current_interrupt.lock() {
+                *current = None;
+            }
+            if let Ok(mut current) = coordinator.current_task.lock() {
                 *current = None;
             }
         });
@@ -131,7 +167,7 @@ impl TaskCoordinator {
         Ok(())
     }
 
-    /// 恢复全部任务：清除暂停标志，重新入队暂停任务并继续调度排队任务。
+    /// 恢复全部任务：清除暂停标志，重新入队被全局暂停打断的任务并按优先级调度排队任务。
     fn resume_all(&self, service: &AppService) -> Result<(), String> {
         service
             .set_tasks_paused(false)
@@ -149,20 +185,78 @@ impl TaskCoordinator {
         for task_id in content_ids {
             self.submit_content(service.clone(), task_id);
         }
-        for task in service
-            .list_install_tasks()
+        for task_id in service
+            .queued_install_tasks_by_priority()
             .map_err(|error| error.to_string())?
         {
-            if task.state == TaskState::Queued {
-                self.submit_install(service.clone(), task.id);
+            self.submit_install(service.clone(), task_id);
+        }
+        for task_id in service
+            .queued_content_tasks_by_priority()
+            .map_err(|error| error.to_string())?
+        {
+            self.submit_content(service.clone(), task_id);
+        }
+        Ok(())
+    }
+
+    /// 单任务暂停：先以 `user` 来源标记暂停（排队任务直接退出调度）,
+    /// 再中断执行中的下载;执行器完成前的中断标记不会覆盖 `user` 归因。
+    fn pause_task(
+        &self,
+        service: &AppService,
+        task_id: &str,
+        kind: TaskKind,
+    ) -> Result<(), String> {
+        match kind {
+            TaskKind::Install => {
+                service
+                    .mark_install_task_paused(task_id, "user")
+                    .map_err(|error| error.to_string())?;
+            }
+            TaskKind::Content => {
+                service
+                    .mark_content_task_paused(task_id, "user")
+                    .map_err(|error| error.to_string())?;
             }
         }
-        for task in service
-            .list_content_install_tasks()
-            .map_err(|error| error.to_string())?
+        let is_current = self
+            .current_task
+            .lock()
+            .map(|current| {
+                current
+                    .as_ref()
+                    .is_some_and(|(id, k)| id == task_id && *k == kind)
+            })
+            .unwrap_or(false);
+        if is_current
+            && let Ok(current) = self.current_interrupt.lock()
+            && let Some(interrupt) = current.as_ref()
         {
-            if task.state == TaskState::Queued {
-                self.submit_content(service.clone(), task.id);
+            interrupt.interrupt();
+        }
+        Ok(())
+    }
+
+    /// 单任务恢复：重新入队并按全局调度继续。
+    fn resume_task(
+        &self,
+        service: &AppService,
+        task_id: &str,
+        kind: TaskKind,
+    ) -> Result<(), String> {
+        match kind {
+            TaskKind::Install => {
+                service
+                    .requeue_paused_install_task(task_id)
+                    .map_err(|error| error.to_string())?;
+                self.submit_install(service.clone(), task_id.to_owned());
+            }
+            TaskKind::Content => {
+                service
+                    .requeue_paused_content_task(task_id)
+                    .map_err(|error| error.to_string())?;
+                self.submit_content(service.clone(), task_id.to_owned());
             }
         }
         Ok(())
@@ -873,6 +967,60 @@ fn resume_all_tasks(
 }
 
 #[tauri::command]
+fn pause_task(
+    service: State<'_, AppService>,
+    tasks: State<'_, TaskCoordinator>,
+    task_id: String,
+    kind: TaskKind,
+) -> Result<(), String> {
+    tasks.pause_task(&service, &task_id, kind)
+}
+
+#[tauri::command]
+fn resume_task(
+    service: State<'_, AppService>,
+    tasks: State<'_, TaskCoordinator>,
+    task_id: String,
+    kind: TaskKind,
+) -> Result<(), String> {
+    tasks.resume_task(&service, &task_id, kind)
+}
+
+#[tauri::command]
+fn set_task_priority(
+    service: State<'_, AppService>,
+    task_id: String,
+    kind: TaskKind,
+    priority: i64,
+) -> Result<(), String> {
+    match kind {
+        TaskKind::Install => service
+            .set_install_task_priority(&task_id, priority)
+            .map_err(|error| error.to_string()),
+        TaskKind::Content => service
+            .set_content_task_priority(&task_id, priority)
+            .map_err(|error| error.to_string()),
+    }
+}
+
+#[tauri::command]
+fn get_download_speed_limit(service: State<'_, AppService>) -> Result<u64, String> {
+    service
+        .download_speed_limit()
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+fn set_download_speed_limit(
+    service: State<'_, AppService>,
+    bytes_per_sec: u64,
+) -> Result<(), String> {
+    service
+        .set_download_speed_limit(bytes_per_sec)
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
 fn list_java_environments(
     service: State<'_, AppService>,
 ) -> Result<Vec<JavaEnvironmentSummary>, String> {
@@ -985,16 +1133,14 @@ pub fn run() {
             let smoke_enabled = std::env::var_os("MOYUMAX_SMOKE").is_some();
             let shell = Arc::new(ShellCoordinator::new(smoke_enabled, &state_directory));
             let tasks_paused = service.tasks_paused()?;
+            let speed_limit = service.download_speed_limit()?;
+            moyumax_core::global_rate_limiter().set_rate(speed_limit);
             let coordinator = TaskCoordinator::new(!tasks_paused).map_err(std::io::Error::other)?;
-            for task in service.list_install_tasks()? {
-                if task.state == TaskState::Queued {
-                    coordinator.submit_install(service.clone(), task.id);
-                }
+            for task_id in service.queued_install_tasks_by_priority()? {
+                coordinator.submit_install(service.clone(), task_id);
             }
-            for task in service.list_content_install_tasks()? {
-                if task.state == TaskState::Queued {
-                    coordinator.submit_content(service.clone(), task.id);
-                }
+            for task_id in service.queued_content_tasks_by_priority()? {
+                coordinator.submit_content(service.clone(), task_id);
             }
             app.manage(service);
             app.manage(metadata);
@@ -1082,7 +1228,12 @@ pub fn run() {
             set_download_source_policy,
             get_tasks_paused,
             pause_all_tasks,
-            resume_all_tasks
+            resume_all_tasks,
+            pause_task,
+            resume_task,
+            set_task_priority,
+            get_download_speed_limit,
+            set_download_speed_limit
         ])
         .build(tauri::generate_context!())
         .expect("MoyuMax desktop runtime failed")

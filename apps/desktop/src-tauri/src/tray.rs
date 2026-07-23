@@ -398,6 +398,8 @@ mod tests {
             target_directory: "target".to_owned(),
             created_at_unix_seconds: created,
             updated_at_unix_seconds: created,
+            priority: 0,
+            paused_by: None,
             progress: progress(completed, total),
         }
     }

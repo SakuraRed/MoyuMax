@@ -180,6 +180,10 @@ pub struct ContentInstallTask {
     pub shared_store_directory: String,
     pub created_at_unix_seconds: i64,
     pub updated_at_unix_seconds: i64,
+    #[serde(default)]
+    pub priority: i64,
+    #[serde(default)]
+    pub paused_by: Option<String>,
     pub progress: TaskProgress,
 }
 
@@ -634,7 +638,7 @@ impl AppService {
                    task.shared_store_directory, task.created_at_unix_seconds,
                    task.updated_at_unix_seconds, COALESCE(progress.completed_bytes, 0),
                    progress.total_bytes, progress.current_item, progress.error_summary,
-                   progress.source_detail
+                   progress.source_detail, task.priority, task.paused_by
             FROM content_install_tasks AS task
             LEFT JOIN content_task_progress AS progress ON progress.task_id = task.id
             ORDER BY task.created_at_unix_seconds, task.id
@@ -656,6 +660,8 @@ impl AppService {
                 row.get::<_, Option<String>>(11)?,
                 row.get::<_, Option<String>>(12)?,
                 row.get::<_, Option<String>>(13)?,
+                row.get::<_, i64>(14)?,
+                row.get::<_, Option<String>>(15)?,
             ))
         })?;
         rows.map(|row| {
@@ -674,6 +680,8 @@ impl AppService {
                 current_item,
                 error_summary,
                 source_detail,
+                priority,
+                paused_by,
             ) = row?;
             Ok(ContentInstallTask {
                 id,
@@ -688,6 +696,8 @@ impl AppService {
                 shared_store_directory,
                 created_at_unix_seconds,
                 updated_at_unix_seconds,
+                priority,
+                paused_by,
                 progress: TaskProgress {
                     completed_bytes: content_sqlite_unsigned(
                         completed_bytes,
@@ -849,17 +859,17 @@ impl AppService {
         Ok(())
     }
 
-    /// 下载被暂停中断后，把执行中的内容任务标记为可恢复的暂停状态。
-    pub fn mark_content_task_paused(&self, task_id: &str) -> Result<()> {
+    /// 下载被中断后把内容任务标记为可恢复的暂停状态。
+    pub fn mark_content_task_paused(&self, task_id: &str, paused_by: &str) -> Result<()> {
         let mut connection = self.connection()?;
         let transaction = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
         let changed = transaction.execute(
             "
             UPDATE content_install_tasks
-            SET state = 'paused', updated_at_unix_seconds = ?2
-            WHERE id = ?1 AND state = 'running'
+            SET state = 'paused', paused_by = ?3, updated_at_unix_seconds = ?2
+            WHERE id = ?1 AND state IN ('queued', 'running')
             ",
-            params![task_id, unix_timestamp()],
+            params![task_id, unix_timestamp(), paused_by],
         )?;
         if changed == 0 {
             return Err(CoreError::Content(
@@ -869,7 +879,7 @@ impl AppService {
         transaction.execute(
             "
             UPDATE content_task_progress
-            SET current_item = '已暂停，可在恢复全部任务后继续', error_summary = NULL
+            SET current_item = '已暂停，可在恢复后继续', error_summary = NULL
             WHERE task_id = ?1
             ",
             params![task_id],
@@ -878,12 +888,16 @@ impl AppService {
         Ok(())
     }
 
-    /// 恢复全部任务时，把所有暂停的内容任务重新入队，返回任务 ID 供调度器提交。
+    /// 全局恢复：只把被全局暂停打断的内容任务重新入队，按优先级与创建时间返回。
     pub fn requeue_paused_content_tasks(&self) -> Result<Vec<String>> {
         let mut connection = self.connection()?;
         let transaction = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
         let mut statement = transaction.prepare(
-            "SELECT id FROM content_install_tasks WHERE state = 'paused' ORDER BY created_at_unix_seconds, id",
+            "
+            SELECT id FROM content_install_tasks
+            WHERE state = 'paused' AND paused_by = 'global'
+            ORDER BY priority DESC, created_at_unix_seconds, id
+            ",
         )?;
         let task_ids = statement
             .query_map([], |row| row.get::<_, String>(0))?
@@ -896,20 +910,83 @@ impl AppService {
             "
             UPDATE content_task_progress
             SET current_item = '等待恢复执行', error_summary = NULL
-            WHERE task_id IN (SELECT id FROM content_install_tasks WHERE state = 'paused')
+            WHERE task_id IN (SELECT id FROM content_install_tasks WHERE state = 'paused' AND paused_by = 'global')
             ",
             [],
         )?;
         transaction.execute(
             "
             UPDATE content_install_tasks
-            SET state = 'queued', current_stage = 'prepare', updated_at_unix_seconds = ?1
-            WHERE state = 'paused'
+            SET state = 'queued', paused_by = NULL, current_stage = 'prepare', updated_at_unix_seconds = ?1
+            WHERE state = 'paused' AND paused_by = 'global'
             ",
             params![unix_timestamp()],
         )?;
         transaction.commit()?;
         Ok(task_ids)
+    }
+
+    /// 单任务恢复：任意暂停来源的内容任务重新入队。
+    pub fn requeue_paused_content_task(&self, task_id: &str) -> Result<()> {
+        let mut connection = self.connection()?;
+        let transaction = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let changed = transaction.execute(
+            "
+            UPDATE content_install_tasks
+            SET state = 'queued', paused_by = NULL, current_stage = 'prepare', updated_at_unix_seconds = ?2
+            WHERE id = ?1 AND state = 'paused'
+            ",
+            params![task_id, unix_timestamp()],
+        )?;
+        if changed == 0 {
+            return Err(CoreError::Content(
+                "内容任务不存在或当前不是暂停状态".to_owned(),
+            ));
+        }
+        transaction.execute(
+            "
+            UPDATE content_task_progress
+            SET current_item = '等待恢复执行', error_summary = NULL
+            WHERE task_id = ?1
+            ",
+            params![task_id],
+        )?;
+        transaction.commit()?;
+        Ok(())
+    }
+
+    /// 调整排队内容任务的优先级。
+    pub fn set_content_task_priority(&self, task_id: &str, priority: i64) -> Result<()> {
+        let changed = self.connection()?.execute(
+            "
+            UPDATE content_install_tasks
+            SET priority = ?2, updated_at_unix_seconds = ?3
+            WHERE id = ?1 AND state IN ('queued', 'paused')
+            ",
+            params![task_id, priority, unix_timestamp()],
+        )?;
+        if changed == 0 {
+            return Err(CoreError::Content(
+                "内容任务不存在或当前状态不能调整优先级".to_owned(),
+            ));
+        }
+        Ok(())
+    }
+
+    /// 共享执行槽的内容候选：按优先级与创建时间返回排队任务。
+    pub fn queued_content_tasks_by_priority(&self) -> Result<Vec<String>> {
+        let connection = self.connection()?;
+        let mut statement = connection.prepare(
+            "
+            SELECT id FROM content_install_tasks
+            WHERE state = 'queued'
+            ORDER BY priority DESC, created_at_unix_seconds, id
+            ",
+        )?;
+        let rows = statement
+            .query_map([], |row| row.get::<_, String>(0))?
+            .collect::<std::result::Result<Vec<_>, _>>()?;
+        Ok(rows)
     }
 
     pub fn resolve_content_task_recovery(
@@ -990,7 +1067,7 @@ impl AppService {
         Ok(())
     }
 
-    pub(crate) fn content_install_task(&self, task_id: &str) -> Result<ContentInstallTask> {
+    pub fn content_install_task(&self, task_id: &str) -> Result<ContentInstallTask> {
         self.list_content_install_tasks()?
             .into_iter()
             .find(|task| task.id == task_id)
@@ -1236,6 +1313,8 @@ impl AppService {
             shared_store_directory: content_path_text(shared_store_directory),
             created_at_unix_seconds: now,
             updated_at_unix_seconds: now,
+            priority: 0,
+            paused_by: None,
             progress: TaskProgress {
                 completed_bytes: 0,
                 total_bytes: Some(total_bytes),
