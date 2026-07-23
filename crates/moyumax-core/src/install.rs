@@ -166,6 +166,13 @@ pub enum ResolvedLoader {
         profile_sha256: String,
         profile: Value,
     },
+    Quilt {
+        version: String,
+        stable: bool,
+        profile_url: String,
+        profile_sha256: String,
+        profile: Value,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -173,6 +180,7 @@ pub enum ResolvedLoader {
 pub enum LoaderChoice {
     Vanilla,
     Fabric { version: String },
+    Quilt { version: String },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -970,6 +978,7 @@ impl AppService {
         let (loader_kind, loader_version) = match &task.plan.loader {
             ResolvedLoader::Vanilla => ("vanilla", None),
             ResolvedLoader::Fabric { version, .. } => ("fabric", Some(version.as_str())),
+            ResolvedLoader::Quilt { version, .. } => ("quilt", Some(version.as_str())),
         };
         let instance = ManagedInstanceSummary {
             id: task.plan.instance_id.clone(),

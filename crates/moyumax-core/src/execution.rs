@@ -1485,10 +1485,13 @@ impl InstallExecutor {
         &self,
         loader: &ResolvedLoader,
     ) -> Result<Vec<ResolvedArtifact>> {
-        let ResolvedLoader::Fabric { profile, .. } = loader else {
-            return Ok(Vec::new());
+        let profile_json = match loader {
+            ResolvedLoader::Vanilla => return Ok(Vec::new()),
+            ResolvedLoader::Fabric { profile, .. } | ResolvedLoader::Quilt { profile, .. } => {
+                profile.clone()
+            }
         };
-        let profile: FabricProfile = serde_json::from_value(profile.clone())?;
+        let profile: FabricProfile = serde_json::from_value(profile_json)?;
         let mut artifacts = Vec::with_capacity(profile.libraries.len());
         for library in profile.libraries {
             let relative = maven_path(&library.name)?;
@@ -2017,7 +2020,7 @@ fn build_runtime_manifest(
         .collect();
     let (main_class, loader_profile) = match &task.plan.loader {
         ResolvedLoader::Vanilla => (task.plan.game.main_class.clone(), None),
-        ResolvedLoader::Fabric { profile, .. } => (
+        ResolvedLoader::Fabric { profile, .. } | ResolvedLoader::Quilt { profile, .. } => (
             profile
                 .get("mainClass")
                 .and_then(serde_json::Value::as_str)

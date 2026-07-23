@@ -45,6 +45,7 @@
   let catalog = $state<VersionCatalog | null>(null);
   let selectedVersion = $state<GameVersionSummary | null>(null);
   let fabricLoaders = $state<FabricLoaderSummary[]>([]);
+  let quiltLoaders = $state<FabricLoaderSummary[]>([]);
   let loader = $state<LoaderChoice>({ kind: "vanilla" });
   let instanceName = $state("");
   let nameEdited = $state(false);
@@ -87,7 +88,7 @@
       const recommended = recommendedVersion(catalog.versions);
       if (!recommended) throw new Error("官方版本目录没有可安装版本");
       selectedVersion = recommended;
-      await loadFabric(recommended, true);
+      await loadLoaders(recommended, true);
       view = "configure";
     } catch (error) {
       errorMessage = error instanceof Error ? error.message : String(error);
@@ -99,8 +100,16 @@
     selectedVersion = version;
     loader = { kind: "vanilla" };
     fabricLoaders = [];
+    quiltLoaders = [];
     updateGeneratedName();
-    await loadFabric(version, false);
+    await loadLoaders(version, false);
+  }
+
+  async function loadLoaders(version: GameVersionSummary, selectRecommended: boolean): Promise<void> {
+    await Promise.all([
+      loadFabric(version, selectRecommended),
+      loadQuilt(version, selectRecommended),
+    ]);
   }
 
   async function loadFabric(version: GameVersionSummary, selectRecommended: boolean): Promise<void> {
@@ -118,10 +127,21 @@
       updateGeneratedName();
     } catch (error) {
       if (requestSequence !== loaderRequestSequence || selectedVersion?.id !== version.id) return;
-      loader = { kind: "vanilla" };
       fabricLoaders = [];
       loaderMessage = `Fabric 元数据暂不可用，仍可安装原版：${error instanceof Error ? error.message : String(error)}`;
       updateGeneratedName();
+    }
+  }
+
+  async function loadQuilt(version: GameVersionSummary, _selectRecommended: boolean): Promise<void> {
+    try {
+      const compatibleLoaders = await runtime.getQuiltLoaders(version.id);
+      if (selectedVersion?.id !== version.id) return;
+      quiltLoaders = compatibleLoaders;
+      updateGeneratedName();
+    } catch {
+      if (selectedVersion?.id !== version.id) return;
+      quiltLoaders = [];
     }
   }
 
@@ -137,8 +157,20 @@
     updateGeneratedName();
   }
 
+  function selectQuilt(): void {
+    const recommended = recommendedFabricLoader(quiltLoaders);
+    if (!recommended) return;
+    loader = { kind: "quilt", version: recommended.version };
+    updateGeneratedName();
+  }
+
   function selectFabricVersion(version: string): void {
     loader = { kind: "fabric", version };
+    updateGeneratedName();
+  }
+
+  function selectQuiltVersion(version: string): void {
+    loader = { kind: "quilt", version };
     updateGeneratedName();
   }
 
@@ -305,7 +337,10 @@
                 <button class:selected={loader.kind === "fabric"} class="loader-card" role="radio" aria-checked={loader.kind === "fabric"} disabled={fabricLoaders.length === 0} onclick={selectFabric}>
                   <span class="radio-mark"></span><strong>Fabric</strong><small>{recommendedFabricLoader(fabricLoaders)?.version ?? "不可用"} · 推荐</small>
                 </button>
-                {#each ["Forge", "NeoForge", "Quilt"] as pendingLoader}
+                <button class:selected={loader.kind === "quilt"} class="loader-card" role="radio" aria-checked={loader.kind === "quilt"} disabled={quiltLoaders.length === 0} onclick={selectQuilt}>
+                  <span class="radio-mark"></span><strong>Quilt</strong><small>{recommendedFabricLoader(quiltLoaders)?.version ?? "不可用"} · 推荐</small>
+                </button>
+                {#each ["Forge", "NeoForge"] as pendingLoader}
                   <button class="loader-card pending" disabled><strong>{pendingLoader}</strong><small>接口接入中</small></button>
                 {/each}
               </div>
@@ -318,6 +353,17 @@
                     {/each}
                   </select>
                   <small>列表仅包含 Fabric 元数据服务为 Minecraft {selectedVersion.id} 返回的兼容版本。</small>
+                </label>
+              {/if}
+              {#if loader.kind === "quilt"}
+                <label class="loader-version-field">
+                  Quilt Loader 版本
+                  <select value={loader.version} onchange={(event) => selectQuiltVersion(event.currentTarget.value)}>
+                    {#each quiltLoaders as candidate}
+                      <option value={candidate.version}>{candidate.version}{candidate.recommended ? "（推荐）" : ""}</option>
+                    {/each}
+                  </select>
+                  <small>列表仅包含 Quilt 元数据服务为 Minecraft {selectedVersion.id} 返回的兼容版本。</small>
                 </label>
               {/if}
               {#if loaderMessage}<p class="hint">{loaderMessage}</p>{/if}

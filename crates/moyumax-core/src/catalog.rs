@@ -17,6 +17,7 @@ const VERSION_MANIFEST_CACHE_KEY: &str = "mojang-version-manifest-v2";
 const VERSION_MANIFEST_URL: &str =
     "https://piston-meta.mojang.com/mc/game/version_manifest_v2.json";
 const FABRIC_META_BASE_URL: &str = "https://meta.fabricmc.net/v2";
+const QUILT_META_BASE_URL: &str = "https://meta.quiltmc.org/v3";
 const AZUL_META_BASE_URL: &str = "https://api.azul.com/metadata/v1/zulu";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -169,6 +170,16 @@ struct RawFabricLoader {
 }
 
 #[derive(Debug, Deserialize)]
+struct RawQuiltLoaderEntry {
+    loader: RawQuiltLoader,
+}
+
+#[derive(Debug, Deserialize)]
+struct RawQuiltLoader {
+    version: String,
+}
+
+#[derive(Debug, Deserialize)]
 struct RawAzulPackageSummary {
     package_uuid: String,
 }
@@ -258,6 +269,7 @@ impl AppService {
 #[derive(Debug, Clone)]
 pub struct MetadataClient {
     client: Client,
+    quilt_meta_base: String,
 }
 
 impl MetadataClient {
@@ -267,7 +279,18 @@ impl MetadataClient {
             .timeout(Duration::from_secs(15))
             .user_agent(concat!("MoyuMax/", env!("CARGO_PKG_VERSION")))
             .build()?;
-        Ok(Self { client })
+        Ok(Self {
+            client,
+            quilt_meta_base: QUILT_META_BASE_URL.to_owned(),
+        })
+    }
+
+    /// 覆盖 Quilt 元数据基址,供本地契约测试使用。生产保持官方默认值。
+    #[doc(hidden)]
+    #[must_use]
+    pub fn with_quilt_meta_base(mut self, base: String) -> Self {
+        self.quilt_meta_base = base.trim_end_matches('/').to_owned();
+        self
     }
 
     pub async fn fetch_version_catalog(&self) -> Result<VersionCatalog> {
@@ -308,6 +331,39 @@ impl MetadataClient {
             .collect())
     }
 
+    /// Quilt 版本列表。Quilt 元数据不直接给出稳定标记,
+    /// 版本号不含 `-`(如 0.30.0)视为稳定,推荐第一个稳定项。
+    pub async fn compatible_quilt_loaders(
+        &self,
+        game_version: &str,
+    ) -> Result<Vec<FabricLoaderSummary>> {
+        validate_metadata_component(game_version, "Minecraft 版本")?;
+        let url = format!("{}/versions/loader/{game_version}", self.quilt_meta_base);
+        let entries = self
+            .client
+            .get(url)
+            .send()
+            .await?
+            .error_for_status()?
+            .json::<Vec<RawQuiltLoaderEntry>>()
+            .await?;
+        let recommended_index = entries
+            .iter()
+            .position(|entry| !entry.loader.version.contains('-'));
+        Ok(entries
+            .into_iter()
+            .enumerate()
+            .map(|(index, entry)| {
+                let stable = !entry.loader.version.contains('-');
+                FabricLoaderSummary {
+                    version: entry.loader.version,
+                    stable,
+                    recommended: Some(index) == recommended_index,
+                }
+            })
+            .collect())
+    }
+
     pub async fn resolve_install_request(
         &self,
         selection: &InstallSelection,
@@ -318,6 +374,9 @@ impl MetadataClient {
             LoaderChoice::Fabric { version } => {
                 self.resolve_fabric_loader(&game.version.id, version)
                     .await?
+            }
+            LoaderChoice::Quilt { version } => {
+                self.resolve_quilt_loader(&game.version.id, version).await?
             }
         };
         let java = self.resolve_zulu_jdk(game.java_major_version).await?;
@@ -424,7 +483,7 @@ impl MetadataClient {
         })
     }
 
-    async fn resolve_fabric_loader(
+    pub async fn resolve_fabric_loader(
         &self,
         game_version: &str,
         loader_version: &str,
@@ -456,6 +515,47 @@ impl MetadataClient {
         let profile_sha256 = encode_hex(Sha2Digest::finalize(sha256));
         let profile = serde_json::from_slice(&payload)?;
         Ok(ResolvedLoader::Fabric {
+            version: selected.version,
+            stable: selected.stable,
+            profile_url,
+            profile_sha256,
+            profile,
+        })
+    }
+
+    pub async fn resolve_quilt_loader(
+        &self,
+        game_version: &str,
+        loader_version: &str,
+    ) -> Result<ResolvedLoader> {
+        validate_metadata_component(game_version, "Minecraft 版本")?;
+        validate_metadata_component(loader_version, "Quilt Loader 版本")?;
+        let compatible = self.compatible_quilt_loaders(game_version).await?;
+        let selected = compatible
+            .into_iter()
+            .find(|candidate| candidate.version == loader_version)
+            .ok_or_else(|| {
+                CoreError::InvalidInstallRequest(format!(
+                    "Quilt Loader {loader_version} 不在 Minecraft {game_version} 的兼容列表中"
+                ))
+            })?;
+        let profile_url = format!(
+            "{}/versions/loader/{game_version}/{loader_version}/profile/json",
+            self.quilt_meta_base
+        );
+        let payload = self
+            .client
+            .get(&profile_url)
+            .send()
+            .await?
+            .error_for_status()?
+            .bytes()
+            .await?;
+        let mut sha256 = Sha256::new();
+        Sha2Digest::update(&mut sha256, &payload);
+        let profile_sha256 = encode_hex(Sha2Digest::finalize(sha256));
+        let profile = serde_json::from_slice(&payload)?;
+        Ok(ResolvedLoader::Quilt {
             version: selected.version,
             stable: selected.stable,
             profile_url,

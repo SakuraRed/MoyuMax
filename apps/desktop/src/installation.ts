@@ -21,9 +21,9 @@ export function defaultInstanceName(
   gameVersion: string,
   loader: LoaderChoice,
 ): string {
-  return loader.kind === "fabric"
-    ? `${gameVersion} Fabric`
-    : `${gameVersion} 原版`;
+  if (loader.kind === "fabric") return `${gameVersion} Fabric`;
+  if (loader.kind === "quilt") return `${gameVersion} Quilt`;
+  return `${gameVersion} 原版`;
 }
 
 export function formatBytes(bytes: number): string {

@@ -48,7 +48,8 @@ export interface FabricLoaderSummary {
 
 export type LoaderChoice =
   | { kind: "vanilla" }
-  | { kind: "fabric"; version: string };
+  | { kind: "fabric"; version: string }
+  | { kind: "quilt"; version: string };
 
 export type InstanceIsolation = "full" | "sharedBase" | "disabled";
 
@@ -433,6 +434,7 @@ export interface MoyuRuntime {
   skipOnboarding(): Promise<void>;
   getGameVersionCatalog(): Promise<VersionCatalog>;
   getFabricLoaders(gameVersion: string): Promise<FabricLoaderSummary[]>;
+  getQuiltLoaders(gameVersion: string): Promise<FabricLoaderSummary[]>;
   previewInstall(selection: InstallSelection): Promise<InstallPreview>;
   confirmInstallPreview(previewId: string): Promise<InstallTask>;
   getInstallTasks(): Promise<InstallTask[]>;
@@ -530,6 +532,8 @@ function createTauriRuntime(): MoyuRuntime {
       invoke<VersionCatalog>("get_game_version_catalog"),
     getFabricLoaders: (gameVersion) =>
       invoke<FabricLoaderSummary[]>("get_fabric_loaders", { gameVersion }),
+    getQuiltLoaders: (gameVersion) =>
+      invoke<FabricLoaderSummary[]>("get_quilt_loaders", { gameVersion }),
     previewInstall: (selection) =>
       invoke<InstallPreview>("preview_install", { selection }),
     confirmInstallPreview: (previewId) =>
@@ -658,16 +662,29 @@ function createBrowserRuntime(): MoyuRuntime {
         { version: "0.16.13", stable: true, recommended: false },
       ];
     },
+    async getQuiltLoaders() {
+      return [
+        { version: "0.30.0", stable: true, recommended: true },
+        { version: "0.30.1-beta.1", stable: false, recommended: false },
+      ];
+    },
     async previewInstall(selection) {
       const id = crypto.randomUUID();
       browserPreviews.set(id, selection);
+      const loaderName =
+        selection.loader.kind === "fabric"
+          ? "Fabric"
+          : selection.loader.kind === "quilt"
+            ? "Quilt"
+            : "原版";
+      const loaderVersion =
+        selection.loader.kind === "vanilla" ? null : selection.loader.version;
       return {
         id,
         instanceName: selection.instanceName,
         gameVersion: selection.gameVersion.id,
-        loaderName: selection.loader.kind === "fabric" ? "Fabric" : "原版",
-        loaderVersion:
-          selection.loader.kind === "fabric" ? selection.loader.version : null,
+        loaderName,
+        loaderVersion,
         javaDistribution: "azulZulu",
         javaVersion: "21.0.12+8",
         javaArchitecture: "x64",

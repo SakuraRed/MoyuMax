@@ -319,6 +319,17 @@ async fn get_fabric_loaders(
 }
 
 #[tauri::command]
+async fn get_quilt_loaders(
+    metadata: State<'_, MetadataClient>,
+    game_version: String,
+) -> Result<Vec<FabricLoaderSummary>, String> {
+    metadata
+        .compatible_quilt_loaders(&game_version)
+        .await
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
 async fn preview_install(
     service: State<'_, AppService>,
     metadata: State<'_, MetadataClient>,
@@ -903,6 +914,7 @@ pub fn run() {
             skip_onboarding,
             get_game_version_catalog,
             get_fabric_loaders,
+            get_quilt_loaders,
             preview_install,
             confirm_install_preview,
             get_install_tasks,
@@ -960,6 +972,7 @@ fn build_install_preview(id: String, request: &ResolvedInstallRequest) -> Instal
     let (loader_name, loader_version) = match &request.loader {
         ResolvedLoader::Vanilla => ("原版".to_owned(), None),
         ResolvedLoader::Fabric { version, .. } => ("Fabric".to_owned(), Some(version.clone())),
+        ResolvedLoader::Quilt { version, .. } => ("Quilt".to_owned(), Some(version.clone())),
     };
     let game_bytes = request
         .game
