@@ -1,5 +1,9 @@
 # Modrinth API 实现速查
 
+## 状态说明
+
+本文记录 M5 已验证的 Modrinth 官方 API v2 直连实现，继续作为官方源与回归基线。2026-07-23 之后的目标下载策略改为“内置镜像优先”：Modrinth 文件默认使用 MCI Mirror API `https://www.mcimirror.top/`，但必须保留本文定义的 Modrinth 官方源能力。镜像端点、schema、Range 和限流规则需在实现前单独研究，不得从本文推断。
+
 ## 官方来源
 
 - API 总览与认证：<https://docs.modrinth.com/api/>

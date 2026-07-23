@@ -35,6 +35,7 @@ corepack pnpm --filter @moyumax/desktop tauri dev
 - [本地崩溃诊断](docs/plans/MILESTONE-06-CRASH-DIAGNOSTICS.md)
 - [实例内置回收站](docs/plans/MILESTONE-07-INSTANCE-RECYCLE-BIN.md)
 - [游戏会话前后存档备份](docs/plans/MILESTONE-08-WORLD-BACKUP.md)
+- [下载来源统一与多线程加速计划](docs/plans/DOWNLOAD-SOURCES-AND-ACCELERATION.md)
 - [技术栈决策](docs/architecture/ADR-0001-DESKTOP-STACK.md)
 
 ## 许可
