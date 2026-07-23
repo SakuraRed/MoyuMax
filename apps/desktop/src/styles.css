@@ -3888,3 +3888,26 @@ summary:focus-visible {
     animation-iteration-count: 1 !important;
   }
 }
+
+.window[data-motion="reduce"] *,
+.window[data-motion="reduce"] *::before,
+.window[data-motion="reduce"] *::after {
+  scroll-behavior: auto !important;
+  transition-duration: 0.01ms !important;
+  animation-duration: 0.01ms !important;
+  animation-iteration-count: 1 !important;
+}
+
+.window[data-contrast="high"] {
+  --border: var(--text);
+  --border-strong: var(--text);
+  --focus-ring: var(--accent-strong);
+}
+
+.window[data-contrast="high"] :is(button, input, select, .nav-item, .filter-chip) {
+  border-width: 2px;
+}
+
+.window[data-contrast="high"] :is(button, input, select, summary):focus-visible {
+  outline-width: 3px;
+}

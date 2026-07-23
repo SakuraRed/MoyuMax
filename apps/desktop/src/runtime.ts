@@ -384,6 +384,8 @@ export interface AccountSummary {
 export interface UiPreferences {
   theme: string;
   language: string;
+  motion: string;
+  contrast: string;
 }
 
 export const LITTLESKIN_YGGDRASIL_URL = "https://littleskin.cn/api/yggdrasil";
@@ -614,6 +616,8 @@ export interface MoyuRuntime {
   getUiPreferences(): Promise<UiPreferences>;
   setUiTheme(theme: string): Promise<void>;
   setUiLanguage(language: string): Promise<void>;
+  setUiMotion(motion: string): Promise<void>;
+  setUiContrast(contrast: string): Promise<void>;
   retryContentTask(taskId: string): Promise<void>;
   resolveContentTaskRecovery(taskId: string, decision: RecoveryDecision): Promise<void>;
   listInstances(): Promise<ManagedInstance[]>;
@@ -848,6 +852,8 @@ function createTauriRuntime(): MoyuRuntime {
     getUiPreferences: () => invoke<UiPreferences>("get_ui_preferences"),
     setUiTheme: (theme) => invoke<void>("set_ui_theme", { theme }),
     setUiLanguage: (language) => invoke<void>("set_ui_language", { language }),
+    setUiMotion: (motion) => invoke<void>("set_ui_motion", { motion }),
+    setUiContrast: (contrast) => invoke<void>("set_ui_contrast", { contrast }),
     retryContentTask: (taskId) => invoke<void>("retry_content_task", { taskId }),
     resolveContentTaskRecovery: (taskId, decision) =>
       invoke<void>("resolve_content_task_recovery", { taskId, decision }),
@@ -1528,7 +1534,7 @@ function createBrowserRuntime(): MoyuRuntime {
       const serialized = window.localStorage.getItem("moyumax.browser.uiPreferences");
       return serialized
         ? (JSON.parse(serialized) as UiPreferences)
-        : { theme: "system", language: "zh-CN" };
+        : { theme: "system", language: "zh-CN", motion: "system", contrast: "standard" };
     },
     async setUiTheme(theme) {
       const preferences = await this.getUiPreferences();
@@ -1541,6 +1547,22 @@ function createBrowserRuntime(): MoyuRuntime {
     async setUiLanguage(language) {
       const preferences = await this.getUiPreferences();
       preferences.language = language;
+      window.localStorage.setItem(
+        "moyumax.browser.uiPreferences",
+        JSON.stringify(preferences),
+      );
+    },
+    async setUiMotion(motion) {
+      const preferences = await this.getUiPreferences();
+      preferences.motion = motion;
+      window.localStorage.setItem(
+        "moyumax.browser.uiPreferences",
+        JSON.stringify(preferences),
+      );
+    },
+    async setUiContrast(contrast) {
+      const preferences = await this.getUiPreferences();
+      preferences.contrast = contrast;
       window.localStorage.setItem(
         "moyumax.browser.uiPreferences",
         JSON.stringify(preferences),

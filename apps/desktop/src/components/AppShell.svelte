@@ -1,7 +1,7 @@
 <script lang="ts">
   import type { Snippet } from "svelte";
 
-  import { t, uiTheme } from "../i18n.svelte";
+  import { t, uiContrast, uiMotion, uiTheme } from "../i18n.svelte";
   import Icon from "./Icon.svelte";
 
   type NavigationKey = "home" | "instances" | "resources" | "tasks" | "data" | "settings";
@@ -50,7 +50,7 @@
   ];
 </script>
 
-<div class="window" data-theme={uiTheme()}>
+<div class="window" data-theme={uiTheme()} data-motion={uiMotion()} data-contrast={uiContrast()}>
   <header class="titlebar" data-tauri-drag-region>
     <span class="brand-mark">M</span>
     <span class="titlebar-name">

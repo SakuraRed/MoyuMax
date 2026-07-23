@@ -4,11 +4,17 @@
   import {
     applyUiPreferences,
     t,
+    UI_CONTRASTS,
     UI_LANGUAGES,
+    UI_MOTIONS,
     UI_THEMES,
+    uiContrast,
     uiLanguage,
+    uiMotion,
     uiTheme,
+    type UiContrast,
     type UiLanguage,
+    type UiMotion,
     type UiTheme,
   } from "../i18n.svelte";
   import { formatBytes } from "../installation";
@@ -89,7 +95,7 @@
       }
       if (!uiPreferencesLoaded) {
         const preferences = await runtime.getUiPreferences();
-        applyStoredUiPreferences(preferences.theme, preferences.language);
+        applyStoredUiPreferences(preferences);
         uiPreferencesLoaded = true;
       }
     } catch (error) {
@@ -97,11 +103,23 @@
     }
   }
 
-  // 仅接受受支持的主题与语言值，非法存储值保持当前默认不变。
-  function applyStoredUiPreferences(theme: string, language: string): void {
-    const nextTheme = UI_THEMES.find((entry) => entry.value === theme)?.value;
-    const nextLanguage = UI_LANGUAGES.find((entry) => entry.value === language)?.value;
-    applyUiPreferences({ theme: nextTheme, language: nextLanguage });
+  // 仅接受受支持的偏好值，非法存储值保持当前默认不变。
+  function applyStoredUiPreferences(stored: {
+    theme: string;
+    language: string;
+    motion: string;
+    contrast: string;
+  }): void {
+    const nextTheme = UI_THEMES.find((entry) => entry.value === stored.theme)?.value;
+    const nextLanguage = UI_LANGUAGES.find((entry) => entry.value === stored.language)?.value;
+    const nextMotion = UI_MOTIONS.find((entry) => entry.value === stored.motion)?.value;
+    const nextContrast = UI_CONTRASTS.find((entry) => entry.value === stored.contrast)?.value;
+    applyUiPreferences({
+      theme: nextTheme,
+      language: nextLanguage,
+      motion: nextMotion,
+      contrast: nextContrast,
+    });
   }
 
   async function selectTheme(value: UiTheme): Promise<void> {
@@ -119,6 +137,26 @@
     try {
       await runtime.setUiLanguage(value);
       applyUiPreferences({ language: value });
+    } catch (error) {
+      errorMessage = error instanceof Error ? error.message : String(error);
+    }
+  }
+
+  async function selectMotion(value: UiMotion): Promise<void> {
+    errorMessage = "";
+    try {
+      await runtime.setUiMotion(value);
+      applyUiPreferences({ motion: value });
+    } catch (error) {
+      errorMessage = error instanceof Error ? error.message : String(error);
+    }
+  }
+
+  async function selectContrast(value: UiContrast): Promise<void> {
+    errorMessage = "";
+    try {
+      await runtime.setUiContrast(value);
+      applyUiPreferences({ contrast: value });
     } catch (error) {
       errorMessage = error instanceof Error ? error.message : String(error);
     }
@@ -421,6 +459,30 @@
                 class:active={uiLanguage() === languageOption.value}
                 onclick={() => void selectLanguage(languageOption.value)}
               >{languageOption.label}</button>
+            {/each}
+          </div>
+        </div>
+        <div>
+          <span>{t("appearance.motionLabel")}</span>
+          <div class="screenshot-filters" role="group" aria-label={t("appearance.motionAria")}>
+            {#each UI_MOTIONS as motionOption}
+              <button
+                class="filter-chip"
+                class:active={uiMotion() === motionOption.value}
+                onclick={() => void selectMotion(motionOption.value)}
+              >{t(motionOption.labelKey)}</button>
+            {/each}
+          </div>
+        </div>
+        <div>
+          <span>{t("appearance.contrastLabel")}</span>
+          <div class="screenshot-filters" role="group" aria-label={t("appearance.contrastAria")}>
+            {#each UI_CONTRASTS as contrastOption}
+              <button
+                class="filter-chip"
+                class:active={uiContrast() === contrastOption.value}
+                onclick={() => void selectContrast(contrastOption.value)}
+              >{t(contrastOption.labelKey)}</button>
             {/each}
           </div>
         </div>

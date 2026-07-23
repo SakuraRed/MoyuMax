@@ -122,6 +122,14 @@ export const zhTW: Record<string, string> = {
   "appearance.theme.dark": "深色",
   "appearance.languageLabel": "語言",
   "appearance.languageAria": "介面語言",
+  "appearance.motionLabel": "動畫",
+  "appearance.motionAria": "動畫偏好",
+  "appearance.motion.system": "跟隨系統",
+  "appearance.motion.reduce": "減少動畫",
+  "appearance.contrastLabel": "對比度",
+  "appearance.contrastAria": "對比度偏好",
+  "appearance.contrast.standard": "標準",
+  "appearance.contrast.high": "高對比",
 
   // 帳戶區（SettingsCenter）
   "settings.accounts.title": "帳戶",

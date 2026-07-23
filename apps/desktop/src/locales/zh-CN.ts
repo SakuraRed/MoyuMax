@@ -127,6 +127,14 @@ export const zhCN: Record<string, string> = {
   "appearance.theme.dark": "深色",
   "appearance.languageLabel": "语言",
   "appearance.languageAria": "界面语言",
+  "appearance.motionLabel": "动画",
+  "appearance.motionAria": "动画偏好",
+  "appearance.motion.system": "跟随系统",
+  "appearance.motion.reduce": "减少动画",
+  "appearance.contrastLabel": "对比度",
+  "appearance.contrastAria": "对比度偏好",
+  "appearance.contrast.standard": "标准",
+  "appearance.contrast.high": "高对比",
 
   // 账户区（SettingsCenter）
   "settings.accounts.title": "账户",

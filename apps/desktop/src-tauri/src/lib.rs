@@ -365,6 +365,8 @@ struct WorldBackupSettings {
 struct UiPreferences {
     theme: String,
     language: String,
+    motion: String,
+    contrast: String,
 }
 
 #[derive(Debug, Serialize)]
@@ -920,6 +922,8 @@ fn get_ui_preferences(service: State<'_, AppService>) -> Result<UiPreferences, S
     Ok(UiPreferences {
         theme: service.ui_theme().map_err(|error| error.to_string())?,
         language: service.ui_language().map_err(|error| error.to_string())?,
+        motion: service.ui_motion().map_err(|error| error.to_string())?,
+        contrast: service.ui_contrast().map_err(|error| error.to_string())?,
     })
 }
 
@@ -934,6 +938,20 @@ fn set_ui_theme(service: State<'_, AppService>, theme: String) -> Result<(), Str
 fn set_ui_language(service: State<'_, AppService>, language: String) -> Result<(), String> {
     service
         .set_ui_language(&language)
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+fn set_ui_motion(service: State<'_, AppService>, motion: String) -> Result<(), String> {
+    service
+        .set_ui_motion(&motion)
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+fn set_ui_contrast(service: State<'_, AppService>, contrast: String) -> Result<(), String> {
+    service
+        .set_ui_contrast(&contrast)
         .map_err(|error| error.to_string())
 }
 
@@ -1506,6 +1524,7 @@ pub fn run() {
             app.manage(Arc::clone(&shell));
             tray::setup_tray(app.handle(), Arc::clone(&shell))?;
             spawn_idle_destroy_task(app.handle().clone(), Arc::clone(&shell));
+            shell.trace("window_shown");
             if smoke_enabled {
                 spawn_smoke_driver(app.handle().clone(), shell);
             }
@@ -1577,6 +1596,8 @@ pub fn run() {
             get_ui_preferences,
             set_ui_theme,
             set_ui_language,
+            set_ui_motion,
+            set_ui_contrast,
             retry_content_task,
             resolve_content_task_recovery,
             list_instances,

@@ -49,6 +49,7 @@ corepack pnpm --filter @moyumax/desktop tauri dev
 - [账户入口](docs/plans/MILESTONE-20-ACCOUNTS.md)
 - [主题切换与 i18n 基础设施](docs/plans/MILESTONE-21-THEME-I18N.md)
 - [全页面文案外置](docs/plans/MILESTONE-22-FULL-I18N.md)
+- [无障碍增强与性能正式验收](docs/plans/MILESTONE-23-A11Y-PERFORMANCE.md)
 - [下载来源统一与多线程加速计划](docs/plans/DOWNLOAD-SOURCES-AND-ACCELERATION.md)
 - [技术栈决策](docs/architecture/ADR-0001-DESKTOP-STACK.md)
 

@@ -122,6 +122,14 @@ export const en: Record<string, string> = {
   "appearance.theme.dark": "Dark",
   "appearance.languageLabel": "Language",
   "appearance.languageAria": "Interface language",
+  "appearance.motionLabel": "Motion",
+  "appearance.motionAria": "Motion preference",
+  "appearance.motion.system": "Follow system",
+  "appearance.motion.reduce": "Reduce motion",
+  "appearance.contrastLabel": "Contrast",
+  "appearance.contrastAria": "Contrast preference",
+  "appearance.contrast.standard": "Standard",
+  "appearance.contrast.high": "High contrast",
 
   // Accounts section (SettingsCenter)
   "settings.accounts.title": "Accounts",

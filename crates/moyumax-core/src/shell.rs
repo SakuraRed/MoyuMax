@@ -14,6 +14,8 @@ const SETTING_TASKS_PAUSED: &str = "tasks_paused";
 const SETTING_DOWNLOAD_SPEED_LIMIT: &str = "download_speed_limit_bytes";
 const SETTING_UI_THEME: &str = "ui_theme";
 const SETTING_UI_LANGUAGE: &str = "ui_language";
+const SETTING_UI_MOTION: &str = "ui_motion";
+const SETTING_UI_CONTRAST: &str = "ui_contrast";
 
 /// 关闭主窗口时的行为。默认每次询问。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
@@ -221,6 +223,44 @@ impl AppService {
         }
         let connection = self.connection()?;
         write_setting(&connection, SETTING_UI_LANGUAGE, language)?;
+        Ok(())
+    }
+
+    /// 动画偏好：system（跟随系统减少动画）、reduce（手动减少）。
+    pub fn ui_motion(&self) -> Result<String> {
+        let connection = self.connection()?;
+        Ok(read_setting(&connection, SETTING_UI_MOTION)?
+            .filter(|value| matches!(value.as_str(), "system" | "reduce"))
+            .unwrap_or_else(|| "system".to_owned()))
+    }
+
+    pub fn set_ui_motion(&self, motion: &str) -> Result<()> {
+        if !matches!(motion, "system" | "reduce") {
+            return Err(CoreError::Content(
+                "动画偏好必须是 system 或 reduce".to_owned(),
+            ));
+        }
+        let connection = self.connection()?;
+        write_setting(&connection, SETTING_UI_MOTION, motion)?;
+        Ok(())
+    }
+
+    /// 对比偏好：standard、high（高对比）。
+    pub fn ui_contrast(&self) -> Result<String> {
+        let connection = self.connection()?;
+        Ok(read_setting(&connection, SETTING_UI_CONTRAST)?
+            .filter(|value| matches!(value.as_str(), "standard" | "high"))
+            .unwrap_or_else(|| "standard".to_owned()))
+    }
+
+    pub fn set_ui_contrast(&self, contrast: &str) -> Result<()> {
+        if !matches!(contrast, "standard" | "high") {
+            return Err(CoreError::Content(
+                "对比偏好必须是 standard 或 high".to_owned(),
+            ));
+        }
+        let connection = self.connection()?;
+        write_setting(&connection, SETTING_UI_CONTRAST, contrast)?;
         Ok(())
     }
 

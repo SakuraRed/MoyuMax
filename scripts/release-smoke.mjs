@@ -23,14 +23,20 @@ const exePath = resolve(
   repoRoot,
   option("--exe", "target/release/moyumax-desktop.exe"),
 );
-const cycles = Number(option("--cycles", "10"));
+const mode = option("--mode", "wake");
+const cycles = Number(option("--cycles", mode === "cold" ? "3" : "10"));
 const runId = new Date().toISOString().replace(/[-:T]/g, "").slice(0, 14);
 const outputDir = join(repoRoot, "output", "release-smoke");
 const stateDir = join(outputDir, `state-${runId}`);
 const tracePath = join(stateDir, "moyumax-smoke-trace.jsonl");
-const resultPath = join(outputDir, `m9-smoke-${runId}.json`);
+const resultPath = join(outputDir, `m23-cold-${runId}.json`);
 
 const WAKE_P95_BUDGET_MS = 250;
+const COLD_VISIBLE_P95_BUDGET_MS = 500;
+const COLD_INTERACTIVE_P50_BUDGET_MS = 1000;
+const COLD_INTERACTIVE_P95_BUDGET_MS = 2000;
+const FOREGROUND_TARGET_BYTES = 180 * 1024 * 1024;
+const FOREGROUND_HARD_LIMIT_BYTES = 256 * 1024 * 1024;
 const BACKGROUND_TARGET_BYTES = 80 * 1024 * 1024;
 const BACKGROUND_HARD_LIMIT_BYTES = 120 * 1024 * 1024;
 
@@ -43,6 +49,139 @@ mkdirSync(stateDir, { recursive: true });
 
 const samples = [];
 let phase = "unknown";
+const percentile = (values, ratio) =>
+  values.length === 0 ? null : values[Math.min(values.length - 1, Math.ceil(values.length * ratio) - 1)];
+const mib = (bytes) => Math.round((bytes / 1024 / 1024) * 10) / 10;
+
+function readEvents(path) {
+  return existsSync(path)
+    ? readFileSync(path, "utf8")
+        .trim()
+        .split("\n")
+        .filter(Boolean)
+        .map((line) => JSON.parse(line))
+    : [];
+}
+
+async function waitFor(predicate, timeoutMs, label) {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    const value = predicate();
+    if (value) return value;
+    await new Promise((resolveSleep) => setTimeout(resolveSleep, 100));
+  }
+  throw new Error(`${label} 超时`);
+}
+
+// 冷启动模式:每轮以全新隔离状态目录启动 Release 进程,
+// 记录进程启动 → 首个 window_shown(首窗可见)与 → 首个 bootstrap_ipc(可操作),
+// 窗口展示期间采样一次前台进程树私有内存,结束后按预算判定。
+async function runColdMode() {
+  const runs = [];
+  for (let cycle = 0; cycle < cycles; cycle += 1) {
+    const coldStateDir = join(stateDir, `cold-${cycle}`);
+    mkdirSync(coldStateDir, { recursive: true });
+    const coldTrace = join(coldStateDir, "moyumax-smoke-trace.jsonl");
+    const spawnedAt = Date.now();
+    const child = spawn(exePath, [], {
+      env: {
+        ...process.env,
+        MOYUMAX_STATE_DIR: coldStateDir,
+        MOYUMAX_DATA_DIR: join(coldStateDir, "data"),
+        MOYUMAX_SMOKE: "1",
+        MOYUMAX_SMOKE_CYCLES: "1",
+      },
+      stdio: "ignore",
+    });
+    // trace 事件是应用侧相对毫秒,以 trace 文件出现时刻锚定到墙钟。
+    const appearedAt = await waitFor(
+      () => (existsSync(coldTrace) ? Date.now() : null),
+      60_000,
+      `第 ${cycle + 1} 轮冷启动 trace`,
+    );
+    const interactive = await waitFor(
+      () => {
+        const events = readEvents(coldTrace);
+        const shown = events.find((entry) => entry.event === "window_shown");
+        // bootstrap_call 是前端完成加载后的首个 IPC,即可操作时刻。
+        const call = events.find((entry) => entry.event === "bootstrap_call");
+        return shown && call ? { shown, call } : null;
+      },
+      60_000,
+      `第 ${cycle + 1} 轮冷启动事件`,
+    );
+    const memory = await sampleOnce(child.pid);
+    runs.push({
+      cycle: cycle + 1,
+      visibleMs: appearedAt + interactive.shown.ms - spawnedAt,
+      interactiveMs: appearedAt + interactive.call.ms - spawnedAt,
+      foregroundPrivateBytes: memory?.bytes ?? null,
+      foregroundProcesses: memory?.processes ?? "",
+    });
+    child.kill();
+    try {
+      await execFileAsync("taskkill.exe", ["/PID", String(child.pid), "/T", "/F"], {
+        timeout: 5000,
+      });
+    } catch {
+      // 进程可能已随冒烟驱动自行退出。
+    }
+    await new Promise((resolveSleep) => setTimeout(resolveSleep, 500));
+  }
+  const visible = runs.map((run) => run.visibleMs).sort((left, right) => left - right);
+  const interactive = runs.map((run) => run.interactiveMs).sort((left, right) => left - right);
+  const foreground = runs
+    .map((run) => run.foregroundPrivateBytes)
+    .filter((value) => typeof value === "number");
+  const result = {
+    generatedAt: new Date().toISOString(),
+    exePath,
+    mode: "cold",
+    cycles: runs,
+    visibleMs: visible,
+    interactiveMs: interactive,
+    visibleP95Ms: percentile(visible, 0.95),
+    interactiveP50Ms: percentile(interactive, 0.5),
+    interactiveP95Ms: percentile(interactive, 0.95),
+    foregroundPrivateBytes: {
+      samples: foreground,
+      max: foreground.length ? Math.max(...foreground) : null,
+    },
+    budgets: {
+      visibleP95Ms: COLD_VISIBLE_P95_BUDGET_MS,
+      interactiveP50Ms: COLD_INTERACTIVE_P50_BUDGET_MS,
+      interactiveP95Ms: COLD_INTERACTIVE_P95_BUDGET_MS,
+      foregroundTargetBytes: FOREGROUND_TARGET_BYTES,
+      foregroundHardLimitBytes: FOREGROUND_HARD_LIMIT_BYTES,
+    },
+    checks: {
+      visibleP95:
+        visible.length > 0 && percentile(visible, 0.95) <= COLD_VISIBLE_P95_BUDGET_MS,
+      interactiveP50:
+        interactive.length > 0 && percentile(interactive, 0.5) <= COLD_INTERACTIVE_P50_BUDGET_MS,
+      interactiveP95:
+        interactive.length > 0 && percentile(interactive, 0.95) <= COLD_INTERACTIVE_P95_BUDGET_MS,
+      foregroundHard:
+        foreground.length > 0 && Math.max(...foreground) <= FOREGROUND_HARD_LIMIT_BYTES,
+    },
+    note: "首窗可见为进程启动到应用完成初始化(配置窗口已创建);可操作为首个 bootstrap_call(前端加载完成);前台口径为窗口展示期间进程树私有字节。",
+  };
+  writeFileSync(resultPath, `${JSON.stringify(result, null, 2)}\n`);
+  console.log(`首窗可见样本(ms):${visible.join(", ")}(P95 预算 ${COLD_VISIBLE_P95_BUDGET_MS} ms)`);
+  console.log(
+    `可操作样本(ms):${interactive.join(", ")}(P50 ${result.interactiveP50Ms} / P95 ${result.interactiveP95Ms},预算 ${COLD_INTERACTIVE_P50_BUDGET_MS}/${COLD_INTERACTIVE_P95_BUDGET_MS} ms)`,
+  );
+  console.log(
+    `前台私有内存峰值:${mib(result.foregroundPrivateBytes.max ?? 0)} MiB(目标 ${mib(FOREGROUND_TARGET_BYTES)} / 硬上限 ${mib(FOREGROUND_HARD_LIMIT_BYTES)} MiB)`,
+  );
+  console.log(`结果已写入 ${resultPath}`);
+  const failed = Object.values(result.checks).some((check) => !check);
+  if (failed) {
+    console.error("冷启动预算未通过");
+    process.exit(1);
+  }
+  process.exit(0);
+}
 
 async function sampleOnce(pid) {
   const script = [
@@ -72,7 +211,8 @@ async function sampleOnce(pid) {
   }
 }
 
-console.log(`启动 ${exePath}(MOYUMAX_SMOKE=1,cycles=${cycles})`);
+console.log(`启动 ${exePath}(MOYUMAX_SMOKE=1,mode=${mode},cycles=${cycles})`);
+if (mode !== "cold") {
 const child = spawn(exePath, [], {
   env: {
     ...process.env,
@@ -142,15 +282,12 @@ for (let index = 0; index < events.length; index += 1) {
 }
 fastWakes.sort((left, right) => left - right);
 slowWakes.sort((left, right) => left - right);
-const percentile = (values, ratio) =>
-  values.length === 0 ? null : values[Math.min(values.length - 1, Math.ceil(values.length * ratio) - 1)];
 
 // 采样分类直接使用采样时刻实时读取的阶段,避免事后按时间轴映射的偏移误差。
 const bytesOf = (phase) =>
   samples.filter((sample) => sample.phase === phase).map((sample) => sample.bytes);
 const destroyedBytes = bytesOf("hidden-destroyed");
 const hiddenAliveBytes = bytesOf("hidden-alive");
-const mib = (bytes) => Math.round((bytes / 1024 / 1024) * 10) / 10;
 
 const result = {
   generatedAt: new Date().toISOString(),
@@ -204,3 +341,8 @@ if (!result.checks.fastWakeP95 || !result.checks.backgroundHard) {
   process.exit(1);
 }
 console.log(result.checks.backgroundTarget ? "冒烟通过(达到目标)" : "冒烟通过(未达目标,低于硬上限)");
+}
+
+if (mode === "cold") {
+  await runColdMode();
+}

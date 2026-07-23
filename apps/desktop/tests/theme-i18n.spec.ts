@@ -48,7 +48,7 @@ test("M21-THEME-001 切换浅色主题立即生效并持久化", async ({ page }
   await page.reload();
   await expect(page.locator(".window")).toHaveAttribute("data-theme", "light");
   await page.getByRole("button", { name: "设置" }).click();
-  await page.getByRole("button", { name: "跟随系统", exact: true }).click();
+  await page.getByRole("group", { name: "界面主题" }).getByRole("button", { name: "跟随系统", exact: true }).click();
   await expect(page.locator(".window")).toHaveAttribute("data-theme", "system");
 });
 

@@ -119,6 +119,8 @@
       applyUiPreferences({
         theme: uiPreferences.theme === "light" || uiPreferences.theme === "dark" ? uiPreferences.theme : "system",
         language: uiPreferences.language === "zh-TW" || uiPreferences.language === "en" ? uiPreferences.language : "zh-CN",
+        motion: uiPreferences.motion === "reduce" ? "reduce" : "system",
+        contrast: uiPreferences.contrast === "high" ? "high" : "standard",
       });
       if (bootstrap.requiresOnboarding) {
         phase = "onboarding";
