@@ -1,6 +1,16 @@
 <script lang="ts">
   import { onMount } from "svelte";
 
+  import {
+    applyUiPreferences,
+    t,
+    UI_LANGUAGES,
+    UI_THEMES,
+    uiLanguage,
+    uiTheme,
+    type UiLanguage,
+    type UiTheme,
+  } from "../i18n.svelte";
   import { formatBytes } from "../installation";
   import type {
     AccountSummary,
@@ -56,6 +66,7 @@
   let authlibUser = $state("");
   let authlibPass = $state("");
   let pendingAccountRemove = $state<string | null>(null);
+  let uiPreferencesLoaded = $state(false);
 
   onMount(() => {
     void refresh();
@@ -76,13 +87,45 @@
         backupKeep = backupSettings.keepCount;
         backupSettingsLoaded = true;
       }
+      if (!uiPreferencesLoaded) {
+        const preferences = await runtime.getUiPreferences();
+        applyStoredUiPreferences(preferences.theme, preferences.language);
+        uiPreferencesLoaded = true;
+      }
+    } catch (error) {
+      errorMessage = error instanceof Error ? error.message : String(error);
+    }
+  }
+
+  // 仅接受受支持的主题与语言值，非法存储值保持当前默认不变。
+  function applyStoredUiPreferences(theme: string, language: string): void {
+    const nextTheme = UI_THEMES.find((entry) => entry.value === theme)?.value;
+    const nextLanguage = UI_LANGUAGES.find((entry) => entry.value === language)?.value;
+    applyUiPreferences({ theme: nextTheme, language: nextLanguage });
+  }
+
+  async function selectTheme(value: UiTheme): Promise<void> {
+    errorMessage = "";
+    try {
+      await runtime.setUiTheme(value);
+      applyUiPreferences({ theme: value });
+    } catch (error) {
+      errorMessage = error instanceof Error ? error.message : String(error);
+    }
+  }
+
+  async function selectLanguage(value: UiLanguage): Promise<void> {
+    errorMessage = "";
+    try {
+      await runtime.setUiLanguage(value);
+      applyUiPreferences({ language: value });
     } catch (error) {
       errorMessage = error instanceof Error ? error.message : String(error);
     }
   }
 
   function accountKindLabel(account: AccountSummary): string {
-    return account.kind === "offline" ? "离线" : "外置";
+    return account.kind === "offline" ? t("settings.accounts.kind.offline") : t("settings.accounts.kind.authlib");
   }
 
   async function submitOffline(): Promise<void> {
@@ -94,7 +137,7 @@
       offlineName = "";
       addForm = "";
       accounts = await runtime.listAccounts();
-      notice = "离线账户已创建";
+      notice = t("settings.accounts.created");
     } catch (error) {
       errorMessage = error instanceof Error ? error.message : String(error);
     } finally {
@@ -114,7 +157,7 @@
       authlibUrl = "";
       addForm = "";
       accounts = await runtime.listAccounts();
-      notice = "外置账户已登录，令牌仅保存在本地";
+      notice = t("settings.accounts.loggedIn");
     } catch (error) {
       errorMessage = error instanceof Error ? error.message : String(error);
     } finally {
@@ -128,7 +171,7 @@
     try {
       await runtime.setDefaultAccount(account.id);
       accounts = await runtime.listAccounts();
-      notice = `默认账户已切换为「${account.username}」`;
+      notice = t("settings.accounts.defaultSwitched").replace("{name}", account.username);
     } catch (error) {
       errorMessage = error instanceof Error ? error.message : String(error);
     }
@@ -141,7 +184,7 @@
     try {
       await runtime.refreshAccountSession(account.id);
       accounts = await runtime.listAccounts();
-      notice = `「${account.username}」会话已刷新`;
+      notice = t("settings.accounts.sessionRefreshed").replace("{name}", account.username);
     } catch (error) {
       errorMessage = error instanceof Error ? error.message : String(error);
       accounts = await runtime.listAccounts();
@@ -158,7 +201,7 @@
       await runtime.removeAccount(account.id);
       pendingAccountRemove = null;
       accounts = await runtime.listAccounts();
-      notice = `已移除账户「${account.username}」`;
+      notice = t("settings.accounts.removed").replace("{name}", account.username);
     } catch (error) {
       errorMessage = error instanceof Error ? error.message : String(error);
     } finally {
@@ -170,12 +213,12 @@
     errorMessage = "";
     notice = "";
     if (!Number.isFinite(backupInterval) || backupInterval < 0 || backupInterval > 1440) {
-      errorMessage = "备份间隔必须在 0 到 1440 分钟之间";
+      errorMessage = t("settings.backup.intervalInvalid");
       return;
     }
     try {
       await runtime.setWorldBackupIntervalMinutes(Math.floor(backupInterval));
-      notice = backupInterval === 0 ? "已关闭运行期间定时备份" : `运行期间每 ${Math.floor(backupInterval)} 分钟创建增量备份`;
+      notice = backupInterval === 0 ? t("settings.backup.intervalDisabled") : t("settings.backup.intervalSaved").replace("{minutes}", String(Math.floor(backupInterval)));
     } catch (error) {
       errorMessage = error instanceof Error ? error.message : String(error);
     }
@@ -185,12 +228,12 @@
     errorMessage = "";
     notice = "";
     if (!Number.isFinite(backupKeep) || backupKeep < 1 || backupKeep > 100) {
-      errorMessage = "备份保留数量必须在 1 到 100 之间";
+      errorMessage = t("settings.backup.keepInvalid");
       return;
     }
     try {
       await runtime.setWorldBackupKeepCount(Math.floor(backupKeep));
-      notice = `每个实例最多保留 ${Math.floor(backupKeep)} 个备份`;
+      notice = t("settings.backup.keepSaved").replace("{count}", String(Math.floor(backupKeep)));
     } catch (error) {
       errorMessage = error instanceof Error ? error.message : String(error);
     }
@@ -201,16 +244,17 @@
   }
 
   function statusLabel(environment: JavaEnvironment): string {
-    if (!environment.healthy && environment.status === "ready") return "文件缺失";
-    const labels: Record<string, string> = {
-      planned: "已计划",
-      installing: "安装中",
-      ready: "已就绪",
-      missing: "缺失",
-      failed: "失败",
-      deleted: "已删除",
+    if (!environment.healthy && environment.status === "ready") return t("settings.java.status.missingFiles");
+    const keys: Record<string, string> = {
+      planned: "settings.java.status.planned",
+      installing: "settings.java.status.installing",
+      ready: "settings.java.status.ready",
+      missing: "settings.java.status.missing",
+      failed: "settings.java.status.failed",
+      deleted: "settings.java.status.deleted",
     };
-    return labels[environment.status] ?? environment.status;
+    const key = keys[environment.status];
+    return key ? t(key) : environment.status;
   }
 
   async function verify(environment: JavaEnvironment): Promise<void> {
@@ -219,8 +263,8 @@
     try {
       const healthy = await runtime.verifyJavaEnvironment(environment.id);
       notice = healthy
-        ? `${distributionName(environment)} ${environment.fullVersion} 验证通过。`
-        : `${distributionName(environment)} ${environment.fullVersion} 缺少环境文件，可在原任务中恢复或重新安装。`;
+        ? t("settings.java.verifyOk").replace("{distribution}", distributionName(environment)).replace("{version}", environment.fullVersion)
+        : t("settings.java.verifyMissing").replace("{distribution}", distributionName(environment)).replace("{version}", environment.fullVersion);
       await refresh();
     } catch (error) {
       errorMessage = error instanceof Error ? error.message : String(error);
@@ -253,7 +297,7 @@
         deleteTarget = environment;
         deleteAffected = outcome.instances;
       } else {
-        notice = `${distributionName(environment)} ${environment.fullVersion} 已删除，实例与其他环境未受影响。`;
+        notice = t("settings.java.deleted").replace("{distribution}", distributionName(environment)).replace("{version}", environment.fullVersion);
         await refresh();
       }
     } catch (error) {
@@ -269,7 +313,10 @@
     errorMessage = "";
     try {
       await runtime.deleteJavaEnvironment(deleteTarget.id, true);
-      notice = `${distributionName(deleteTarget)} ${deleteTarget.fullVersion} 已删除；受影响的 ${deleteAffected.length} 个实例在恢复或更换环境前无法启动。`;
+      notice = t("settings.java.deletedWithRefs")
+        .replace("{distribution}", distributionName(deleteTarget))
+        .replace("{version}", deleteTarget.fullVersion)
+        .replace("{count}", String(deleteAffected.length));
       deleteTarget = null;
       deleteAffected = [];
       await refresh();
@@ -285,7 +332,7 @@
     errorMessage = "";
     try {
       const restored = await runtime.restoreJavaEnvironment(environment.id);
-      notice = `${distributionName(restored)} ${restored.fullVersion} 已恢复，引用实例已指向该环境。`;
+      notice = t("settings.java.restored").replace("{distribution}", distributionName(restored)).replace("{version}", restored.fullVersion);
       await refresh();
     } catch (error) {
       errorMessage = error instanceof Error ? error.message : String(error);
@@ -302,7 +349,10 @@
     try {
       await runtime.setInstanceJavaEnvironment(assignInstance, environment.id);
       const instance = instances.find((entry) => entry.id === assignInstance);
-      notice = `已为「${instance?.name ?? assignInstance}」指派 ${distributionName(environment)} ${environment.fullVersion}。`;
+      notice = t("settings.java.assigned")
+        .replace("{name}", instance?.name ?? assignInstance)
+        .replace("{distribution}", distributionName(environment))
+        .replace("{version}", environment.fullVersion);
       assignTarget = "";
       assignInstance = "";
       await refresh();
@@ -315,90 +365,125 @@
 </script>
 
 <AppShell
-  pageTitle="设置 · Java 环境"
+  pageTitle={t("settings.pageTitle")}
   dataDirectory={settings.dataDirectory}
   activeNavigation="settings"
   navigationTargets={["home"]}
   onNavigate={(target) => target === "home" ? onOpenHome() : undefined}
-  connectionStatus="本地环境管理"
-  taskStatus={`${environments.length} 个可用环境`}
+  connectionStatus={t("settings.connectionStatus")}
+  taskStatus={t("settings.envCount").replace("{count}", String(environments.length))}
   {onMinimize}
   {onToggleMaximize}
   {onClose}
 >
   <main class="content java-content" data-scroll-region="main">
     <header class="task-center-heading">
-      <button class="button ghost compact" onclick={onBack}>返回首页</button>
+      <button class="button ghost compact" onclick={onBack}>{t("settings.back")}</button>
       <div>
-        <h1>Java 环境</h1>
-        <p>托管 Azul Zulu 环境按“发行版、完整补丁版本、架构”全局去重；删除实例不会自动删除环境。</p>
+        <h1>{t("settings.java.heading")}</h1>
+        <p>{t("settings.java.description")}</p>
       </div>
     </header>
 
     {#if errorMessage}
-      <div class="error-block" role="alert"><strong>操作未完成</strong><span>{errorMessage}</span></div>
+      <div class="error-block" role="alert"><strong>{t("settings.error.title")}</strong><span>{errorMessage}</span></div>
     {/if}
     {#if notice}
       <div class="java-notice" role="status">{notice}</div>
     {/if}
 
+    <section class="backup-settings" aria-labelledby="appearance-title">
+      <header>
+        <div>
+          <h2 id="appearance-title">{t("appearance.title")}</h2>
+          <p>{t("appearance.description")}</p>
+        </div>
+      </header>
+      <div class="backup-settings-grid">
+        <div>
+          <span>{t("appearance.themeLabel")}</span>
+          <div class="screenshot-filters" role="group" aria-label={t("appearance.themeAria")}>
+            {#each UI_THEMES as themeOption}
+              <button
+                class="filter-chip"
+                class:active={uiTheme() === themeOption.value}
+                onclick={() => void selectTheme(themeOption.value)}
+              >{t(themeOption.labelKey)}</button>
+            {/each}
+          </div>
+        </div>
+        <div>
+          <span>{t("appearance.languageLabel")}</span>
+          <div class="screenshot-filters" role="group" aria-label={t("appearance.languageAria")}>
+            {#each UI_LANGUAGES as languageOption}
+              <button
+                class="filter-chip"
+                class:active={uiLanguage() === languageOption.value}
+                onclick={() => void selectLanguage(languageOption.value)}
+              >{languageOption.label}</button>
+            {/each}
+          </div>
+        </div>
+      </div>
+    </section>
+
     <section class="backup-settings" aria-labelledby="accounts-title">
       <header>
         <div>
-          <h2 id="accounts-title">账户</h2>
-          <p>离线账户仅用于本地单人游戏；外置账户经 Authlib Injector 认证且只保存令牌。Microsoft 登录在应用注册完成后提供。</p>
+          <h2 id="accounts-title">{t("settings.accounts.title")}</h2>
+          <p>{t("settings.accounts.description")}</p>
         </div>
         <div class="local-content-actions">
-          <button class="button ghost compact" disabled={busy !== ""} onclick={() => { addForm = addForm === "offline" ? "" : "offline"; }}>添加离线账户</button>
-          <button class="button ghost compact" disabled={busy !== ""} onclick={() => { addForm = addForm === "authlib" ? "" : "authlib"; }}>添加外置账户</button>
+          <button class="button ghost compact" disabled={busy !== ""} onclick={() => { addForm = addForm === "offline" ? "" : "offline"; }}>{t("settings.accounts.addOffline")}</button>
+          <button class="button ghost compact" disabled={busy !== ""} onclick={() => { addForm = addForm === "authlib" ? "" : "authlib"; }}>{t("settings.accounts.addAuthlib")}</button>
         </div>
       </header>
       {#if addForm === "offline"}
-        <div class="account-form" role="group" aria-label="添加离线账户">
+        <div class="account-form" role="group" aria-label={t("settings.accounts.addOffline")}>
           <label>
-            <span>玩家名（3-16 位字母、数字或下划线）</span>
-            <input bind:value={offlineName} type="text" aria-label="离线玩家名" placeholder="Steve_2026" />
+            <span>{t("settings.accounts.offlineNameLabel")}</span>
+            <input bind:value={offlineName} type="text" aria-label={t("settings.accounts.offlineNameAria")} placeholder={t("settings.accounts.offlineNamePlaceholder")} />
           </label>
           <div class="local-content-actions">
-            <button class="button primary compact" disabled={busy !== "" || !offlineName.trim()} onclick={() => void submitOffline()}>{busy === "add-account" ? "正在创建" : "创建离线账户"}</button>
-            <button class="button ghost compact" disabled={busy !== ""} onclick={() => { addForm = ""; }}>取消</button>
+            <button class="button primary compact" disabled={busy !== "" || !offlineName.trim()} onclick={() => void submitOffline()}>{busy === "add-account" ? t("settings.accounts.creating") : t("settings.accounts.createOffline")}</button>
+            <button class="button ghost compact" disabled={busy !== ""} onclick={() => { addForm = ""; }}>{t("common.cancel")}</button>
           </div>
         </div>
       {:else if addForm === "authlib"}
-        <div class="account-form" role="group" aria-label="添加外置账户">
+        <div class="account-form" role="group" aria-label={t("settings.accounts.addAuthlib")}>
           <label>
-            <span>认证服务器</span>
-            <select bind:value={authlibServerChoice} aria-label="认证服务器">
+            <span>{t("settings.accounts.serverLabel")}</span>
+            <select bind:value={authlibServerChoice} aria-label={t("settings.accounts.serverLabel")}>
               <option value="littleskin">LittleSkin（littleskin.cn）</option>
-              <option value="custom">Authlib Injector · 自定义地址</option>
+              <option value="custom">{t("settings.accounts.serverCustom")}</option>
             </select>
           </label>
           {#if authlibServerChoice === "custom"}
             <label>
-              <span>服务器地址（https）</span>
-              <input bind:value={authlibUrl} type="text" aria-label="认证服务器地址" placeholder="https://example.com/api/yggdrasil" />
+              <span>{t("settings.accounts.serverUrlLabel")}</span>
+              <input bind:value={authlibUrl} type="text" aria-label={t("settings.accounts.serverUrlAria")} placeholder={t("settings.accounts.serverUrlPlaceholder")} />
             </label>
           {/if}
           <label>
-            <span>用户名</span>
-            <input bind:value={authlibUser} type="text" aria-label="外置账户用户名" autocomplete="username" />
+            <span>{t("settings.accounts.usernameLabel")}</span>
+            <input bind:value={authlibUser} type="text" aria-label={t("settings.accounts.usernameAria")} autocomplete="username" />
           </label>
           <label>
-            <span>密码（只用于本次登录，不会保存）</span>
-            <input bind:value={authlibPass} type="password" aria-label="外置账户密码" autocomplete="current-password" />
+            <span>{t("settings.accounts.passwordLabel")}</span>
+            <input bind:value={authlibPass} type="password" aria-label={t("settings.accounts.passwordAria")} autocomplete="current-password" />
           </label>
           <div class="local-content-actions">
             <button
               class="button primary compact"
               disabled={busy !== "" || !authlibUser.trim() || !authlibPass || (authlibServerChoice === "custom" && !authlibUrl.trim())}
               onclick={() => void submitAuthlib()}
-            >{busy === "add-account" ? "正在登录" : "登录并添加"}</button>
-            <button class="button ghost compact" disabled={busy !== ""} onclick={() => { addForm = ""; }}>取消</button>
+            >{busy === "add-account" ? t("settings.accounts.loggingIn") : t("settings.accounts.loginAndAdd")}</button>
+            <button class="button ghost compact" disabled={busy !== ""} onclick={() => { addForm = ""; }}>{t("common.cancel")}</button>
           </div>
         </div>
       {/if}
       {#if accounts.length === 0}
-        <div class="backup-empty-row">还没有账户。启动游戏时会自动创建一个本地离线账户。</div>
+        <div class="backup-empty-row">{t("settings.accounts.empty")}</div>
       {:else}
         <div class="backup-list">
           {#each accounts as account}
@@ -407,23 +492,23 @@
                 <div class="backup-title-line">
                   <h3>{account.username}</h3>
                   <span>{accountKindLabel(account)}</span>
-                  {#if account.isDefault}<span>默认</span>{/if}
-                  {#if account.sessionState === "expired"}<span class="account-expired">会话已过期</span>{/if}
+                  {#if account.isDefault}<span>{t("settings.accounts.defaultBadge")}</span>{/if}
+                  {#if account.sessionState === "expired"}<span class="account-expired">{t("settings.accounts.sessionExpired")}</span>{/if}
                 </div>
-                <p>{account.kind === "offline" ? "离线模式 · 无法加入正版服务器" : `${account.serverUrl ?? ""} · 令牌仅保存在本地`}</p>
+                <p>{account.kind === "offline" ? t("settings.accounts.offlineNote") : t("settings.accounts.authlibNote").replace("{url}", account.serverUrl ?? "")}</p>
               </div>
               <div class="backup-side">
                 {#if !account.isDefault}
-                  <button class="button ghost compact" disabled={busy !== ""} onclick={() => void makeDefault(account)}>设为默认</button>
+                  <button class="button ghost compact" disabled={busy !== ""} onclick={() => void makeDefault(account)}>{t("settings.accounts.makeDefault")}</button>
                 {/if}
                 {#if account.kind === "authlib"}
-                  <button class="button ghost compact" disabled={busy !== ""} onclick={() => void refreshSession(account)}>{busy === account.id ? "正在刷新" : "刷新会话"}</button>
+                  <button class="button ghost compact" disabled={busy !== ""} onclick={() => void refreshSession(account)}>{busy === account.id ? t("settings.accounts.refreshing") : t("settings.accounts.refreshSession")}</button>
                 {/if}
                 {#if pendingAccountRemove === account.id}
-                  <button class="button danger-subtle compact" disabled={busy !== ""} onclick={() => void removeAccount(account)}>确认移除</button>
-                  <button class="button ghost compact" disabled={busy !== ""} onclick={() => { pendingAccountRemove = null; }}>取消</button>
+                  <button class="button danger-subtle compact" disabled={busy !== ""} onclick={() => void removeAccount(account)}>{t("settings.accounts.confirmRemove")}</button>
+                  <button class="button ghost compact" disabled={busy !== ""} onclick={() => { pendingAccountRemove = null; }}>{t("common.cancel")}</button>
                 {:else}
-                  <button class="button danger-subtle compact" aria-label={`移除账户 ${account.username}`} disabled={busy !== ""} onclick={() => { pendingAccountRemove = account.id; }}>移除</button>
+                  <button class="button danger-subtle compact" aria-label={t("settings.accounts.removeAria").replace("{name}", account.username)} disabled={busy !== ""} onclick={() => { pendingAccountRemove = account.id; }}>{t("settings.accounts.remove")}</button>
                 {/if}
               </div>
             </article>
@@ -435,29 +520,29 @@
     <section class="backup-settings" aria-labelledby="backup-settings-title">
       <header>
         <div>
-          <h2 id="backup-settings-title">世界备份</h2>
-          <p>启动前与退出后始终创建完整备份；游戏运行期间按间隔创建只含变化的增量备份。</p>
+          <h2 id="backup-settings-title">{t("settings.backup.title")}</h2>
+          <p>{t("settings.backup.description")}</p>
         </div>
       </header>
       <div class="backup-settings-grid">
         <label>
-          <span>运行期间备份间隔（分钟，0 关闭）</span>
+          <span>{t("settings.backup.intervalLabel")}</span>
           <input
             type="number"
             min="0"
             max="1440"
-            aria-label="运行期间备份间隔（分钟）"
+            aria-label={t("settings.backup.intervalAria")}
             bind:value={backupInterval}
             onchange={() => void saveBackupInterval()}
           />
         </label>
         <label>
-          <span>每个实例保留备份数量（1–100）</span>
+          <span>{t("settings.backup.keepLabel")}</span>
           <input
             type="number"
             min="1"
             max="100"
-            aria-label="每个实例保留备份数量"
+            aria-label={t("settings.backup.keepAria")}
             bind:value={backupKeep}
             onchange={() => void saveBackupKeep()}
           />
@@ -466,7 +551,7 @@
     </section>
 
     {#if environments.length === 0 && deletedEnvironments.length === 0}
-      <section class="task-empty"><Icon name="box" size={28} /><h2>还没有托管环境</h2><p>安装第一个游戏时，MoyuMax 会自动选择并安装兼容的 Azul Zulu 环境。</p></section>
+      <section class="task-empty"><Icon name="box" size={28} /><h2>{t("settings.java.emptyTitle")}</h2><p>{t("settings.java.emptyDescription")}</p></section>
     {:else}
       <div class="task-list">
         {#each environments as environment}
@@ -481,14 +566,14 @@
             <p class="java-home"><code>{environment.homeDirectory}</code></p>
             {#if environment.referencingInstances.length > 0}
               <p class="java-refs">
-                引用实例:{environment.referencingInstances.map((entry) => entry.name).join("、")}
+                {t("settings.java.refs").replace("{names}", environment.referencingInstances.map((entry) => entry.name).join(t("settings.java.namesSeparator")))}
               </p>
             {:else}
-              <p class="java-refs muted">没有实例引用该环境。</p>
+              <p class="java-refs muted">{t("settings.java.noRefs")}</p>
             {/if}
             <div class="task-buttons">
-              <button class="button ghost compact" disabled={busy === environment.id} onclick={() => void verify(environment)}>验证</button>
-              <button class="button ghost compact" disabled={busy === environment.id} onclick={() => void openLocation(environment)}>打开位置</button>
+              <button class="button ghost compact" disabled={busy === environment.id} onclick={() => void verify(environment)}>{t("settings.java.verify")}</button>
+              <button class="button ghost compact" disabled={busy === environment.id} onclick={() => void openLocation(environment)}>{t("settings.java.openLocation")}</button>
               <button
                 class="button ghost compact"
                 disabled={busy === environment.id || instances.length === 0}
@@ -496,21 +581,21 @@
                   assignTarget = assignTarget === environment.id ? "" : environment.id;
                   assignInstance = instances[0]?.id ?? "";
                 }}
-              >设为实例环境</button>
-              <button class="button danger-subtle compact" disabled={busy === environment.id} onclick={() => void requestDelete(environment)}>删除</button>
+              >{t("settings.java.assign")}</button>
+              <button class="button danger-subtle compact" disabled={busy === environment.id} onclick={() => void requestDelete(environment)}>{t("settings.java.delete")}</button>
             </div>
             {#if assignTarget === environment.id}
-              <div class="java-assign" role="group" aria-label="选择目标实例">
+              <div class="java-assign" role="group" aria-label={t("settings.java.assignAria")}>
                 <label>
-                  目标实例
+                  {t("settings.java.assignTarget")}
                   <select bind:value={assignInstance}>
                     {#each instances as instance}
-                      <option value={instance.id}>{instance.name}（{instance.gameVersion} {instance.loaderKind}）</option>
+                      <option value={instance.id}>{t("settings.java.instanceOption").replace("{name}", instance.name).replace("{version}", instance.gameVersion).replace("{loader}", instance.loaderKind)}</option>
                     {/each}
                   </select>
                 </label>
-                <button class="button primary compact" disabled={busy === environment.id || !assignInstance} onclick={() => void applyAssignment(environment)}>确认指派</button>
-                <small>只会接受主版本一致的环境；数据库与磁盘运行时清单同步更新。</small>
+                <button class="button primary compact" disabled={busy === environment.id || !assignInstance} onclick={() => void applyAssignment(environment)}>{t("settings.java.assignConfirm")}</button>
+                <small>{t("settings.java.assignHint")}</small>
               </div>
             {/if}
           </article>
@@ -519,9 +604,9 @@
     {/if}
 
     {#if deletedEnvironments.length > 0}
-      <section class="java-deleted" aria-label="已删除的环境">
-        <h2>已删除的环境</h2>
-        <p>已删除环境的引用记录被保留；恢复由你主动触发，获取同一发行版与主版本线的最新可用补丁。</p>
+      <section class="java-deleted" aria-label={t("settings.java.deletedSectionTitle")}>
+        <h2>{t("settings.java.deletedSectionTitle")}</h2>
+        <p>{t("settings.java.deletedSectionDescription")}</p>
         <div class="task-list">
           {#each deletedEnvironments as environment}
             <article class="task-card java-card deleted">
@@ -530,13 +615,13 @@
                   <strong>{distributionName(environment)} {environment.fullVersion}</strong>
                   <small>{environment.architecture}</small>
                 </div>
-                <span class="task-state">已删除</span>
+                <span class="task-state">{t("settings.java.status.deleted")}</span>
               </header>
               {#if environment.referencingInstances.length > 0}
-                <p class="java-refs">仍被引用:{environment.referencingInstances.map((entry) => entry.name).join("、")}</p>
+                <p class="java-refs">{t("settings.java.stillReferenced").replace("{names}", environment.referencingInstances.map((entry) => entry.name).join(t("settings.java.namesSeparator")))}</p>
               {/if}
               <div class="task-buttons">
-                <button class="button primary compact" disabled={busy === environment.id} onclick={() => void restore(environment)}>一键恢复</button>
+                <button class="button primary compact" disabled={busy === environment.id} onclick={() => void restore(environment)}>{t("settings.java.restore")}</button>
               </div>
             </article>
           {/each}
@@ -549,20 +634,20 @@
     <div class="modal-backdrop" role="presentation">
       <div class="confirmation-dialog" role="dialog" aria-modal="true" aria-labelledby="delete-java-title">
         <header>
-          <h2 id="delete-java-title">删除 Java 环境</h2>
-          <p>此 Java 环境仍被实例使用。</p>
+          <h2 id="delete-java-title">{t("settings.java.deleteDialogTitle")}</h2>
+          <p>{t("settings.java.deleteDialogInUse")}</p>
         </header>
         <div class="confirmation-impact danger-impact" role="note">
-          <strong>删除后，以下实例将无法直接启动，直到恢复或选择其他环境:</strong>
+          <strong>{t("settings.java.deleteDialogImpact")}</strong>
           {#each deleteAffected as instance}
-            <span>「{instance.name}」</span>
+            <span>{t("settings.java.deleteDialogInstance").replace("{name}", instance.name)}</span>
           {/each}
-          <span>删除实例本身不会自动删除 Java；删除环境也不会删除实例。</span>
+          <span>{t("settings.java.deleteDialogNote")}</span>
         </div>
         <div class="confirmation-actions">
-          <button class="button ghost" onclick={() => { deleteTarget = null; deleteAffected = []; }}>取消</button>
+          <button class="button ghost" onclick={() => { deleteTarget = null; deleteAffected = []; }}>{t("common.cancel")}</button>
           <button class="button danger-subtle" disabled={busy === deleteTarget.id} onclick={() => void confirmDelete()}>
-            删除 {distributionName(deleteTarget)} {deleteTarget.fullVersion}
+            {t("settings.java.deleteDialogConfirm").replace("{distribution}", distributionName(deleteTarget)).replace("{version}", deleteTarget.fullVersion)}
           </button>
         </div>
       </div>

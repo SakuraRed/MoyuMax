@@ -1,6 +1,7 @@
 <script lang="ts">
   import { onMount, tick } from "svelte";
 
+  import { t } from "../i18n.svelte";
   import type {
     ContentInstallTask,
     CrashReport,
@@ -101,37 +102,37 @@
     if (instance.loaderKind === "fabric") {
       return `Fabric${instance.loaderVersion ? ` ${instance.loaderVersion}` : ""}`;
     }
-    return instance.loaderKind === "vanilla" ? "原版" : instance.loaderKind;
+    return instance.loaderKind === "vanilla" ? t("home.loader.vanilla") : instance.loaderKind;
   }
 
   function sessionStateLabel(state: LaunchSession["state"]): string {
     switch (state) {
       case "starting":
-        return "正在启动";
+        return t("home.state.starting");
       case "running":
-        return "正在运行";
+        return t("home.state.running");
       case "completed":
-        return "正常退出";
+        return t("home.state.completed");
       case "failed":
-        return "异常退出";
+        return t("home.state.failed");
       case "stopped":
-        return "已停止";
+        return t("home.state.stopped");
       case "interrupted":
-        return "启动器中断";
+        return t("home.state.interrupted");
     }
   }
 
   function backupStateLabel(backup: WorldBackupSummary | null | undefined): string {
-    if (!backup) return "未记录";
+    if (!backup) return t("home.backup.none");
     switch (backup.state) {
       case "ready":
-        return "已备份";
+        return t("home.backup.ready");
       case "skipped":
-        return "无世界";
+        return t("home.backup.skipped");
       case "failed":
-        return "备份失败";
+        return t("home.backup.failed");
       case "staging":
-        return "正在备份";
+        return t("home.backup.staging");
     }
   }
 
@@ -141,7 +142,7 @@
     actionError = "";
     try {
       await runtime.startInstance(instance.id);
-      actionMessage = `正在以本地离线身份启动「${instance.name}」`;
+      actionMessage = t("home.action.starting").replace("{name}", instance.name);
       await onStateChanged();
     } catch (error) {
       actionError = error instanceof Error ? error.message : String(error);
@@ -156,7 +157,7 @@
     actionError = "";
     try {
       await runtime.stopInstance(instance.id);
-      actionMessage = `已请求停止「${instance.name}」`;
+      actionMessage = t("home.action.stopRequested").replace("{name}", instance.name);
       await onStateChanged();
     } catch (error) {
       actionError = error instanceof Error ? error.message : String(error);
@@ -187,7 +188,7 @@
     try {
       await runtime.recycleInstance(instance.id);
       recycleCandidate = null;
-      actionMessage = `已将「${instance.name}」移入回收站，可在数据页恢复`;
+      actionMessage = t("home.action.recycled").replace("{name}", instance.name);
       await onStateChanged();
     } catch (error) {
       actionError = error instanceof Error ? error.message : String(error);
@@ -218,12 +219,12 @@
 </script>
 
 <AppShell
-  pageTitle="首页"
+  pageTitle={t("nav.home")}
   dataDirectory={settings.dataDirectory}
   searchVisible
   navigationTargets={["resources", "tasks", "data", "settings"]}
   onNavigate={(target) => target === "resources" ? onOpenResources() : target === "tasks" ? onOpenTasks() : target === "data" ? onOpenData() : target === "settings" ? onOpenSettings() : undefined}
-  taskStatus={activeLaunches.length > 0 ? `${activeLaunches.length} 个游戏正在运行` : activeTasks.length + activeContentTasks.length > 0 ? `${activeTasks.length + activeContentTasks.length} 个未完成任务` : "无活动任务"}
+  taskStatus={activeLaunches.length > 0 ? t("home.taskStatus.running").replace("{count}", String(activeLaunches.length)) : activeTasks.length + activeContentTasks.length > 0 ? t("home.taskStatus.pending").replace("{count}", String(activeTasks.length + activeContentTasks.length)) : t("shell.status.noTasks")}
   {onMinimize}
   {onToggleMaximize}
   {onClose}
@@ -231,26 +232,26 @@
   {#if instances.length === 0}
     <main class="content home-empty" bind:this={homeRoot}>
       <div class="empty-graphic" aria-hidden="true"></div>
-      <h1>从安装第一个游戏开始</h1>
-      <p>推荐稳定版会自动配好 Java、加载器和隔离环境。你不需要打开文件资源管理器、命令行或 Java 官网。</p>
-      <button class="button primary large" data-autofocus="true" onclick={onInstall}>安装第一个游戏</button>
+      <h1>{t("home.empty.title")}</h1>
+      <p>{t("home.empty.description")}</p>
+      <button class="button primary large" data-autofocus="true" onclick={onInstall}>{t("home.empty.installFirst")}</button>
       <small>
-        也可以 <button class="inline-link" disabled>导入整合包</button> 或
-        <button class="inline-link" disabled>从其他启动器迁移</button>（第二个公开版本提供）
+        {t("home.empty.altPrefix")} <button class="inline-link" disabled>{t("home.empty.importModpack")}</button> {t("home.empty.altOr")}
+        <button class="inline-link" disabled>{t("home.empty.migrate")}</button>{t("home.empty.altSuffix")}
       </small>
       {#if activeTasks.length > 0}
         {#each activeTasks.slice(0, 1) as task}
           <button class="home-task-summary" onclick={onOpenTasks}>
-            <span><strong>{task.plan.instanceName}</strong><small>{task.state === "awaitingRecovery" ? "等待恢复确认" : "安装任务已排队"}</small></span>
-            <span>{activeTasks.length} 个任务 <Icon name="arrow-right" size={14} /></span>
+            <span><strong>{task.plan.instanceName}</strong><small>{task.state === "awaitingRecovery" ? t("home.task.awaitingRecovery") : t("home.task.installQueued")}</small></span>
+            <span>{t("home.task.count").replace("{count}", String(activeTasks.length))} <Icon name="arrow-right" size={14} /></span>
           </button>
         {/each}
       {/if}
       {#if activeTasks.length === 0 && activeContentTasks.length > 0}
         {#each activeContentTasks.slice(0, 1) as task}
           <button class="home-task-summary" onclick={onOpenTasks}>
-            <span><strong>{task.plan.entries.find((entry) => entry.projectId === task.plan.rootProjectId)?.projectTitle ?? "Modrinth 内容"}</strong><small>{task.state === "awaitingRecovery" ? "等待恢复确认" : "内容安装任务已排队"}</small></span>
-            <span>{activeContentTasks.length} 个任务 <Icon name="arrow-right" size={14} /></span>
+            <span><strong>{task.plan.entries.find((entry) => entry.projectId === task.plan.rootProjectId)?.projectTitle ?? t("home.task.modrinthContent")}</strong><small>{task.state === "awaitingRecovery" ? t("home.task.awaitingRecovery") : t("home.task.contentQueued")}</small></span>
+            <span>{t("home.task.count").replace("{count}", String(activeContentTasks.length))} <Icon name="arrow-right" size={14} /></span>
           </button>
         {/each}
       {/if}
@@ -260,13 +261,13 @@
       <div class="home-scroll" data-scroll-region="main">
         <header class="home-heading">
           <div>
-            <h1>继续游戏</h1>
-            <p>本地实例无需联网即可启动。首版使用明确标注的本地离线身份。</p>
+            <h1>{t("home.heading.title")}</h1>
+            <p>{t("home.heading.description")}</p>
           </div>
-          <button class="button" onclick={onInstall}>安装其他版本</button>
+          <button class="button" onclick={onInstall}>{t("home.heading.installOther")}</button>
         </header>
 
-        <section class="instance-list" aria-label="本地游戏实例">
+        <section class="instance-list" aria-label={t("home.listAria")}>
           {#each instances as instance, index}
             {@const active = activeSession(instance.id)}
             {@const latest = latestSession(instance.id)}
@@ -277,14 +278,14 @@
                 <div class="instance-title-line">
                   <h2>{instance.name}</h2>
                   <span class:active={Boolean(active)} class="instance-state">
-                    {active ? sessionStateLabel(active.state) : instance.state === "ready" ? "可启动" : instance.state}
+                    {active ? sessionStateLabel(active.state) : instance.state === "ready" ? t("home.instance.ready") : instance.state}
                   </span>
                 </div>
-                <p>Minecraft {instance.gameVersion} · {loaderLabel(instance)} · 完全隔离</p>
-                <small>本地离线身份：MoyuMaxPlayer</small>
+                <p>{t("home.instance.summary").replace("{version}", instance.gameVersion).replace("{loader}", loaderLabel(instance))}</p>
+                <small>{t("home.instance.offlineIdentity")}</small>
                 {#if latest && !active}
-                  <small class="latest-session">最近会话：<span>{sessionStateLabel(latest.state)}</span>{#if latest.exitCode !== null} · 退出码 {latest.exitCode}{/if}</small>
-                  <small class="latest-backups">世界备份：启动前 {backupStateLabel(latest.preLaunchBackup)} · 退出后 {backupStateLabel(latest.postExitBackup)}</small>
+                  <small class="latest-session">{t("home.instance.latestSession")}<span>{sessionStateLabel(latest.state)}</span>{#if latest.exitCode !== null}{t("home.instance.exitCode").replace("{code}", String(latest.exitCode))}{/if}</small>
+                  <small class="latest-backups">{t("home.instance.latestBackups").replace("{pre}", backupStateLabel(latest.preLaunchBackup)).replace("{post}", backupStateLabel(latest.postExitBackup))}</small>
                 {/if}
               </div>
               <div class="instance-actions">
@@ -293,27 +294,27 @@
                     class="button"
                     disabled={changingInstance === instance.id}
                     onclick={() => void stop(instance)}
-                  >{changingInstance === instance.id ? "正在停止" : "停止游戏"}</button>
+                  >{changingInstance === instance.id ? t("home.launch.stopping") : t("home.launch.stop")}</button>
                 {:else}
                   <button
                     class="button primary large"
                     data-autofocus={index === 0 ? "true" : undefined}
                     disabled={changingInstance === instance.id || instance.state !== "ready"}
                     onclick={() => void start(instance)}
-                  ><Icon name="play" size={14} />{changingInstance === instance.id ? "正在启动" : "启动游戏"}</button>
+                  ><Icon name="play" size={14} />{changingInstance === instance.id ? t("home.launch.starting") : t("home.launch.start")}</button>
                 {/if}
                 {#if crashReport && !active}
-                  <button class="button crash-report-button" onclick={() => onOpenCrash(crashReport)}>查看崩溃报告</button>
+                  <button class="button crash-report-button" onclick={() => onOpenCrash(crashReport)}>{t("home.launch.crashReport")}</button>
                 {/if}
                 {#if !active}
                   <button
                     class="button danger-subtle"
-                    aria-label={`将“${instance.name}”移入回收站`}
+                    aria-label={t("home.launch.recycleAria").replace("{name}", instance.name)}
                     disabled={changingInstance === instance.id}
                     onclick={() => void askRecycle(instance)}
-                  >移入回收站</button>
+                  >{t("home.launch.recycle")}</button>
                 {/if}
-                <span>启动前将使用托管 Java</span>
+                <span>{t("home.launch.managedJava")}</span>
               </div>
             </article>
           {/each}
@@ -322,16 +323,16 @@
         {#if activeTasks.length > 0}
           {#each activeTasks.slice(0, 1) as task}
             <button class="home-task-summary home-task-wide" onclick={onOpenTasks}>
-              <span><strong>{task.plan.instanceName}</strong><small>{task.state === "awaitingRecovery" ? "等待恢复确认" : "安装任务正在处理"}</small></span>
-              <span>{activeTasks.length} 个任务 <Icon name="arrow-right" size={14} /></span>
+              <span><strong>{task.plan.instanceName}</strong><small>{task.state === "awaitingRecovery" ? t("home.task.awaitingRecovery") : t("home.task.installProcessing")}</small></span>
+              <span>{t("home.task.count").replace("{count}", String(activeTasks.length))} <Icon name="arrow-right" size={14} /></span>
             </button>
           {/each}
         {/if}
         {#if activeTasks.length === 0 && activeContentTasks.length > 0}
           {#each activeContentTasks.slice(0, 1) as task}
             <button class="home-task-summary home-task-wide" onclick={onOpenTasks}>
-              <span><strong>{task.plan.entries.find((entry) => entry.projectId === task.plan.rootProjectId)?.projectTitle ?? "Modrinth 内容"}</strong><small>{task.state === "awaitingRecovery" ? "等待恢复确认" : "内容安装任务正在处理"}</small></span>
-              <span>{activeContentTasks.length} 个任务 <Icon name="arrow-right" size={14} /></span>
+              <span><strong>{task.plan.entries.find((entry) => entry.projectId === task.plan.rootProjectId)?.projectTitle ?? t("home.task.modrinthContent")}</strong><small>{task.state === "awaitingRecovery" ? t("home.task.awaitingRecovery") : t("home.task.contentProcessing")}</small></span>
+              <span>{t("home.task.count").replace("{count}", String(activeContentTasks.length))} <Icon name="arrow-right" size={14} /></span>
             </button>
           {/each}
         {/if}
@@ -358,17 +359,17 @@
         onkeydown={handleRecycleDialogKeydown}
       >
         <header>
-          <h2 id="recycle-confirm-title">将“{recycleCandidate.name}”移入回收站？</h2>
-          <p>实例会从首页隐藏，但文件、存档和配置会保留 30 天。</p>
+          <h2 id="recycle-confirm-title">{t("home.recycle.title").replace("{name}", recycleCandidate.name)}</h2>
+          <p>{t("home.recycle.description")}</p>
         </header>
         <div class="confirmation-impact">
-          <strong>托管 Java 不会被删除</strong>
-          <span>共享游戏基础文件也会继续保留；你可以随时从数据页恢复到原位置。</span>
+          <strong>{t("home.recycle.impactTitle")}</strong>
+          <span>{t("home.recycle.impactBody")}</span>
         </div>
         <div class="confirmation-actions">
-          <button class="button" data-dialog-autofocus disabled={changingInstance === recycleCandidate.id} onclick={cancelRecycle}>取消</button>
+          <button class="button" data-dialog-autofocus disabled={changingInstance === recycleCandidate.id} onclick={cancelRecycle}>{t("common.cancel")}</button>
           <button class="button danger" disabled={changingInstance === recycleCandidate.id} onclick={() => void recycleInstance()}>
-            {changingInstance === recycleCandidate.id ? "正在移动" : "移入回收站"}
+            {changingInstance === recycleCandidate.id ? t("home.recycle.moving") : t("home.launch.recycle")}
           </button>
         </div>
       </div>

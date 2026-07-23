@@ -381,6 +381,11 @@ export interface AccountSummary {
   lastValidatedAtUnixSeconds: number | null;
 }
 
+export interface UiPreferences {
+  theme: string;
+  language: string;
+}
+
 export const LITTLESKIN_YGGDRASIL_URL = "https://littleskin.cn/api/yggdrasil";
 
 export type LaunchSessionState =
@@ -606,6 +611,9 @@ export interface MoyuRuntime {
   setDefaultAccount(accountId: string): Promise<void>;
   removeAccount(accountId: string): Promise<void>;
   refreshAccountSession(accountId: string): Promise<AccountSummary>;
+  getUiPreferences(): Promise<UiPreferences>;
+  setUiTheme(theme: string): Promise<void>;
+  setUiLanguage(language: string): Promise<void>;
   retryContentTask(taskId: string): Promise<void>;
   resolveContentTaskRecovery(taskId: string, decision: RecoveryDecision): Promise<void>;
   listInstances(): Promise<ManagedInstance[]>;
@@ -837,6 +845,9 @@ function createTauriRuntime(): MoyuRuntime {
     removeAccount: (accountId) => invoke<void>("remove_account", { accountId }),
     refreshAccountSession: (accountId) =>
       invoke<AccountSummary>("refresh_account_session", { accountId }),
+    getUiPreferences: () => invoke<UiPreferences>("get_ui_preferences"),
+    setUiTheme: (theme) => invoke<void>("set_ui_theme", { theme }),
+    setUiLanguage: (language) => invoke<void>("set_ui_language", { language }),
     retryContentTask: (taskId) => invoke<void>("retry_content_task", { taskId }),
     resolveContentTaskRecovery: (taskId, decision) =>
       invoke<void>("resolve_content_task_recovery", { taskId, decision }),
@@ -1512,6 +1523,28 @@ function createBrowserRuntime(): MoyuRuntime {
       account.lastValidatedAtUnixSeconds = Math.floor(Date.now() / 1000);
       window.localStorage.setItem(BROWSER_ACCOUNTS_KEY, JSON.stringify(accounts));
       return account;
+    },
+    async getUiPreferences() {
+      const serialized = window.localStorage.getItem("moyumax.browser.uiPreferences");
+      return serialized
+        ? (JSON.parse(serialized) as UiPreferences)
+        : { theme: "system", language: "zh-CN" };
+    },
+    async setUiTheme(theme) {
+      const preferences = await this.getUiPreferences();
+      preferences.theme = theme;
+      window.localStorage.setItem(
+        "moyumax.browser.uiPreferences",
+        JSON.stringify(preferences),
+      );
+    },
+    async setUiLanguage(language) {
+      const preferences = await this.getUiPreferences();
+      preferences.language = language;
+      window.localStorage.setItem(
+        "moyumax.browser.uiPreferences",
+        JSON.stringify(preferences),
+      );
     },
     async listInstanceScreenshots(instanceId) {
       return browserScreenshots()[instanceId] ?? [];

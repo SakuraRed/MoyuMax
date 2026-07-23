@@ -1,6 +1,7 @@
 <script lang="ts">
   import type { Snippet } from "svelte";
 
+  import { t, uiTheme } from "../i18n.svelte";
   import Icon from "./Icon.svelte";
 
   type NavigationKey = "home" | "instances" | "resources" | "tasks" | "data" | "settings";
@@ -31,8 +32,8 @@
     navigationDisabled = false,
     activeNavigation = "home",
     navigationTargets = [],
-    connectionStatus = "本地模式 · 未进行联网检查",
-    taskStatus = "无活动任务",
+    connectionStatus = t("shell.status.defaultConnection"),
+    taskStatus = t("shell.status.noTasks"),
     onMinimize,
     onToggleMaximize,
     onClose,
@@ -40,16 +41,16 @@
   }: Props = $props();
 
   const navigation = [
-    { key: "home" as const, name: "home" as const, label: "首页" },
-    { key: "instances" as const, name: "box" as const, label: "实例" },
-    { key: "resources" as const, name: "compass" as const, label: "资源" },
-    { key: "tasks" as const, name: "task" as const, label: "任务" },
-    { key: "data" as const, name: "database" as const, label: "数据" },
-    { key: "settings" as const, name: "settings" as const, label: "设置" },
+    { key: "home" as const, name: "home" as const, labelKey: "nav.home" },
+    { key: "instances" as const, name: "box" as const, labelKey: "nav.instances" },
+    { key: "resources" as const, name: "compass" as const, labelKey: "nav.resources" },
+    { key: "tasks" as const, name: "task" as const, labelKey: "nav.tasks" },
+    { key: "data" as const, name: "database" as const, labelKey: "nav.data" },
+    { key: "settings" as const, name: "settings" as const, labelKey: "nav.settings" },
   ];
 </script>
 
-<div class="window" data-theme="system">
+<div class="window" data-theme={uiTheme()}>
   <header class="titlebar" data-tauri-drag-region>
     <span class="brand-mark">M</span>
     <span class="titlebar-name">
@@ -57,32 +58,32 @@
     </span>
     <span class="titlebar-spacer" data-tauri-drag-region></span>
     <div class="window-controls">
-      <button aria-label="最小化" onclick={() => void onMinimize()}><span class="minimize-glyph"></span></button>
-      <button aria-label="最大化或还原" onclick={() => void onToggleMaximize()}><span class="maximize-glyph"></span></button>
-      <button class="close" aria-label="关闭" onclick={() => void onClose()}><span class="close-glyph"></span></button>
+      <button aria-label={t("shell.window.minimize")} onclick={() => void onMinimize()}><span class="minimize-glyph"></span></button>
+      <button aria-label={t("shell.window.maximize")} onclick={() => void onToggleMaximize()}><span class="maximize-glyph"></span></button>
+      <button class="close" aria-label={t("shell.window.close")} onclick={() => void onClose()}><span class="close-glyph"></span></button>
     </div>
   </header>
 
   <div class="app-body">
-    <nav class:nav-disabled={navigationDisabled} class="navrail" aria-label="主导航">
+    <nav class:nav-disabled={navigationDisabled} class="navrail" aria-label={t("shell.navAria")}>
       {#each navigation as item}
         {@const active = item.key === activeNavigation}
         <button
           class:active
           class="nav-item"
-          aria-label={item.label}
+          aria-label={t(item.labelKey)}
           aria-current={active ? "page" : undefined}
           disabled={navigationDisabled || (!active && !navigationTargets.includes(item.key))}
           onclick={() => onNavigate?.(item.key)}
         >
           <Icon name={item.name} />
-          <span>{item.label}</span>
+          <span>{t(item.labelKey)}</span>
         </button>
       {/each}
       <span class="nav-spacer"></span>
-      <button class="account" aria-label="添加账户" disabled>
+      <button class="account" aria-label={t("shell.account.aria")} disabled>
         <span class="avatar">?</span>
-        <span><strong>未登录</strong><small>点击添加账户</small></span>
+        <span><strong>{t("shell.account.notLoggedIn")}</strong><small>{t("shell.account.addHint")}</small></span>
       </button>
     </nav>
 
@@ -90,9 +91,9 @@
       <header class="topbar">
         <strong>{pageTitle}</strong>
         {#if searchVisible}
-          <button class="searchbox" aria-label="全局搜索" disabled>
+          <button class="searchbox" aria-label={t("shell.search.aria")} disabled>
             <Icon name="search" size={14} />
-            <span>搜索实例、内容、设置…</span>
+            <span>{t("shell.search.placeholder")}</span>
             <kbd>Ctrl K</kbd>
           </button>
         {/if}
@@ -104,7 +105,7 @@
         <span><Icon name="wifi" size={12} /> {connectionStatus}</span>
         <span>{taskStatus}</span>
         <span class="status-right">
-          <Icon name="disk" size={12} /> 数据 {dataDirectory}<b>v0.1.0-preview.1</b>
+          <Icon name="disk" size={12} /> {t("shell.statusbar.data")} {dataDirectory}<b>v0.1.0-preview.1</b>
         </span>
       </footer>
     </section>

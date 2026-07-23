@@ -3530,6 +3530,31 @@ summary:focus-visible {
   }
 }
 
+.window[data-theme="light"] {
+  --bg-window: #f3f2ee;
+  --bg-app: #faf9f6;
+  --bg-nav: #efeee9;
+  --bg-statusbar: #e9e8e2;
+  --surface: #fff;
+  --surface-2: #f1f0ec;
+  --surface-3: #e6e5df;
+  --border: #dcdad2;
+  --border-strong: #c4c2b8;
+  --text: #1d1d1f;
+  --text-2: #54545c;
+  --text-3: #74747c;
+  --accent: #3e7c33;
+  --accent-strong: #356d2b;
+  --on-accent: #fff;
+  --accent-dim: rgb(62 124 51 / 10%);
+  --danger: #c2402f;
+  --danger-dim: rgb(194 64 47 / 9%);
+  --warn: #9a6a14;
+  --warn-dim: rgb(154 106 20 / 10%);
+  --info: #2d6fbb;
+  --focus-ring: #2f6626;
+}
+
 @media (max-width: 1050px) {
   .navrail {
     width: 72px;

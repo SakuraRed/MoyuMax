@@ -2,6 +2,7 @@
   import { onMount } from "svelte";
 
   import { describeExitImpact } from "../close-flow";
+  import { t } from "../i18n.svelte";
   import type { ExitImpact, WindowCloseAction } from "../runtime";
 
   interface Props {
@@ -77,35 +78,35 @@
   >
     {#if mode === "choice"}
       <header>
-        <h2 id="close-dialog-title">关闭 MoyuMax</h2>
-        <p>这是你第一次关闭主窗口，选择默认行为：</p>
+        <h2 id="close-dialog-title">{t("close.choice.title")}</h2>
+        <p>{t("close.choice.description")}</p>
       </header>
 
-      <div class="close-options" role="radiogroup" aria-label="关闭窗口行为">
+      <div class="close-options" role="radiogroup" aria-label={t("close.choice.groupAria")}>
         <label class:selected={selected === "minimize"} class="close-option">
           <input type="radio" name="close-action" value="minimize" bind:group={selected} />
           <span class="close-option-copy">
-            <strong>最小化到系统托盘 <em class="close-default-tag">默认</em></strong>
-            <small>后台任务继续运行，双击托盘图标即刻恢复窗口</small>
+            <strong>{t("close.choice.minimize.title")} <em class="close-default-tag">{t("close.choice.minimize.defaultTag")}</em></strong>
+            <small>{t("close.choice.minimize.description")}</small>
           </span>
         </label>
         <label class:selected={selected === "exit"} class="close-option">
           <input type="radio" name="close-action" value="exit" bind:group={selected} />
           <span class="close-option-copy">
-            <strong>退出 MoyuMax</strong>
-            <small>进行中的下载暂停并可在下次启动时恢复；正在运行的游戏先安全终止并完成退出备份</small>
+            <strong>{t("close.choice.exit.title")}</strong>
+            <small>{t("close.choice.exit.description")}</small>
           </span>
         </label>
       </div>
 
       <label class="close-remember">
         <input type="checkbox" bind:checked={remember} />
-        <span>记住本次选择，之后关闭窗口不再询问</span>
+        <span>{t("close.choice.remember")}</span>
       </label>
 
       {#if hasRunningGame}
         <div class="confirmation-impact danger-impact" role="note">
-          <strong>退出前请注意</strong>
+          <strong>{t("close.choice.warningTitle")}</strong>
           {#each impactLines.filter((line) => line.danger) as line}
             <span>{line.text}</span>
           {/each}
@@ -113,42 +114,42 @@
       {/if}
 
       <div class="confirmation-actions">
-        <button class="button ghost" onclick={onCancel}>取消</button>
+        <button class="button ghost" onclick={onCancel}>{t("common.cancel")}</button>
         <button
           class="button primary close-dialog-primary"
           onclick={() => onConfirm(selected, remember)}
-        >确定</button>
+        >{t("close.choice.confirm")}</button>
       </div>
     {:else}
       <header>
-        <h2 id="close-dialog-title">退出 MoyuMax</h2>
-        <p>退出前请确认以下影响：</p>
+        <h2 id="close-dialog-title">{t("close.impact.title")}</h2>
+        <p>{t("close.impact.description")}</p>
       </header>
 
       <div class="confirmation-impact danger-impact" role="note">
-        <strong>退出将产生以下影响</strong>
+        <strong>{t("close.impact.listTitle")}</strong>
         {#each impactLines as line}
           <span>{line.text}</span>
         {/each}
       </div>
 
       {#if busy}
-        <p class="close-busy" role="status">正在安全终止游戏并完成退出备份…</p>
+        <p class="close-busy" role="status">{t("close.impact.busy")}</p>
       {/if}
       {#if errorMessage}
         <div class="error-block" role="alert">
-          <strong>无法在规定时间内安全退出</strong>
+          <strong>{t("close.impact.errorTitle")}</strong>
           <span>{errorMessage}</span>
         </div>
       {/if}
 
       <div class="confirmation-actions">
-        <button class="button ghost" disabled={busy} onclick={onCancel}>取消</button>
+        <button class="button ghost" disabled={busy} onclick={onCancel}>{t("common.cancel")}</button>
         {#if errorMessage}
-          <button class="button danger-subtle" onclick={onForceExit}>仍然退出(强制)</button>
+          <button class="button danger-subtle" onclick={onForceExit}>{t("close.impact.forceExit")}</button>
         {/if}
         <button class="button primary close-dialog-primary" disabled={busy} onclick={onConfirmExit}>
-          确认退出
+          {t("close.impact.confirmExit")}
         </button>
       </div>
     {/if}

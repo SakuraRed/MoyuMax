@@ -12,6 +12,8 @@ const SETTING_WINDOW_CLOSE_BEHAVIOR: &str = "window_close_behavior";
 const SETTING_SHELL_STATE: &str = "shell_state";
 const SETTING_TASKS_PAUSED: &str = "tasks_paused";
 const SETTING_DOWNLOAD_SPEED_LIMIT: &str = "download_speed_limit_bytes";
+const SETTING_UI_THEME: &str = "ui_theme";
+const SETTING_UI_LANGUAGE: &str = "ui_language";
 
 /// 关闭主窗口时的行为。默认每次询问。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
@@ -181,6 +183,44 @@ impl AppService {
             SETTING_TASKS_PAUSED,
             if paused { "true" } else { "false" },
         )?;
+        Ok(())
+    }
+
+    /// 界面主题：system（跟随系统）、light、dark。
+    pub fn ui_theme(&self) -> Result<String> {
+        let connection = self.connection()?;
+        Ok(read_setting(&connection, SETTING_UI_THEME)?
+            .filter(|value| matches!(value.as_str(), "system" | "light" | "dark"))
+            .unwrap_or_else(|| "system".to_owned()))
+    }
+
+    pub fn set_ui_theme(&self, theme: &str) -> Result<()> {
+        if !matches!(theme, "system" | "light" | "dark") {
+            return Err(CoreError::Content(
+                "主题必须是 system、light 或 dark".to_owned(),
+            ));
+        }
+        let connection = self.connection()?;
+        write_setting(&connection, SETTING_UI_THEME, theme)?;
+        Ok(())
+    }
+
+    /// 界面语言：zh-CN、zh-TW、en。
+    pub fn ui_language(&self) -> Result<String> {
+        let connection = self.connection()?;
+        Ok(read_setting(&connection, SETTING_UI_LANGUAGE)?
+            .filter(|value| matches!(value.as_str(), "zh-CN" | "zh-TW" | "en"))
+            .unwrap_or_else(|| "zh-CN".to_owned()))
+    }
+
+    pub fn set_ui_language(&self, language: &str) -> Result<()> {
+        if !matches!(language, "zh-CN" | "zh-TW" | "en") {
+            return Err(CoreError::Content(
+                "语言必须是 zh-CN、zh-TW 或 en".to_owned(),
+            ));
+        }
+        let connection = self.connection()?;
+        write_setting(&connection, SETTING_UI_LANGUAGE, language)?;
         Ok(())
     }
 

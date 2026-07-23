@@ -12,6 +12,7 @@
   import SettingsCenter from "./components/SettingsCenter.svelte";
   import TaskCenter from "./components/TaskCenter.svelte";
   import { impactRequiresConfirmation, routeCloseRequest } from "./close-flow";
+  import { applyUiPreferences } from "./i18n.svelte";
   import { createRuntime } from "./runtime";
   import type {
     BootstrapState,
@@ -92,6 +93,7 @@
         shellState,
         pendingIntent,
         paused,
+        uiPreferences,
       ] =
         await Promise.all([
           runtime.getBootstrapState(),
@@ -104,6 +106,7 @@
           runtime.getShellState(),
           runtime.takePendingIntent(),
           runtime.getTasksPaused(),
+          runtime.getUiPreferences(),
         ]);
       bootstrap = bootstrapState;
       settings = bootstrap.settings ?? bootstrap.defaults;
@@ -113,6 +116,10 @@
       launchSessions = initialSessions;
       crashReports = initialCrashReports;
       tasksPaused = paused;
+      applyUiPreferences({
+        theme: uiPreferences.theme === "light" || uiPreferences.theme === "dark" ? uiPreferences.theme : "system",
+        language: uiPreferences.language === "zh-TW" || uiPreferences.language === "en" ? uiPreferences.language : "zh-CN",
+      });
       if (bootstrap.requiresOnboarding) {
         phase = "onboarding";
       } else if (startupKind === "wake") {

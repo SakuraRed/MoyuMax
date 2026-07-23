@@ -362,6 +362,13 @@ struct WorldBackupSettings {
 
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
+struct UiPreferences {
+    theme: String,
+    language: String,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
 struct DiagnosticExportPreviewResponse {
     id: String,
     #[serde(flatten)]
@@ -905,6 +912,28 @@ async fn refresh_account_session(
     service
         .refresh_account_session(&account_id)
         .await
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+fn get_ui_preferences(service: State<'_, AppService>) -> Result<UiPreferences, String> {
+    Ok(UiPreferences {
+        theme: service.ui_theme().map_err(|error| error.to_string())?,
+        language: service.ui_language().map_err(|error| error.to_string())?,
+    })
+}
+
+#[tauri::command]
+fn set_ui_theme(service: State<'_, AppService>, theme: String) -> Result<(), String> {
+    service
+        .set_ui_theme(&theme)
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+fn set_ui_language(service: State<'_, AppService>, language: String) -> Result<(), String> {
+    service
+        .set_ui_language(&language)
         .map_err(|error| error.to_string())
 }
 
@@ -1545,6 +1574,9 @@ pub fn run() {
             set_default_account,
             remove_account,
             refresh_account_session,
+            get_ui_preferences,
+            set_ui_theme,
+            set_ui_language,
             retry_content_task,
             resolve_content_task_recovery,
             list_instances,
