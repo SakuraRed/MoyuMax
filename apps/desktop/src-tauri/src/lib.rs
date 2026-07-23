@@ -8,15 +8,15 @@ use std::{
 };
 
 use moyumax_core::{
-    AppService, BootstrapState, ContentExecutor, ContentInstallPlan, ContentInstallTask,
-    CrashReportSummary, DiagnosticExportPreview, DiagnosticExportResult, DownloadInterrupt,
-    ExitImpactSummary, FabricLoaderSummary, InstallExecutor, InstallSelection, InstallTask,
-    InstalledContent, InstanceIsolation, JavaArchitecture, JavaDistribution, LaunchAccount,
-    LaunchExecution, LaunchOptions, LaunchSessionSummary, ManagedInstanceSummary, MetadataClient,
-    ModrinthClient, ModrinthSearchPage, ModrinthSearchQuery, OnboardingSelection, RecoveryDecision,
-    RecycleBinItem, RecyclePurgeResult, ResolvedInstallRequest, ResolvedLoader, ShellState,
-    SourcePolicy, TaskState, VersionCatalog, WindowCloseBehavior, WorldBackupSummary,
-    run_launch_execution,
+    AppService, ArtifactDownloader, BootstrapState, ContentExecutor, ContentInstallPlan,
+    ContentInstallTask, CrashReportSummary, DiagnosticExportPreview, DiagnosticExportResult,
+    DownloadInterrupt, ExitImpactSummary, FabricLoaderSummary, InstallExecutor, InstallSelection,
+    InstallTask, InstalledContent, InstanceIsolation, JavaArchitecture, JavaDeleteOutcome,
+    JavaDistribution, JavaEnvironmentSummary, LaunchAccount, LaunchExecution, LaunchOptions,
+    LaunchSessionSummary, ManagedInstanceSummary, MetadataClient, ModrinthClient,
+    ModrinthSearchPage, ModrinthSearchQuery, OnboardingSelection, RecoveryDecision, RecycleBinItem,
+    RecyclePurgeResult, ResolvedInstallRequest, ResolvedLoader, ShellState, SourcePolicy,
+    TaskState, VersionCatalog, WindowCloseBehavior, WorldBackupSummary, run_launch_execution,
 };
 use serde::Serialize;
 use tauri::{Emitter, Manager, State};
@@ -872,6 +872,104 @@ fn resume_all_tasks(
     tasks.resume_all(&service)
 }
 
+#[tauri::command]
+fn list_java_environments(
+    service: State<'_, AppService>,
+) -> Result<Vec<JavaEnvironmentSummary>, String> {
+    service
+        .list_java_environments()
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+fn list_deleted_java_environments(
+    service: State<'_, AppService>,
+) -> Result<Vec<JavaEnvironmentSummary>, String> {
+    service
+        .list_deleted_java_environments()
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+fn delete_java_environment(
+    service: State<'_, AppService>,
+    environment_id: String,
+    force: bool,
+) -> Result<JavaDeleteOutcome, String> {
+    service
+        .delete_java_environment(&environment_id, force)
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+fn verify_java_environment(
+    service: State<'_, AppService>,
+    environment_id: String,
+) -> Result<bool, String> {
+    service
+        .verify_java_environment(&environment_id)
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+async fn restore_java_environment(
+    service: State<'_, AppService>,
+    metadata: State<'_, MetadataClient>,
+    environment_id: String,
+) -> Result<JavaEnvironmentSummary, String> {
+    let package = service
+        .resolve_java_restore_package(&metadata, &environment_id)
+        .await
+        .map_err(|error| error.to_string())?;
+    let downloader = ArtifactDownloader::new(4).map_err(|error| error.to_string())?;
+    service
+        .restore_java_environment(&package, &downloader, &environment_id)
+        .await
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+fn set_instance_java_environment(
+    service: State<'_, AppService>,
+    instance_id: String,
+    environment_id: String,
+) -> Result<(), String> {
+    service
+        .set_instance_java_environment(&instance_id, &environment_id)
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+fn open_java_location(
+    service: State<'_, AppService>,
+    environment_id: String,
+) -> Result<(), String> {
+    let home = service
+        .list_java_environments()
+        .map_err(|error| error.to_string())?
+        .into_iter()
+        .find(|environment| environment.id == environment_id)
+        .map(|environment| environment.home_directory)
+        .or_else(|| {
+            service
+                .list_deleted_java_environments()
+                .ok()?
+                .into_iter()
+                .find(|environment| environment.id == environment_id)
+                .map(|environment| environment.home_directory)
+        })
+        .ok_or_else(|| "Java 环境不存在".to_owned())?;
+    let path = std::path::Path::new(&home);
+    if !path.is_dir() {
+        return Err("环境位置不存在或已删除".to_owned());
+    }
+    std::process::Command::new("explorer.exe")
+        .arg(path)
+        .spawn()
+        .map_err(|error| format!("无法打开环境位置：{error}"))?;
+    Ok(())
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
@@ -973,6 +1071,13 @@ pub fn run() {
             persist_shell_state,
             get_window_startup_kind,
             take_pending_intent,
+            list_java_environments,
+            list_deleted_java_environments,
+            delete_java_environment,
+            verify_java_environment,
+            restore_java_environment,
+            set_instance_java_environment,
+            open_java_location,
             get_download_source_policy,
             set_download_source_policy,
             get_tasks_paused,

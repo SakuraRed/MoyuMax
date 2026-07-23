@@ -9,6 +9,7 @@
   import Home from "./components/Home.svelte";
   import Onboarding from "./components/Onboarding.svelte";
   import ResourceCenter from "./components/ResourceCenter.svelte";
+  import SettingsCenter from "./components/SettingsCenter.svelte";
   import TaskCenter from "./components/TaskCenter.svelte";
   import { impactRequiresConfirmation, routeCloseRequest } from "./close-flow";
   import { createRuntime } from "./runtime";
@@ -26,7 +27,7 @@
   } from "./runtime";
   import { isRestorablePage, sanitizeShellState } from "./shell-state";
 
-  type Phase = "loading" | "onboarding" | "home" | "install" | "resources" | "tasks" | "data" | "crash" | "fatal";
+  type Phase = "loading" | "onboarding" | "home" | "install" | "resources" | "tasks" | "data" | "crash" | "settings" | "fatal";
 
   const runtime = createRuntime();
   let phase = $state<Phase>("loading");
@@ -284,6 +285,11 @@
     phase = "data";
   }
 
+  function openSettings(): void {
+    notice = "";
+    phase = "settings";
+  }
+
   async function toggleTasksPaused(): Promise<void> {
     try {
       if (tasksPaused) {
@@ -393,6 +399,7 @@
     onOpenTasks={() => phase = "tasks"}
     onOpenResources={() => phase = "resources"}
     onOpenData={openData}
+    onOpenSettings={openSettings}
     onOpenCrash={openCrashReport}
     onStateChanged={refreshHomeState}
     onMinimize={() => runtime.minimizeWindow()}
@@ -443,6 +450,16 @@
     onOpenResources={() => phase = "resources"}
     onOpenTasks={() => phase = "tasks"}
     onInstancesChanged={refreshHomeState}
+    onMinimize={() => runtime.minimizeWindow()}
+    onToggleMaximize={() => runtime.toggleMaximizeWindow()}
+    onClose={() => runtime.closeWindow()}
+  />
+{:else if phase === "settings" && settings}
+  <SettingsCenter
+    {runtime}
+    {settings}
+    onBack={() => void returnHome()}
+    onOpenHome={() => void returnHome()}
     onMinimize={() => runtime.minimizeWindow()}
     onToggleMaximize={() => runtime.toggleMaximizeWindow()}
     onClose={() => runtime.closeWindow()}

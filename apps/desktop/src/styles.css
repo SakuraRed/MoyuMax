@@ -2745,6 +2745,87 @@ summary:focus-visible {
   line-height: 1.5;
 }
 
+.java-notice {
+  margin: 0 0 12px;
+  padding: 10px 14px;
+  border: 1px solid var(--accent);
+  border-radius: 8px;
+  background: var(--accent-dim);
+  color: var(--text);
+  font-size: 12.5px;
+}
+
+.java-card .java-home {
+  margin: 6px 0 0;
+  color: var(--text-3);
+  font-size: 11.5px;
+  word-break: break-all;
+}
+
+.java-card .java-refs {
+  margin: 8px 0 0;
+  color: var(--text-2);
+  font-size: 12.5px;
+}
+
+.java-card .java-refs.muted {
+  color: var(--text-3);
+}
+
+.java-card .task-state.java-missing {
+  border-color: var(--warn);
+  color: var(--warn);
+}
+
+.java-card.deleted {
+  opacity: 0.85;
+}
+
+.java-assign {
+  display: grid;
+  gap: 8px;
+  margin-top: 10px;
+  padding: 12px 14px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface-2);
+}
+
+.java-assign label {
+  display: grid;
+  gap: 4px;
+  color: var(--text-2);
+  font-size: 12.5px;
+}
+
+.java-assign select {
+  padding: 6px 8px;
+  border: 1px solid var(--border-strong);
+  border-radius: 6px;
+  background: var(--surface);
+  color: var(--text);
+}
+
+.java-assign small {
+  color: var(--text-3);
+  font-size: 11.5px;
+}
+
+.java-deleted {
+  margin-top: 18px;
+}
+
+.java-deleted > h2 {
+  margin: 0 0 4px;
+  font-size: 15px;
+}
+
+.java-deleted > p {
+  margin: 0 0 12px;
+  color: var(--text-2);
+  font-size: 12.5px;
+}
+
 .task-source {
   margin: 8px 0 0;
   padding: 6px 10px;

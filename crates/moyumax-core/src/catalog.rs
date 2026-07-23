@@ -784,7 +784,7 @@ impl MetadataClient {
         Ok((profile, version_json, installer_sha1, installer_size))
     }
 
-    async fn resolve_zulu_jdk(&self, java_major: u16) -> Result<ResolvedJavaPackage> {
+    pub async fn resolve_zulu_jdk(&self, java_major: u16) -> Result<ResolvedJavaPackage> {
         let list_url = format!(
             "{AZUL_META_BASE_URL}/packages/?java_version={java_major}&os=windows&arch=x86&archive_type=zip&java_package_type=jdk&release_status=ga&availability_types=CA&latest=true&page_size=1"
         );

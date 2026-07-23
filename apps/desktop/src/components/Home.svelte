@@ -27,6 +27,7 @@
     onOpenTasks: () => void;
     onOpenResources: () => void;
     onOpenData: () => void;
+    onOpenSettings: () => void;
     onOpenCrash: (report: CrashReport) => void;
     onStateChanged: () => Promise<void>;
     onMinimize: () => Promise<void>;
@@ -47,6 +48,7 @@
     onOpenTasks,
     onOpenResources,
     onOpenData,
+    onOpenSettings,
     onOpenCrash,
     onStateChanged,
     onMinimize,
@@ -219,8 +221,8 @@
   pageTitle="首页"
   dataDirectory={settings.dataDirectory}
   searchVisible
-  navigationTargets={["resources", "tasks", "data"]}
-  onNavigate={(target) => target === "resources" ? onOpenResources() : target === "tasks" ? onOpenTasks() : target === "data" ? onOpenData() : undefined}
+  navigationTargets={["resources", "tasks", "data", "settings"]}
+  onNavigate={(target) => target === "resources" ? onOpenResources() : target === "tasks" ? onOpenTasks() : target === "data" ? onOpenData() : target === "settings" ? onOpenSettings() : undefined}
   taskStatus={activeLaunches.length > 0 ? `${activeLaunches.length} 个游戏正在运行` : activeTasks.length + activeContentTasks.length > 0 ? `${activeTasks.length + activeContentTasks.length} 个未完成任务` : "无活动任务"}
   {onMinimize}
   {onToggleMaximize}

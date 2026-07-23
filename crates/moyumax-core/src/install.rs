@@ -56,17 +56,17 @@ pub enum JavaDistribution {
 }
 
 impl JavaDistribution {
-    fn database_value(self) -> &'static str {
+    pub(crate) fn database_value(self) -> &'static str {
         match self {
             Self::AzulZulu => "azul-zulu",
         }
     }
 
-    fn directory_name(self) -> &'static str {
+    pub(crate) fn directory_name(self) -> &'static str {
         self.database_value()
     }
 
-    fn from_database(value: &str) -> Result<Self> {
+    pub(crate) fn from_database(value: &str) -> Result<Self> {
         match value {
             "azul-zulu" => Ok(Self::AzulZulu),
             _ => Err(CoreError::InvalidStoredState(format!(
@@ -83,13 +83,13 @@ pub enum JavaArchitecture {
 }
 
 impl JavaArchitecture {
-    fn database_value(self) -> &'static str {
+    pub(crate) fn database_value(self) -> &'static str {
         match self {
             Self::X64 => "x64",
         }
     }
 
-    fn from_database(value: &str) -> Result<Self> {
+    pub(crate) fn from_database(value: &str) -> Result<Self> {
         match value {
             "x64" => Ok(Self::X64),
             _ => Err(CoreError::InvalidStoredState(format!(
@@ -107,26 +107,29 @@ pub enum JavaEnvironmentStatus {
     Ready,
     Missing,
     Failed,
+    Deleted,
 }
 
 impl JavaEnvironmentStatus {
-    fn database_value(self) -> &'static str {
+    pub(crate) fn database_value(self) -> &'static str {
         match self {
             Self::Planned => "planned",
             Self::Installing => "installing",
             Self::Ready => "ready",
             Self::Missing => "missing",
             Self::Failed => "failed",
+            Self::Deleted => "deleted",
         }
     }
 
-    fn from_database(value: &str) -> Result<Self> {
+    pub(crate) fn from_database(value: &str) -> Result<Self> {
         match value {
             "planned" => Ok(Self::Planned),
             "installing" => Ok(Self::Installing),
             "ready" => Ok(Self::Ready),
             "missing" => Ok(Self::Missing),
             "failed" => Ok(Self::Failed),
+            "deleted" => Ok(Self::Deleted),
             _ => Err(CoreError::InvalidStoredState(format!(
                 "未知 Java 环境状态：{value}"
             ))),
@@ -241,7 +244,7 @@ pub enum InstallStage {
 }
 
 impl InstallStage {
-    fn database_value(self) -> &'static str {
+    pub(crate) fn database_value(self) -> &'static str {
         match self {
             Self::Prepare => "prepare",
             Self::DownloadGameFiles => "download_game_files",
@@ -253,7 +256,7 @@ impl InstallStage {
         }
     }
 
-    fn from_database(value: &str) -> Result<Self> {
+    pub(crate) fn from_database(value: &str) -> Result<Self> {
         match value {
             "prepare" => Ok(Self::Prepare),
             "download_game_files" => Ok(Self::DownloadGameFiles),
@@ -1212,7 +1215,11 @@ fn plan_java_action(
                     target_directory: environment.home_directory,
                 }
             }
-            JavaEnvironmentStatus::Missing | JavaEnvironmentStatus::Failed => {
+            JavaEnvironmentStatus::Missing
+            | JavaEnvironmentStatus::Failed
+            | JavaEnvironmentStatus::Deleted => {
+                // 显式新安装可重新下载同一身份;墓碑不会被静默复用,
+                // 恢复已删环境属于用户在环境页主动发起的恢复,不走此路径。
                 transaction.execute(
                     "UPDATE managed_java_environments SET status = 'planned' WHERE id = ?1",
                     params![environment.id],

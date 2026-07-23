@@ -395,6 +395,35 @@ export interface DiagnosticExportResult {
   fileCount: number;
 }
 
+export type JavaEnvironmentStatus =
+  | "planned"
+  | "installing"
+  | "ready"
+  | "missing"
+  | "failed"
+  | "deleted";
+
+export interface ReferencingInstance {
+  id: string;
+  name: string;
+}
+
+export interface JavaEnvironment {
+  id: string;
+  distribution: "azulZulu";
+  fullVersion: string;
+  architecture: "x64";
+  homeDirectory: string;
+  status: JavaEnvironmentStatus;
+  sizeBytes: number;
+  healthy: boolean;
+  referencingInstances: ReferencingInstance[];
+}
+
+export type JavaDeleteOutcome =
+  | { kind: "deleted"; filesRemoved: boolean }
+  | { kind: "requiresConfirmation"; instances: ReferencingInstance[] };
+
 export type WindowCloseBehavior = "ask" | "minimizeToTray" | "exit";
 export type WindowCloseAction = "minimize" | "exit";
 
@@ -485,6 +514,13 @@ export interface MoyuRuntime {
   resumeAllTasks(): Promise<void>;
   getDownloadSourcePolicy(): Promise<SourcePolicy>;
   setDownloadSourcePolicy(policy: SourcePolicy): Promise<void>;
+  listJavaEnvironments(): Promise<JavaEnvironment[]>;
+  listDeletedJavaEnvironments(): Promise<JavaEnvironment[]>;
+  deleteJavaEnvironment(environmentId: string, force: boolean): Promise<JavaDeleteOutcome>;
+  verifyJavaEnvironment(environmentId: string): Promise<boolean>;
+  restoreJavaEnvironment(environmentId: string): Promise<JavaEnvironment>;
+  setInstanceJavaEnvironment(instanceId: string, environmentId: string): Promise<void>;
+  openJavaLocation(environmentId: string): Promise<void>;
   /** 注册窗口关闭请求回调(标题栏关闭按钮与系统关闭共用),返回取消注册函数。 */
   onCloseRequested(handler: () => void): () => void;
   /** 托盘动作产生待处理意图时通知前端取走,返回取消注册函数。 */
@@ -508,6 +544,7 @@ const BROWSER_PENDING_INTENT_KEY = "moyumax.browser.pendingIntent";
 const BROWSER_TASKS_PAUSED_KEY = "moyumax.browser.tasksPaused";
 const BROWSER_WINDOW_STATE_KEY = "moyumax.browser.windowState";
 const BROWSER_SOURCE_POLICY_KEY = "moyumax.browser.sourcePolicy";
+const BROWSER_JAVA_ENVIRONMENTS_KEY = "moyumax.browser.javaEnvironments";
 const browserPreviews = new Map<string, InstallSelection>();
 const browserContentPreviews = new Map<string, ContentInstallPlan>();
 const browserDiagnosticPreviews = new Map<string, string>();
@@ -616,6 +653,20 @@ function createTauriRuntime(): MoyuRuntime {
       invoke<SourcePolicy>("get_download_source_policy"),
     setDownloadSourcePolicy: (policy) =>
       invoke<void>("set_download_source_policy", { policy }),
+    listJavaEnvironments: () =>
+      invoke<JavaEnvironment[]>("list_java_environments"),
+    listDeletedJavaEnvironments: () =>
+      invoke<JavaEnvironment[]>("list_deleted_java_environments"),
+    deleteJavaEnvironment: (environmentId, force) =>
+      invoke<JavaDeleteOutcome>("delete_java_environment", { environmentId, force }),
+    verifyJavaEnvironment: (environmentId) =>
+      invoke<boolean>("verify_java_environment", { environmentId }),
+    restoreJavaEnvironment: (environmentId) =>
+      invoke<JavaEnvironment>("restore_java_environment", { environmentId }),
+    setInstanceJavaEnvironment: (instanceId, environmentId) =>
+      invoke<void>("set_instance_java_environment", { instanceId, environmentId }),
+    openJavaLocation: (environmentId) =>
+      invoke<void>("open_java_location", { environmentId }),
     onCloseRequested: (handler) => {
       let unlisten: (() => void) | undefined;
       void listen(CLOSE_REQUESTED_EVENT, handler).then((release) => {
@@ -1266,6 +1317,80 @@ function createBrowserRuntime(): MoyuRuntime {
     async setDownloadSourcePolicy(policy) {
       window.localStorage.setItem(BROWSER_SOURCE_POLICY_KEY, JSON.stringify(policy));
     },
+    async listJavaEnvironments() {
+      return browserJavaEnvironments().filter((env) => env.status !== "deleted");
+    },
+    async listDeletedJavaEnvironments() {
+      return browserJavaEnvironments().filter((env) => env.status === "deleted");
+    },
+    async deleteJavaEnvironment(environmentId, force) {
+      const environments = browserJavaEnvironments();
+      const environment = environments.find((env) => env.id === environmentId);
+      if (!environment || environment.status === "deleted") {
+        throw new Error("环境不存在或已经被删除");
+      }
+      if (environment.referencingInstances.length > 0 && !force) {
+        return {
+          kind: "requiresConfirmation",
+          instances: environment.referencingInstances,
+        };
+      }
+      environment.status = "deleted";
+      environment.healthy = false;
+      environment.sizeBytes = 0;
+      window.localStorage.setItem(
+        BROWSER_JAVA_ENVIRONMENTS_KEY,
+        JSON.stringify(environments),
+      );
+      return { kind: "deleted", filesRemoved: true };
+    },
+    async verifyJavaEnvironment(environmentId) {
+      const environment = browserJavaEnvironments().find(
+        (env) => env.id === environmentId,
+      );
+      if (!environment) throw new Error("Java 环境不存在");
+      return environment.healthy;
+    },
+    async restoreJavaEnvironment(environmentId) {
+      const environments = browserJavaEnvironments();
+      const environment = environments.find(
+        (env) => env.id === environmentId && env.status === "deleted",
+      );
+      if (!environment) throw new Error("该环境未被删除或不存在");
+      environment.status = "ready";
+      environment.healthy = true;
+      environment.sizeBytes = 190 * 1024 * 1024;
+      window.localStorage.setItem(
+        BROWSER_JAVA_ENVIRONMENTS_KEY,
+        JSON.stringify(environments),
+      );
+      return environment;
+    },
+    async setInstanceJavaEnvironment(instanceId, environmentId) {
+      const environment = browserJavaEnvironments().find(
+        (env) => env.id === environmentId && env.status === "ready",
+      );
+      if (!environment) throw new Error("只能指派已就绪的 Java 环境");
+      const instance = browserInstances().find((entry) => entry.id === instanceId);
+      if (!instance) throw new Error("实例不存在");
+      const instanceMajor = Number(instance.gameVersion.split(".")[0]) || 0;
+      const envMajor = Number(environment.fullVersion.split(".")[0]);
+      if (instanceMajor >= 21 && envMajor !== 21) {
+        throw new Error("主版本不一致：实例需要更高版本的 Java 环境");
+      }
+      const instances = browserInstances().map((entry) =>
+        entry.id === instanceId
+          ? { ...entry, javaEnvironmentId: environmentId }
+          : entry,
+      );
+      window.localStorage.setItem(BROWSER_INSTANCES_KEY, JSON.stringify(instances));
+    },
+    async openJavaLocation(environmentId) {
+      const environment = browserJavaEnvironments().find(
+        (env) => env.id === environmentId,
+      );
+      if (!environment) throw new Error("Java 环境不存在");
+    },
     onCloseRequested(handler) {
       browserCloseHandlers.add(handler);
       return () => browserCloseHandlers.delete(handler);
@@ -1409,6 +1534,11 @@ function createBrowserWorldBackup(
 function browserLaunchSessions(): LaunchSession[] {
   const serialized = window.localStorage.getItem(BROWSER_LAUNCH_SESSIONS_KEY);
   return serialized ? (JSON.parse(serialized) as LaunchSession[]) : [];
+}
+
+function browserJavaEnvironments(): JavaEnvironment[] {
+  const serialized = window.localStorage.getItem(BROWSER_JAVA_ENVIRONMENTS_KEY);
+  return serialized ? (JSON.parse(serialized) as JavaEnvironment[]) : [];
 }
 
 function browserCrashReports(): CrashReport[] {

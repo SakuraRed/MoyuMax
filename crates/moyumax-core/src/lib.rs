@@ -14,6 +14,7 @@ mod content;
 mod diagnostics;
 mod execution;
 mod install;
+mod java_env;
 mod launch;
 mod loader_install;
 mod recycle;
@@ -26,6 +27,7 @@ pub use content::*;
 pub use diagnostics::*;
 pub use execution::*;
 pub use install::*;
+pub use java_env::*;
 pub use launch::*;
 pub use loader_install::*;
 pub use recycle::*;
@@ -141,6 +143,7 @@ impl AppService {
         service.recover_interrupted_world_backups()?;
         service.recover_interrupted_launch_sessions()?;
         service.recover_interrupted_recycle_operations()?;
+        service.recover_java_deletions()?;
         service.generate_missing_crash_reports()?;
         Ok(service)
     }

@@ -227,6 +227,11 @@ impl AppService {
             ));
         }
         if java_status != "ready" {
+            if java_status == "deleted" {
+                return Err(CoreError::Launch(
+                    "实例引用的 Java 环境已被删除，请在设置 → Java 环境中恢复，或为实例选择其他环境；MoyuMax 不会自动装回已删除的构建".to_owned(),
+                ));
+            }
             return Err(CoreError::Launch(
                 "实例引用的受管 Java 环境尚未就绪".to_owned(),
             ));
