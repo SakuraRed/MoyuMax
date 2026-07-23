@@ -12,12 +12,12 @@ use moyumax_core::{
     ContentInstallTask, ContentUpdateInfo, CrashReportSummary, DiagnosticExportPreview,
     DiagnosticExportResult, DownloadInterrupt, ExitImpactSummary, FabricLoaderSummary,
     InstallExecutor, InstallSelection, InstallTask, InstalledContent, InstanceIsolation,
-    InstanceResource, InstanceResourceKind, InstanceWorldInfo, JavaArchitecture, JavaDeleteOutcome,
-    JavaDistribution, JavaEnvironmentSummary, LaunchAccount, LaunchExecution, LaunchOptions,
-    LaunchSessionSummary, ManagedInstanceSummary, MetadataClient, ModrinthClient,
-    ModrinthSearchPage, ModrinthSearchQuery, OnboardingSelection, RecoveryDecision, RecycleBinItem,
-    RecyclePurgeResult, ResolvedInstallRequest, ResolvedLoader, ShellState, SourcePolicy,
-    VersionCatalog, WindowCloseBehavior, WorldBackupSummary, run_launch_execution,
+    InstanceResource, InstanceResourceKind, InstanceScreenshot, InstanceWorldInfo,
+    JavaArchitecture, JavaDeleteOutcome, JavaDistribution, JavaEnvironmentSummary, LaunchAccount,
+    LaunchExecution, LaunchOptions, LaunchSessionSummary, ManagedInstanceSummary, MetadataClient,
+    ModrinthClient, ModrinthSearchPage, ModrinthSearchQuery, OnboardingSelection, RecoveryDecision,
+    RecycleBinItem, RecyclePurgeResult, ResolvedInstallRequest, ResolvedLoader, ShellState,
+    SourcePolicy, VersionCatalog, WindowCloseBehavior, WorldBackupSummary, run_launch_execution,
 };
 use serde::Serialize;
 use tauri::{Emitter, Manager, State};
@@ -766,6 +766,86 @@ fn rollback_world_backup(
 }
 
 #[tauri::command]
+fn list_instance_screenshots(
+    service: State<'_, AppService>,
+    instance_id: String,
+) -> Result<Vec<InstanceScreenshot>, String> {
+    service
+        .list_instance_screenshots(&instance_id)
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+fn read_instance_screenshot(
+    service: State<'_, AppService>,
+    instance_id: String,
+    file_name: String,
+) -> Result<Vec<u8>, String> {
+    service
+        .read_instance_screenshot(&instance_id, &file_name)
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+fn open_screenshot_location(
+    service: State<'_, AppService>,
+    instance_id: String,
+    file_name: String,
+) -> Result<(), String> {
+    let path = service
+        .instance_screenshot_path(&instance_id, &file_name)
+        .map_err(|error| error.to_string())?;
+    std::process::Command::new("explorer.exe")
+        .arg("/select,")
+        .arg(&path)
+        .spawn()
+        .map_err(|error| format!("无法打开截图位置：{error}"))?;
+    Ok(())
+}
+
+#[tauri::command]
+fn delete_instance_screenshot(
+    service: State<'_, AppService>,
+    instance_id: String,
+    file_name: String,
+) -> Result<RecycleBinItem, String> {
+    service
+        .delete_instance_screenshot(&instance_id, &file_name)
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+fn delete_instance_resource(
+    service: State<'_, AppService>,
+    resource_id: String,
+) -> Result<RecycleBinItem, String> {
+    service
+        .delete_instance_resource(&resource_id)
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+fn delete_instance_world(
+    service: State<'_, AppService>,
+    instance_id: String,
+    world_name: String,
+) -> Result<RecycleBinItem, String> {
+    service
+        .delete_instance_world(&instance_id, &world_name)
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+fn restore_recycled_entry(
+    service: State<'_, AppService>,
+    item_id: String,
+) -> Result<RecycleBinItem, String> {
+    service
+        .restore_recycled_entry(&item_id)
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
 fn retry_content_task(
     service: State<'_, AppService>,
     coordinator: State<'_, TaskCoordinator>,
@@ -1268,6 +1348,7 @@ fn open_java_location(
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
+        .plugin(tauri_plugin_clipboard_manager::init())
         .setup(|app| {
             let state_directory = std::env::var_os("MOYUMAX_STATE_DIR")
                 .map(PathBuf::from)
@@ -1352,6 +1433,13 @@ pub fn run() {
             export_instance_world,
             import_instance_world,
             rollback_world_backup,
+            list_instance_screenshots,
+            read_instance_screenshot,
+            open_screenshot_location,
+            delete_instance_screenshot,
+            delete_instance_resource,
+            delete_instance_world,
+            restore_recycled_entry,
             retry_content_task,
             resolve_content_task_recovery,
             list_instances,

@@ -163,7 +163,7 @@ export interface ManagedInstance {
   state: string;
 }
 
-export type RecycleItemKind = "instance";
+export type RecycleItemKind = "instance" | "screenshot" | "resource" | "world";
 export type RecycleItemState = "moving" | "ready" | "restoring" | "purging" | "failed";
 
 export interface RecycleBinItem {
@@ -178,6 +178,13 @@ export interface RecycleBinItem {
   deletedAtUnixSeconds: number;
   expiresAtUnixSeconds: number;
   state: RecycleItemState;
+  payload: string | null;
+}
+
+export interface InstanceScreenshot {
+  fileName: string;
+  sizeBytes: number;
+  takenAtUnixSeconds: number;
 }
 
 export interface RecyclePurgeResult {
@@ -553,6 +560,14 @@ export interface MoyuRuntime {
   ): Promise<number>;
   importInstanceWorld(instanceId: string, sourcePath: string): Promise<InstanceWorldInfo>;
   rollbackWorldBackup(backupId: string): Promise<WorldBackupSummary>;
+  listInstanceScreenshots(instanceId: string): Promise<InstanceScreenshot[]>;
+  /** 把截图图片写入系统剪贴板。 */
+  copyScreenshotToClipboard(instanceId: string, fileName: string): Promise<void>;
+  openScreenshotLocation(instanceId: string, fileName: string): Promise<void>;
+  deleteInstanceScreenshot(instanceId: string, fileName: string): Promise<RecycleBinItem>;
+  deleteInstanceResource(resourceId: string): Promise<RecycleBinItem>;
+  deleteInstanceWorld(instanceId: string, worldName: string): Promise<RecycleBinItem>;
+  restoreRecycledEntry(itemId: string): Promise<RecycleBinItem>;
   retryContentTask(taskId: string): Promise<void>;
   resolveContentTaskRecovery(taskId: string, decision: RecoveryDecision): Promise<void>;
   listInstances(): Promise<ManagedInstance[]>;
@@ -617,6 +632,7 @@ const BROWSER_CONTENT_AUTO_UPDATE_KEY = "moyumax.browser.contentAutoUpdate";
 const BROWSER_INSTANCE_RESOURCES_KEY = "moyumax.browser.instanceResources";
 const BROWSER_INSTANCE_WORLDS_KEY = "moyumax.browser.instanceWorlds";
 const BROWSER_WORLD_DETAILS_KEY = "moyumax.browser.worldDetails";
+const BROWSER_SCREENSHOTS_KEY = "moyumax.browser.screenshots";
 const BROWSER_MODRINTH_OFFLINE_KEY = "moyumax.browser.modrinthOffline";
 const BROWSER_CLOSE_BEHAVIOR_KEY = "moyumax.browser.windowCloseBehavior";
 const BROWSER_SHELL_STATE_KEY = "moyumax.browser.shellState";
@@ -743,6 +759,28 @@ function createTauriRuntime(): MoyuRuntime {
       invoke<InstanceWorldInfo>("import_instance_world", { instanceId, sourcePath }),
     rollbackWorldBackup: (backupId) =>
       invoke<WorldBackupSummary>("rollback_world_backup", { backupId }),
+    listInstanceScreenshots: (instanceId) =>
+      invoke<InstanceScreenshot[]>("list_instance_screenshots", { instanceId }),
+    copyScreenshotToClipboard: async (instanceId, fileName) => {
+      const bytes = await invoke<number[]>("read_instance_screenshot", {
+        instanceId,
+        fileName,
+      });
+      const { Image } = await import("@tauri-apps/api/image");
+      const { writeImage } = await import("@tauri-apps/plugin-clipboard-manager");
+      const image = await Image.fromBytes(new Uint8Array(bytes));
+      await writeImage(image);
+    },
+    openScreenshotLocation: (instanceId, fileName) =>
+      invoke<void>("open_screenshot_location", { instanceId, fileName }),
+    deleteInstanceScreenshot: (instanceId, fileName) =>
+      invoke<RecycleBinItem>("delete_instance_screenshot", { instanceId, fileName }),
+    deleteInstanceResource: (resourceId) =>
+      invoke<RecycleBinItem>("delete_instance_resource", { resourceId }),
+    deleteInstanceWorld: (instanceId, worldName) =>
+      invoke<RecycleBinItem>("delete_instance_world", { instanceId, worldName }),
+    restoreRecycledEntry: (itemId) =>
+      invoke<RecycleBinItem>("restore_recycled_entry", { itemId }),
     retryContentTask: (taskId) => invoke<void>("retry_content_task", { taskId }),
     resolveContentTaskRecovery: (taskId, decision) =>
       invoke<void>("resolve_content_task_recovery", { taskId, decision }),
@@ -1327,6 +1365,120 @@ function createBrowserRuntime(): MoyuRuntime {
       window.localStorage.setItem(BROWSER_WORLD_BACKUPS_KEY, JSON.stringify(backups));
       return recovery;
     },
+    async listInstanceScreenshots(instanceId) {
+      return browserScreenshots()[instanceId] ?? [];
+    },
+    async copyScreenshotToClipboard(instanceId, fileName) {
+      const exists = (browserScreenshots()[instanceId] ?? []).some(
+        (screenshot) => screenshot.fileName === fileName,
+      );
+      if (!exists) throw new Error(`截图 ${fileName} 不存在`);
+      window.localStorage.setItem("moyumax.browser.clipboardImage", fileName);
+    },
+    async openScreenshotLocation(_instanceId, fileName) {
+      window.localStorage.setItem("moyumax.browser.openedLocation", fileName);
+    },
+    async deleteInstanceScreenshot(instanceId, fileName) {
+      const all = browserScreenshots();
+      const screenshots = all[instanceId] ?? [];
+      const index = screenshots.findIndex(
+        (screenshot) => screenshot.fileName === fileName,
+      );
+      if (index < 0) throw new Error(`截图 ${fileName} 不存在`);
+      const [removed] = screenshots.splice(index, 1);
+      all[instanceId] = screenshots;
+      window.localStorage.setItem(BROWSER_SCREENSHOTS_KEY, JSON.stringify(all));
+      return browserPushRecycleEntry({
+        kind: "screenshot",
+        subjectId: instanceId,
+        displayName: fileName,
+        originalPath: `D:\\MoyuMax\\data\\instances\\${instanceId}\\.minecraft\\screenshots\\${fileName}`,
+        sizeBytes: removed?.sizeBytes ?? 0,
+        payload: null,
+      });
+    },
+    async deleteInstanceResource(resourceId) {
+      const resources = browserInstanceResources();
+      const index = resources.findIndex((candidate) => candidate.id === resourceId);
+      if (index < 0) throw new Error("资源项不存在");
+      const [removed] = resources.splice(index, 1);
+      window.localStorage.setItem(
+        BROWSER_INSTANCE_RESOURCES_KEY,
+        JSON.stringify(resources),
+      );
+      return browserPushRecycleEntry({
+        kind: "resource",
+        subjectId: removed!.instanceId,
+        displayName: removed!.displayName,
+        originalPath: `D:\\MoyuMax\\data\\instances\\${removed!.instanceId}\\${removed!.relativePath}`,
+        sizeBytes: removed!.size,
+        payload: JSON.stringify(removed),
+      });
+    },
+    async deleteInstanceWorld(instanceId, worldName) {
+      const all = browserWorldDetails();
+      const worlds = all[instanceId] ?? [];
+      const index = worlds.findIndex((world) => world.name === worldName);
+      if (index < 0) throw new Error(`世界 ${worldName} 不存在`);
+      const [removed] = worlds.splice(index, 1);
+      all[instanceId] = worlds;
+      window.localStorage.setItem(BROWSER_WORLD_DETAILS_KEY, JSON.stringify(all));
+      const worldNames = browserInstanceWorlds();
+      worldNames[instanceId] = (worldNames[instanceId] ?? []).filter(
+        (name) => name !== worldName,
+      );
+      window.localStorage.setItem(BROWSER_INSTANCE_WORLDS_KEY, JSON.stringify(worldNames));
+      return browserPushRecycleEntry({
+        kind: "world",
+        subjectId: instanceId,
+        displayName: worldName,
+        originalPath: `D:\\MoyuMax\\data\\instances\\${instanceId}\\.minecraft\\saves\\${worldName}`,
+        sizeBytes: removed?.sizeBytes ?? 0,
+        payload: null,
+      });
+    },
+    async restoreRecycledEntry(itemId) {
+      const entries = browserRecycleEntries();
+      const index = entries.findIndex((candidate) => candidate.id === itemId);
+      const entry = entries[index];
+      if (!entry || entry.state !== "ready" || entry.kind === "instance") {
+        throw new Error("该回收站项目当前不能恢复");
+      }
+      entries.splice(index, 1);
+      window.localStorage.setItem(BROWSER_RECYCLE_BIN_KEY, JSON.stringify(entries));
+      if (entry.kind === "screenshot") {
+        const all = browserScreenshots();
+        all[entry.subjectId] = [
+          ...(all[entry.subjectId] ?? []),
+          {
+            fileName: entry.displayName,
+            sizeBytes: entry.sizeBytes,
+            takenAtUnixSeconds: entry.deletedAtUnixSeconds,
+          },
+        ];
+        window.localStorage.setItem(BROWSER_SCREENSHOTS_KEY, JSON.stringify(all));
+      } else if (entry.kind === "resource" && entry.payload) {
+        const resources = browserInstanceResources();
+        resources.push(JSON.parse(entry.payload) as InstanceResource);
+        window.localStorage.setItem(
+          BROWSER_INSTANCE_RESOURCES_KEY,
+          JSON.stringify(resources),
+        );
+      } else if (entry.kind === "world") {
+        const all = browserWorldDetails();
+        all[entry.subjectId] = [
+          ...(all[entry.subjectId] ?? []),
+          {
+            name: entry.displayName,
+            sizeBytes: entry.sizeBytes,
+            lastPlayedUnixSeconds: entry.deletedAtUnixSeconds,
+          },
+        ].sort((left, right) => left.name.localeCompare(right.name));
+        window.localStorage.setItem(BROWSER_WORLD_DETAILS_KEY, JSON.stringify(all));
+      }
+      const { instance: _instance, ...summary } = entry;
+      return summary;
+    },
     async retryContentTask(taskId) {
       const tasks = browserContentTasks();
       const task = tasks.find((candidate) => candidate.id === taskId);
@@ -1392,6 +1544,7 @@ function createBrowserRuntime(): MoyuRuntime {
         deletedAtUnixSeconds: now,
         expiresAtUnixSeconds: now + 30 * 24 * 60 * 60,
         state: "ready",
+        payload: null,
         instance: managedInstance,
       };
       window.localStorage.setItem(BROWSER_INSTANCES_KEY, JSON.stringify(instances));
@@ -1903,6 +2056,50 @@ function browserInstanceWorlds(): Record<string, string[]> {
 function browserWorldDetails(): Record<string, InstanceWorldInfo[]> {
   const serialized = window.localStorage.getItem(BROWSER_WORLD_DETAILS_KEY);
   return serialized ? (JSON.parse(serialized) as Record<string, InstanceWorldInfo[]>) : {};
+}
+
+function browserScreenshots(): Record<string, InstanceScreenshot[]> {
+  const serialized = window.localStorage.getItem(BROWSER_SCREENSHOTS_KEY);
+  return serialized ? (JSON.parse(serialized) as Record<string, InstanceScreenshot[]>) : {};
+}
+
+function browserPushRecycleEntry(input: {
+  kind: RecycleItemKind;
+  subjectId: string;
+  displayName: string;
+  originalPath: string;
+  sizeBytes: number;
+  payload: string | null;
+}): RecycleBinItem {
+  const now = Math.floor(Date.now() / 1000);
+  const entry: BrowserRecycleEntry = {
+    id: `recycle-${crypto.randomUUID()}`,
+    kind: input.kind,
+    subjectId: input.subjectId,
+    displayName: input.displayName,
+    originalPath: input.originalPath,
+    recycledPath: `D:\\MoyuMax\\data\\.recycle\\entries\\${crypto.randomUUID()}`,
+    originalState: "ready",
+    sizeBytes: input.sizeBytes,
+    deletedAtUnixSeconds: now,
+    expiresAtUnixSeconds: now + 30 * 24 * 60 * 60,
+    state: "ready",
+    payload: input.payload,
+    instance: {
+      id: input.subjectId,
+      name: "实例",
+      gameVersion: "26.2",
+      loaderKind: "fabric",
+      loaderVersion: null,
+      rootDirectory: `D:\\MoyuMax\\data\\instances\\${input.subjectId}`,
+      state: "ready",
+    },
+  };
+  const entries = browserRecycleEntries();
+  entries.unshift(entry);
+  window.localStorage.setItem(BROWSER_RECYCLE_BIN_KEY, JSON.stringify(entries));
+  const { instance: _instance, ...summary } = entry;
+  return summary;
 }
 
 function browserContentEntry(

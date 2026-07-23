@@ -19,6 +19,7 @@ mod launch;
 mod loader_install;
 mod recycle;
 mod resources;
+mod screenshots;
 mod shell;
 mod source;
 mod worlds;
@@ -34,6 +35,7 @@ pub use launch::*;
 pub use loader_install::*;
 pub use recycle::*;
 pub use resources::*;
+pub use screenshots::*;
 pub use shell::*;
 pub use source::*;
 pub use worlds::*;
@@ -326,7 +328,7 @@ impl AppService {
             CREATE TABLE IF NOT EXISTS recycle_bin_items (
                 id TEXT PRIMARY KEY NOT NULL,
                 item_kind TEXT NOT NULL,
-                subject_id TEXT NOT NULL UNIQUE
+                subject_id TEXT NOT NULL
                     REFERENCES instances(id) ON DELETE CASCADE,
                 display_name TEXT NOT NULL,
                 original_path TEXT NOT NULL,
@@ -335,7 +337,8 @@ impl AppService {
                 size_bytes INTEGER NOT NULL,
                 deleted_at_unix_seconds INTEGER NOT NULL,
                 expires_at_unix_seconds INTEGER NOT NULL,
-                state TEXT NOT NULL
+                state TEXT NOT NULL,
+                payload TEXT
             );
             CREATE INDEX IF NOT EXISTS idx_recycle_items_state_deleted
                 ON recycle_bin_items(state, deleted_at_unix_seconds);
@@ -417,6 +420,44 @@ impl AppService {
                 CREATE INDEX IF NOT EXISTS idx_instance_resources_instance
                     ON instance_resources(instance_id, kind, display_name);
                 PRAGMA user_version = 12;
+                ",
+            )?;
+        }
+        // v13:回收站统一删除（截图/资源/世界）：重建表去除 subject_id 唯一约束并增加 payload 列。
+        let version: i64 = connection.query_row("PRAGMA user_version", [], |row| row.get(0))?;
+        if version < 13 {
+            connection.execute_batch(
+                "
+                PRAGMA foreign_keys = OFF;
+                CREATE TABLE recycle_bin_items_v13 (
+                    id TEXT PRIMARY KEY NOT NULL,
+                    item_kind TEXT NOT NULL,
+                    subject_id TEXT NOT NULL REFERENCES instances(id) ON DELETE CASCADE,
+                    display_name TEXT NOT NULL,
+                    original_path TEXT NOT NULL,
+                    recycled_path TEXT NOT NULL UNIQUE,
+                    original_state TEXT NOT NULL,
+                    size_bytes INTEGER NOT NULL,
+                    deleted_at_unix_seconds INTEGER NOT NULL,
+                    expires_at_unix_seconds INTEGER NOT NULL,
+                    state TEXT NOT NULL,
+                    payload TEXT
+                );
+                INSERT INTO recycle_bin_items_v13 (
+                    id, item_kind, subject_id, display_name, original_path, recycled_path,
+                    original_state, size_bytes, deleted_at_unix_seconds,
+                    expires_at_unix_seconds, state, payload
+                )
+                SELECT id, item_kind, subject_id, display_name, original_path, recycled_path,
+                       original_state, size_bytes, deleted_at_unix_seconds,
+                       expires_at_unix_seconds, state, NULL
+                FROM recycle_bin_items;
+                DROP TABLE recycle_bin_items;
+                ALTER TABLE recycle_bin_items_v13 RENAME TO recycle_bin_items;
+                CREATE INDEX IF NOT EXISTS idx_recycle_items_state_deleted
+                    ON recycle_bin_items(state, deleted_at_unix_seconds);
+                PRAGMA foreign_keys = ON;
+                PRAGMA user_version = 13;
                 ",
             )?;
         }

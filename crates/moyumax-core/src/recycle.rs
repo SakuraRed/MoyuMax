@@ -15,18 +15,27 @@ const RETENTION_SECONDS: i64 = 30 * 24 * 60 * 60;
 #[serde(rename_all = "camelCase")]
 pub enum RecycleItemKind {
     Instance,
+    Screenshot,
+    Resource,
+    World,
 }
 
 impl RecycleItemKind {
     fn database_value(self) -> &'static str {
         match self {
             Self::Instance => "instance",
+            Self::Screenshot => "screenshot",
+            Self::Resource => "resource",
+            Self::World => "world",
         }
     }
 
     fn from_database(value: &str) -> Result<Self> {
         match value {
             "instance" => Ok(Self::Instance),
+            "screenshot" => Ok(Self::Screenshot),
+            "resource" => Ok(Self::Resource),
+            "world" => Ok(Self::World),
             _ => Err(CoreError::InvalidStoredState(format!(
                 "未知回收站对象类型：{value}"
             ))),
@@ -83,6 +92,9 @@ pub struct RecycleBinItem {
     pub deleted_at_unix_seconds: i64,
     pub expires_at_unix_seconds: i64,
     pub state: RecycleItemState,
+    /// 恢复所需的附加数据（资源索引行 JSON）；无附加数据时为 None。
+    #[serde(default)]
+    pub payload: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -100,7 +112,7 @@ impl AppService {
             "
             SELECT id, item_kind, subject_id, display_name, original_path, recycled_path,
                    original_state, size_bytes, deleted_at_unix_seconds,
-                   expires_at_unix_seconds, state
+                   expires_at_unix_seconds, state, payload
             FROM recycle_bin_items
             ORDER BY deleted_at_unix_seconds DESC, id
             ",
@@ -146,6 +158,7 @@ impl AppService {
             deleted_at_unix_seconds: deleted_at,
             expires_at_unix_seconds: deleted_at.saturating_add(RETENTION_SECONDS),
             state: RecycleItemState::Moving,
+            payload: None,
         };
 
         self.persist_move_intent(&item)?;
@@ -166,6 +179,214 @@ impl AppService {
             state: RecycleItemState::Ready,
             ..item
         })
+    }
+
+    /// 把截图移入回收站（与实例、资源、世界共用同一事务模型）。
+    pub fn delete_instance_screenshot(
+        &self,
+        instance_id: &str,
+        file_name: &str,
+    ) -> Result<RecycleBinItem> {
+        let instance = self.ready_instance(instance_id)?;
+        validate_plain_filename(file_name, ".png")?;
+        let source = Path::new(&instance.root_directory)
+            .join(".minecraft")
+            .join("screenshots")
+            .join(file_name);
+        if !source.is_file() {
+            return Err(CoreError::Recycle(format!("截图 {file_name} 不存在")));
+        }
+        self.recycle_entry(
+            RecycleItemKind::Screenshot,
+            &instance,
+            file_name.to_owned(),
+            &source,
+            None,
+        )
+    }
+
+    /// 把资源内容（资源包/光影/数据包）移入回收站，索引行随恢复无损往返。
+    pub fn delete_instance_resource(&self, resource_id: &str) -> Result<RecycleBinItem> {
+        let resource = self
+            .list_instance_resources_by_id(resource_id)?
+            .into_iter()
+            .next()
+            .ok_or_else(|| CoreError::Recycle("资源项不存在".to_owned()))?;
+        let instance = self.ready_instance(&resource.instance_id)?;
+        let disk_name = if resource.enabled {
+            resource.file_name.clone()
+        } else {
+            format!("{}.disabled", resource.file_name)
+        };
+        let source = Path::new(&instance.root_directory).join(&resource.relative_path);
+        let source = source
+            .parent()
+            .map_or_else(|| source.clone(), |parent| parent.join(&disk_name));
+        if !source.is_file() {
+            return Err(CoreError::Recycle(format!(
+                "资源文件 {disk_name} 不在预期位置，可能被外部移动或删除"
+            )));
+        }
+        let payload = serde_json::to_string(&resource)?;
+        self.recycle_entry(
+            RecycleItemKind::Resource,
+            &instance,
+            resource.display_name.clone(),
+            &source,
+            Some(payload),
+        )
+    }
+
+    /// 把世界目录移入回收站。
+    pub fn delete_instance_world(
+        &self,
+        instance_id: &str,
+        world_name: &str,
+    ) -> Result<RecycleBinItem> {
+        let instance = self.ready_instance(instance_id)?;
+        let source = Path::new(&instance.root_directory)
+            .join(".minecraft")
+            .join("saves")
+            .join(world_name);
+        if !source.is_dir() || !source.join("level.dat").is_file() {
+            return Err(CoreError::Recycle(format!("世界 {world_name} 不存在")));
+        }
+        self.recycle_entry(
+            RecycleItemKind::World,
+            &instance,
+            world_name.to_owned(),
+            &source,
+            None,
+        )
+    }
+
+    /// 恢复非实例回收项目（截图/资源/世界）；原位置被占用时拒绝，不覆盖。
+    pub fn restore_recycled_entry(&self, item_id: &str) -> Result<RecycleBinItem> {
+        let item = self.recycle_item(item_id)?;
+        if item.kind == RecycleItemKind::Instance || item.state != RecycleItemState::Ready {
+            return Err(CoreError::Recycle(
+                "该回收站项目当前不能恢复，请等待正在进行的操作完成".to_owned(),
+            ));
+        }
+        let data_directory = self.selected_data_directory()?;
+        let original_path = PathBuf::from(&item.original_path);
+        let recycled_path = PathBuf::from(&item.recycled_path);
+        self.validate_entry_original(&data_directory, &item.subject_id, &original_path)?;
+        validate_entry_recycled_path(&data_directory, &recycled_path)?;
+        if original_path.exists() {
+            return Err(CoreError::Recycle(
+                "原位置已被占用；为避免覆盖现有内容，恢复已停止".to_owned(),
+            ));
+        }
+        if !recycled_path.exists() {
+            return Err(CoreError::Recycle(
+                "回收站中的内容缺失，无法安全恢复".to_owned(),
+            ));
+        }
+        if let Some(parent) = original_path.parent() {
+            fs::create_dir_all(parent)?;
+        }
+        self.persist_restore_intent(&item)?;
+        if let Err(error) = fs::rename(&recycled_path, &original_path) {
+            let _ = self.rollback_restore_intent(&item);
+            return Err(CoreError::Recycle(format!("无法恢复内容：{error}")));
+        }
+        if let Err(error) = self.finalize_restore(&item) {
+            if fs::rename(&original_path, &recycled_path).is_ok() {
+                let _ = self.rollback_restore_intent(&item);
+            }
+            return Err(error);
+        }
+        Ok(item)
+    }
+
+    fn recycle_entry(
+        &self,
+        kind: RecycleItemKind,
+        instance: &ManagedInstanceSummary,
+        display_name: String,
+        source: &Path,
+        payload: Option<String>,
+    ) -> Result<RecycleBinItem> {
+        let data_directory = self.selected_data_directory()?;
+        validate_entry_source(&data_directory, source)?;
+        let size_bytes = directory_size(source)?;
+        let item_id = Uuid::new_v4().to_string();
+        let recycled_path = data_directory
+            .join(".recycle")
+            .join("entries")
+            .join(&item_id);
+        let recycle_root = recycled_path
+            .parent()
+            .ok_or_else(|| CoreError::Recycle("无法确定受管回收站目录".to_owned()))?;
+        fs::create_dir_all(recycle_root)?;
+        validate_entry_recycled_path(&data_directory, &recycled_path)?;
+        if recycled_path.exists() {
+            return Err(CoreError::Recycle("回收站目标已被占用，请重试".to_owned()));
+        }
+
+        let deleted_at = unix_timestamp();
+        let item = RecycleBinItem {
+            id: item_id,
+            kind,
+            subject_id: instance.id.clone(),
+            display_name,
+            original_path: path_text(source),
+            recycled_path: path_text(&recycled_path),
+            original_state: "ready".to_owned(),
+            size_bytes,
+            deleted_at_unix_seconds: deleted_at,
+            expires_at_unix_seconds: deleted_at.saturating_add(RETENTION_SECONDS),
+            state: RecycleItemState::Moving,
+            payload,
+        };
+
+        self.persist_move_intent(&item)?;
+        if let Err(error) = fs::rename(source, &recycled_path) {
+            let _ = self.rollback_move_intent(&item);
+            return Err(CoreError::Recycle(format!("无法将内容移入回收站：{error}")));
+        }
+        if let Err(error) = self.finalize_move(&item) {
+            if fs::rename(&recycled_path, source).is_ok() {
+                let _ = self.rollback_move_intent(&item);
+            }
+            return Err(error);
+        }
+
+        Ok(RecycleBinItem {
+            state: RecycleItemState::Ready,
+            ..item
+        })
+    }
+
+    /// 校验恢复目标仍在该实例目录内。
+    fn validate_entry_original(
+        &self,
+        data_directory: &Path,
+        instance_id: &str,
+        target: &Path,
+    ) -> Result<()> {
+        let instance = self
+            .list_instances()?
+            .into_iter()
+            .find(|instance| instance.id == instance_id)
+            .ok_or_else(|| CoreError::Recycle("回收项目引用的实例不存在".to_owned()))?;
+        let instance_root = PathBuf::from(&instance.root_directory);
+        if !target.starts_with(&instance_root) {
+            return Err(CoreError::Recycle(
+                "恢复目标不在所属实例目录内，已拒绝".to_owned(),
+            ));
+        }
+        let instances_root = data_directory.join("instances");
+        fs::create_dir_all(&instances_root)?;
+        let canonical_root = fs::canonicalize(&instances_root)
+            .map_err(|error| CoreError::Recycle(format!("受管实例根不可访问：{error}")))?;
+        let canonical_instance = fs::canonicalize(&instance_root)
+            .map_err(|error| CoreError::Recycle(format!("实例目录不可访问：{error}")))?;
+        if !canonical_instance.starts_with(&canonical_root) {
+            return Err(CoreError::Recycle("实例目录不在受管区域内".to_owned()));
+        }
+        Ok(())
     }
 
     pub fn restore_recycle_bin_item(&self, item_id: &str) -> Result<ManagedInstanceSummary> {
@@ -207,14 +428,19 @@ impl AppService {
 
     pub fn purge_recycle_bin_item(&self, item_id: &str) -> Result<RecyclePurgeResult> {
         let item = self.recycle_item(item_id)?;
-        if item.kind != RecycleItemKind::Instance || item.state != RecycleItemState::Ready {
+        if item.state != RecycleItemState::Ready {
             return Err(CoreError::Recycle(
                 "该回收站项目当前不能永久删除，请等待正在进行的操作完成".to_owned(),
             ));
         }
         let data_directory = self.selected_data_directory()?;
         let recycled_path = PathBuf::from(&item.recycled_path);
-        validate_recycled_path(&data_directory, &recycled_path)?;
+        self.validate_item_paths(
+            &data_directory,
+            &item,
+            Path::new(&item.original_path),
+            &recycled_path,
+        )?;
         self.persist_purge_intent(&item)?;
         if let Err(error) = remove_owned_path(&recycled_path) {
             let _ = self.rollback_purge_intent(&item);
@@ -261,8 +487,7 @@ impl AppService {
         let data_directory = self.selected_data_directory()?;
         let source = PathBuf::from(&item.original_path);
         let destination = PathBuf::from(&item.recycled_path);
-        validate_restore_target(&data_directory, &source)?;
-        validate_recycled_path(&data_directory, &destination)?;
+        self.validate_item_paths(&data_directory, item, &source, &destination)?;
         match (source.exists(), destination.exists()) {
             (true, false) => {
                 fs::rename(&source, &destination)?;
@@ -279,8 +504,7 @@ impl AppService {
         let data_directory = self.selected_data_directory()?;
         let source = PathBuf::from(&item.recycled_path);
         let destination = PathBuf::from(&item.original_path);
-        validate_recycled_path(&data_directory, &source)?;
-        validate_restore_target(&data_directory, &destination)?;
+        self.validate_item_paths(&data_directory, item, &destination, &source)?;
         match (source.exists(), destination.exists()) {
             (true, false) => {
                 fs::rename(&source, &destination)?;
@@ -297,9 +521,26 @@ impl AppService {
     fn recover_purge(&self, item: &RecycleBinItem) -> Result<()> {
         let data_directory = self.selected_data_directory()?;
         let path = PathBuf::from(&item.recycled_path);
-        validate_recycled_path(&data_directory, &path)?;
+        self.validate_item_paths(&data_directory, item, Path::new(&item.original_path), &path)?;
         remove_owned_path(&path)?;
         self.finalize_purge(item)
+    }
+
+    /// 按项目类型校验原位置与回收站位置都在受管区域内。
+    fn validate_item_paths(
+        &self,
+        data_directory: &Path,
+        item: &RecycleBinItem,
+        original: &Path,
+        recycled: &Path,
+    ) -> Result<()> {
+        if item.kind == RecycleItemKind::Instance {
+            validate_restore_target(data_directory, original)?;
+            validate_recycled_path(data_directory, recycled)
+        } else {
+            self.validate_entry_original(data_directory, &item.subject_id, original)?;
+            validate_entry_recycled_path(data_directory, recycled)
+        }
     }
 
     fn active_instance(&self, instance_id: &str) -> Result<ManagedInstanceSummary> {
@@ -371,7 +612,7 @@ impl AppService {
                 "
                 SELECT id, item_kind, subject_id, display_name, original_path, recycled_path,
                        original_state, size_bytes, deleted_at_unix_seconds,
-                       expires_at_unix_seconds, state
+                       expires_at_unix_seconds, state, payload
                 FROM recycle_bin_items WHERE id = ?1
                 ",
                 params![item_id],
@@ -391,8 +632,8 @@ impl AppService {
             INSERT INTO recycle_bin_items (
                 id, item_kind, subject_id, display_name, original_path, recycled_path,
                 original_state, size_bytes, deleted_at_unix_seconds,
-                expires_at_unix_seconds, state
-            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, 'moving')
+                expires_at_unix_seconds, state, payload
+            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, 'moving', ?11)
             ",
             params![
                 item.id,
@@ -405,12 +646,15 @@ impl AppService {
                 sqlite_integer(item.size_bytes)?,
                 item.deleted_at_unix_seconds,
                 item.expires_at_unix_seconds,
+                item.payload,
             ],
         )?;
-        transaction.execute(
-            "UPDATE instances SET state = 'recycling' WHERE id = ?1",
-            params![item.subject_id],
-        )?;
+        if item.kind == RecycleItemKind::Instance {
+            transaction.execute(
+                "UPDATE instances SET state = 'recycling' WHERE id = ?1",
+                params![item.subject_id],
+            )?;
+        }
         transaction.commit()?;
         Ok(())
     }
@@ -418,10 +662,29 @@ impl AppService {
     fn finalize_move(&self, item: &RecycleBinItem) -> Result<()> {
         let mut connection = self.connection()?;
         let transaction = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
-        transaction.execute(
-            "UPDATE instances SET root_directory = ?1, state = 'recycled' WHERE id = ?2",
-            params![item.recycled_path, item.subject_id],
-        )?;
+        match item.kind {
+            RecycleItemKind::Instance => {
+                transaction.execute(
+                    "UPDATE instances SET root_directory = ?1, state = 'recycled' WHERE id = ?2",
+                    params![item.recycled_path, item.subject_id],
+                )?;
+            }
+            RecycleItemKind::Resource => {
+                // 资源索引行与文件进入同一删除语义：文件移走后删除索引。
+                let payload = item.payload.as_deref().ok_or_else(|| {
+                    CoreError::InvalidStoredState("资源回收项目缺少索引负载".to_owned())
+                })?;
+                let resource: crate::InstanceResource =
+                    serde_json::from_str(payload).map_err(|error| {
+                        CoreError::InvalidStoredState(format!("资源索引负载无效：{error}"))
+                    })?;
+                transaction.execute(
+                    "DELETE FROM instance_resources WHERE id = ?1",
+                    params![resource.id],
+                )?;
+            }
+            RecycleItemKind::Screenshot | RecycleItemKind::World => {}
+        }
         transaction.execute(
             "UPDATE recycle_bin_items SET state = 'ready' WHERE id = ?1",
             params![item.id],
@@ -433,10 +696,12 @@ impl AppService {
     fn rollback_move_intent(&self, item: &RecycleBinItem) -> Result<()> {
         let mut connection = self.connection()?;
         let transaction = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
-        transaction.execute(
-            "UPDATE instances SET root_directory = ?1, state = ?2 WHERE id = ?3",
-            params![item.original_path, item.original_state, item.subject_id],
-        )?;
+        if item.kind == RecycleItemKind::Instance {
+            transaction.execute(
+                "UPDATE instances SET root_directory = ?1, state = ?2 WHERE id = ?3",
+                params![item.original_path, item.original_state, item.subject_id],
+            )?;
+        }
         transaction.execute(
             "DELETE FROM recycle_bin_items WHERE id = ?1",
             params![item.id],
@@ -452,10 +717,46 @@ impl AppService {
     fn finalize_restore(&self, item: &RecycleBinItem) -> Result<()> {
         let mut connection = self.connection()?;
         let transaction = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
-        transaction.execute(
-            "UPDATE instances SET root_directory = ?1, state = ?2 WHERE id = ?3",
-            params![item.original_path, item.original_state, item.subject_id],
-        )?;
+        match item.kind {
+            RecycleItemKind::Instance => {
+                transaction.execute(
+                    "UPDATE instances SET root_directory = ?1, state = ?2 WHERE id = ?3",
+                    params![item.original_path, item.original_state, item.subject_id],
+                )?;
+            }
+            RecycleItemKind::Resource => {
+                // 从 payload 无损重建索引行，保留启用与自动更新标志。
+                let payload = item.payload.as_deref().ok_or_else(|| {
+                    CoreError::InvalidStoredState("资源回收项目缺少索引负载".to_owned())
+                })?;
+                let resource: crate::InstanceResource =
+                    serde_json::from_str(payload).map_err(|error| {
+                        CoreError::InvalidStoredState(format!("资源索引负载无效：{error}"))
+                    })?;
+                transaction.execute(
+                    "
+                    INSERT INTO instance_resources (
+                        id, instance_id, kind, display_name, file_name, relative_path,
+                        size, sha256, enabled, world_name, imported_at_unix_seconds
+                    ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)
+                    ",
+                    params![
+                        resource.id,
+                        resource.instance_id,
+                        resource.kind.database_value(),
+                        resource.display_name,
+                        resource.file_name,
+                        resource.relative_path,
+                        sqlite_integer(resource.size)?,
+                        resource.sha256,
+                        resource.enabled,
+                        resource.world_name,
+                        resource.imported_at_unix_seconds,
+                    ],
+                )?;
+            }
+            RecycleItemKind::Screenshot | RecycleItemKind::World => {}
+        }
         transaction.execute(
             "DELETE FROM recycle_bin_items WHERE id = ?1",
             params![item.id],
@@ -479,9 +780,15 @@ impl AppService {
     fn finalize_purge(&self, item: &RecycleBinItem) -> Result<()> {
         let mut connection = self.connection()?;
         let transaction = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        if item.kind == RecycleItemKind::Instance {
+            transaction.execute(
+                "DELETE FROM instances WHERE id = ?1",
+                params![item.subject_id],
+            )?;
+        }
         transaction.execute(
-            "DELETE FROM instances WHERE id = ?1",
-            params![item.subject_id],
+            "DELETE FROM recycle_bin_items WHERE id = ?1",
+            params![item.id],
         )?;
         transaction.commit()?;
         Ok(())
@@ -499,10 +806,12 @@ impl AppService {
             "UPDATE recycle_bin_items SET state = ?1 WHERE id = ?2",
             params![recycle_state.database_value(), item.id],
         )?;
-        transaction.execute(
-            "UPDATE instances SET state = ?1 WHERE id = ?2",
-            params![instance_state, item.subject_id],
-        )?;
+        if item.kind == RecycleItemKind::Instance {
+            transaction.execute(
+                "UPDATE instances SET state = ?1 WHERE id = ?2",
+                params![instance_state, item.subject_id],
+            )?;
+        }
         transaction.commit()?;
         Ok(())
     }
@@ -524,6 +833,7 @@ type StoredItem = (
     i64,
     i64,
     String,
+    Option<String>,
 );
 
 fn read_item_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<StoredItem> {
@@ -539,6 +849,7 @@ fn read_item_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<StoredItem> {
         row.get(8)?,
         row.get(9)?,
         row.get(10)?,
+        row.get(11)?,
     ))
 }
 
@@ -555,6 +866,7 @@ fn decode_item(stored: StoredItem) -> rusqlite::Result<RecycleBinItem> {
         deleted,
         expires,
         state,
+        payload,
     ) = stored;
     let kind = RecycleItemKind::from_database(&kind).map_err(to_sql_error)?;
     let state = RecycleItemState::from_database(&state).map_err(to_sql_error)?;
@@ -575,6 +887,7 @@ fn decode_item(stored: StoredItem) -> rusqlite::Result<RecycleBinItem> {
         deleted_at_unix_seconds: deleted,
         expires_at_unix_seconds: expires,
         state,
+        payload,
     })
 }
 
@@ -643,6 +956,63 @@ fn validate_recycled_path(data_directory: &Path, path: &Path) -> Result<()> {
         return Err(CoreError::Recycle(
             "拒绝访问 MoyuMax 受管回收站以外的路径".to_owned(),
         ));
+    }
+    Ok(())
+}
+
+/// 截图/资源/世界删除来源必须位于受管实例区域内且是真实路径（非链接）。
+fn validate_entry_source(data_directory: &Path, source: &Path) -> Result<()> {
+    let metadata = fs::symlink_metadata(source)
+        .map_err(|error| CoreError::Recycle(format!("待删除内容不可访问：{error}")))?;
+    if is_link_type(&metadata.file_type()) {
+        return Err(CoreError::Recycle("拒绝移动链接路径".to_owned()));
+    }
+    let root = data_directory.join("instances");
+    let canonical_root = fs::canonicalize(&root)
+        .map_err(|error| CoreError::Recycle(format!("受管实例根不可访问：{error}")))?;
+    let canonical_source = fs::canonicalize(source)
+        .map_err(|error| CoreError::Recycle(format!("待删除内容不可访问：{error}")))?;
+    if !canonical_source.starts_with(&canonical_root) {
+        return Err(CoreError::Recycle(
+            "拒绝移动受管实例区域以外的内容".to_owned(),
+        ));
+    }
+    Ok(())
+}
+
+fn validate_entry_recycled_path(data_directory: &Path, path: &Path) -> Result<()> {
+    let root = data_directory.join(".recycle").join("entries");
+    fs::create_dir_all(&root)?;
+    let canonical_root = fs::canonicalize(&root)
+        .map_err(|error| CoreError::Recycle(format!("受管回收站不可访问：{error}")))?;
+    let parent = path
+        .parent()
+        .ok_or_else(|| CoreError::Recycle("回收站路径无效".to_owned()))?;
+    let canonical_parent = fs::canonicalize(parent)
+        .map_err(|error| CoreError::Recycle(format!("回收站路径不可访问：{error}")))?;
+    if canonical_parent != canonical_root || path.file_name().is_none() {
+        return Err(CoreError::Recycle(
+            "拒绝访问 MoyuMax 受管回收站以外的路径".to_owned(),
+        ));
+    }
+    Ok(())
+}
+
+fn validate_plain_filename(file_name: &str, extension: &str) -> Result<()> {
+    let path = Path::new(file_name);
+    let valid = !file_name.is_empty()
+        && file_name.len() <= 240
+        && !file_name.chars().any(char::is_control)
+        && path.components().count() == 1
+        && matches!(
+            path.components().next(),
+            Some(std::path::Component::Normal(_))
+        )
+        && file_name.to_ascii_lowercase().ends_with(extension);
+    if !valid {
+        return Err(CoreError::Recycle(format!(
+            "文件名不安全或不是 {extension}：{file_name}"
+        )));
     }
     Ok(())
 }

@@ -67,6 +67,7 @@
   let importing = $state(false);
   let datapackImportOpen = $state(false);
   let selectedWorld = $state("");
+  let pendingResourceDelete = $state<string | null>(null);
   let query = $state("");
   let searching = $state(false);
   let searchError = $state("");
@@ -204,6 +205,17 @@
     } catch (error) {
       resourceError = error instanceof Error ? error.message : String(error);
       resources = await runtime.listInstanceResources(selectedInstanceId);
+    }
+  }
+
+  async function deleteResource(resource: InstanceResource): Promise<void> {
+    resourceError = "";
+    try {
+      await runtime.deleteInstanceResource(resource.id);
+      pendingResourceDelete = null;
+      resources = await runtime.listInstanceResources(selectedInstanceId);
+    } catch (error) {
+      resourceError = error instanceof Error ? error.message : String(error);
     }
   }
 
@@ -444,15 +456,23 @@
                   <strong>{resource.displayName}</strong>
                   <small>{kindLabel(resource.kind)}{resource.worldName ? ` · 世界 ${resource.worldName}` : ""} · {resource.fileName}</small>
                 </div>
-                <label class="resource-enable-toggle">
-                  <input
-                    type="checkbox"
-                    checked={resource.enabled}
-                    aria-label={`${resource.displayName} 启用开关`}
-                    onchange={(event) => void toggleResource(resource, (event.currentTarget as HTMLInputElement).checked)}
-                  />
-                  <span>{resource.enabled ? "已启用" : "已停用"}</span>
-                </label>
+                <div class="resource-row-actions">
+                  <label class="resource-enable-toggle">
+                    <input
+                      type="checkbox"
+                      checked={resource.enabled}
+                      aria-label={`${resource.displayName} 启用开关`}
+                      onchange={(event) => void toggleResource(resource, (event.currentTarget as HTMLInputElement).checked)}
+                    />
+                    <span>{resource.enabled ? "已启用" : "已停用"}</span>
+                  </label>
+                  {#if pendingResourceDelete === resource.id}
+                    <button class="button danger-subtle compact" onclick={() => void deleteResource(resource)}>确认删除</button>
+                    <button class="button ghost compact" onclick={() => { pendingResourceDelete = null; }}>取消</button>
+                  {:else}
+                    <button class="button danger-subtle compact" aria-label={`删除 ${resource.displayName}`} onclick={() => { pendingResourceDelete = resource.id; }}>删除</button>
+                  {/if}
+                </div>
               </article>
             {/each}
           </div>

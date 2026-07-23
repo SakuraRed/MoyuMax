@@ -4,11 +4,13 @@
   import type {
     BackupState,
     BackupTrigger,
+    InstanceScreenshot,
     InstanceWorldInfo,
     ManagedInstance,
     MoyuRuntime,
     OnboardingSelection,
     RecycleBinItem,
+    RecycleItemKind,
     WorldBackupSummary,
   } from "../runtime";
   import AppShell from "./AppShell.svelte";
@@ -48,12 +50,24 @@
   let worldInstanceId = $state("");
   let worlds = $state<InstanceWorldInfo[]>([]);
   let worldBusy = $state(false);
+  let screenshots = $state<InstanceScreenshot[]>([]);
+  let screenshotFilter = $state<"all" | "week">("all");
+  let selectedScreenshot = $state<string | null>(null);
+  let pendingDelete = $state<string | null>(null);
   let rollbackCandidate = $state<WorldBackupSummary | null>(null);
   let rollbackDialog = $state<HTMLElement | null>(null);
   let message = $state("");
   let errorMessage = $state("");
   const totalBytes = $derived(items.reduce((sum, item) => sum + item.sizeBytes, 0));
   const backupBytes = $derived(backups.reduce((sum, backup) => sum + backup.archiveBytes, 0));
+  const filteredScreenshots = $derived(
+    screenshotFilter === "week"
+      ? screenshots.filter(
+          (screenshot) =>
+            screenshot.takenAtUnixSeconds >= Math.floor(Date.now() / 1000) - 7 * 24 * 60 * 60,
+        )
+      : screenshots,
+  );
 
   onMount(() => {
     void loadItems();
@@ -75,6 +89,9 @@
       worlds = worldInstanceId
         ? await runtime.listInstanceWorldDetails(worldInstanceId)
         : [];
+      screenshots = worldInstanceId
+        ? await runtime.listInstanceScreenshots(worldInstanceId)
+        : [];
     } catch (error) {
       errorMessage = error instanceof Error ? error.message : String(error);
     } finally {
@@ -86,12 +103,73 @@
     worldInstanceId = (event.currentTarget as HTMLSelectElement).value;
     message = "";
     errorMessage = "";
+    selectedScreenshot = null;
+    pendingDelete = null;
     try {
       worlds = worldInstanceId
         ? await runtime.listInstanceWorldDetails(worldInstanceId)
         : [];
+      screenshots = worldInstanceId
+        ? await runtime.listInstanceScreenshots(worldInstanceId)
+        : [];
     } catch (error) {
       errorMessage = error instanceof Error ? error.message : String(error);
+    }
+  }
+
+  async function copyScreenshot(fileName: string): Promise<void> {
+    message = "";
+    errorMessage = "";
+    try {
+      await runtime.copyScreenshotToClipboard(worldInstanceId, fileName);
+      message = `已把「${fileName}」复制到剪贴板`;
+    } catch (error) {
+      errorMessage = error instanceof Error ? error.message : String(error);
+    }
+  }
+
+  async function openScreenshot(fileName: string): Promise<void> {
+    message = "";
+    errorMessage = "";
+    try {
+      await runtime.openScreenshotLocation(worldInstanceId, fileName);
+    } catch (error) {
+      errorMessage = error instanceof Error ? error.message : String(error);
+    }
+  }
+
+  async function deleteScreenshot(fileName: string): Promise<void> {
+    worldBusy = true;
+    message = "";
+    errorMessage = "";
+    try {
+      await runtime.deleteInstanceScreenshot(worldInstanceId, fileName);
+      selectedScreenshot = null;
+      pendingDelete = null;
+      message = `已把「${fileName}」移入回收站，30 天内可恢复`;
+      screenshots = await runtime.listInstanceScreenshots(worldInstanceId);
+      items = await runtime.listRecycleBinItems();
+    } catch (error) {
+      errorMessage = error instanceof Error ? error.message : String(error);
+    } finally {
+      worldBusy = false;
+    }
+  }
+
+  async function deleteWorld(world: InstanceWorldInfo): Promise<void> {
+    worldBusy = true;
+    message = "";
+    errorMessage = "";
+    try {
+      await runtime.deleteInstanceWorld(worldInstanceId, world.name);
+      pendingDelete = null;
+      message = `已把世界「${world.name}」移入回收站，30 天内可恢复`;
+      worlds = await runtime.listInstanceWorldDetails(worldInstanceId);
+      items = await runtime.listRecycleBinItems();
+    } catch (error) {
+      errorMessage = error instanceof Error ? error.message : String(error);
+    } finally {
+      worldBusy = false;
     }
   }
 
@@ -168,10 +246,18 @@
     message = "";
     errorMessage = "";
     try {
-      await runtime.restoreRecycleBinItem(item.id);
+      if (item.kind === "instance") {
+        await runtime.restoreRecycleBinItem(item.id);
+      } else {
+        await runtime.restoreRecycledEntry(item.id);
+      }
       items = items.filter((candidate) => candidate.id !== item.id);
       message = `已将「${item.displayName}」恢复到原位置`;
       await onInstancesChanged();
+      if (worldInstanceId) {
+        worlds = await runtime.listInstanceWorldDetails(worldInstanceId);
+        screenshots = await runtime.listInstanceScreenshots(worldInstanceId);
+      }
     } catch (error) {
       errorMessage = error instanceof Error ? error.message : String(error);
     } finally {
@@ -294,6 +380,19 @@
         return "写入中";
     }
   }
+
+  function recycleKindLabel(kind: RecycleItemKind): string {
+    switch (kind) {
+      case "instance":
+        return "实例";
+      case "screenshot":
+        return "截图";
+      case "resource":
+        return "资源内容";
+      case "world":
+        return "世界";
+    }
+  }
 </script>
 
 <AppShell
@@ -360,10 +459,70 @@
                     <div class="backup-title-line"><h3>{world.name}</h3><span>世界</span></div>
                     <p>{formatBytes(world.sizeBytes)}{world.lastPlayedUnixSeconds ? ` · 最近游玩 ${timestampLabel(world.lastPlayedUnixSeconds)}` : ""}</p>
                   </div>
-                  <button class="button ghost compact" disabled={worldBusy} onclick={() => void exportWorld(world)}>导出</button>
+                  <div class="backup-side">
+                    <button class="button ghost compact" disabled={worldBusy} onclick={() => void exportWorld(world)}>导出</button>
+                    {#if pendingDelete === `world-${world.name}`}
+                      <button class="button danger-subtle compact" disabled={worldBusy} onclick={() => void deleteWorld(world)}>确认删除</button>
+                      <button class="button ghost compact" disabled={worldBusy} onclick={() => { pendingDelete = null; }}>取消</button>
+                    {:else}
+                      <button class="button danger-subtle compact" disabled={worldBusy} onclick={() => { pendingDelete = `world-${world.name}`; }}>删除</button>
+                    {/if}
+                  </div>
                 </article>
               {/each}
             </div>
+          {/if}
+        </section>
+
+        <section class="backup-section" aria-labelledby="screenshots-title">
+          <header>
+            <div>
+              <h2 id="screenshots-title">截图</h2>
+              <p>截图与实例隔离存放；删除会进入回收站，30 天内可恢复。</p>
+            </div>
+            <div class="screenshot-filters" role="group" aria-label="截图筛选">
+              <button class="filter-chip" class:active={screenshotFilter === "all"} onclick={() => { screenshotFilter = "all"; }}>全部 {screenshots.length}</button>
+              <button class="filter-chip" class:active={screenshotFilter === "week"} onclick={() => { screenshotFilter = "week"; }}>本周</button>
+            </div>
+          </header>
+          {#if !worldInstanceId}
+            <div class="backup-empty-row">还没有可管理截图的实例。</div>
+          {:else if filteredScreenshots.length === 0}
+            <div class="backup-empty-row">{screenshotFilter === "week" ? "本周没有新截图。" : "这个实例还没有截图。"}</div>
+          {:else}
+            <div class="screenshot-grid">
+              {#each filteredScreenshots as screenshot}
+                <button
+                  class="screenshot-card"
+                  class:selected={selectedScreenshot === screenshot.fileName}
+                  aria-pressed={selectedScreenshot === screenshot.fileName}
+                  aria-label={`截图 ${screenshot.fileName}`}
+                  onclick={() => {
+                    selectedScreenshot = selectedScreenshot === screenshot.fileName ? null : screenshot.fileName;
+                    pendingDelete = null;
+                  }}
+                >
+                  <Icon name="disk" size={20} />
+                  <span class="screenshot-name">{screenshot.fileName}</span>
+                  <small>{formatBytes(screenshot.sizeBytes)} · {timestampLabel(screenshot.takenAtUnixSeconds)}</small>
+                </button>
+              {/each}
+            </div>
+            {#if selectedScreenshot}
+              <div class="screenshot-actions">
+                <span>已选 {selectedScreenshot}</span>
+                <div class="local-content-actions">
+                  <button class="button ghost compact" onclick={() => void copyScreenshot(selectedScreenshot!)}>复制</button>
+                  <button class="button ghost compact" onclick={() => void openScreenshot(selectedScreenshot!)}>打开本地位置</button>
+                  {#if pendingDelete === "screenshot"}
+                    <button class="button danger-subtle compact" disabled={worldBusy} onclick={() => void deleteScreenshot(selectedScreenshot!)}>确认删除</button>
+                    <button class="button ghost compact" disabled={worldBusy} onclick={() => { pendingDelete = null; }}>取消</button>
+                  {:else}
+                    <button class="button danger-subtle compact" disabled={worldBusy} onclick={() => { pendingDelete = "screenshot"; }}>删除</button>
+                  {/if}
+                </div>
+              </div>
+            {/if}
           {/if}
         </section>
 
@@ -425,7 +584,7 @@
                   <div class="recycle-copy">
                     <div class="recycle-title-line">
                       <h2>{item.displayName}</h2>
-                      <span>{item.kind === "instance" ? "实例" : item.kind}</span>
+                      <span>{recycleKindLabel(item.kind)}</span>
                     </div>
                     <p>{formatBytes(item.sizeBytes)} · {expiryLabel(item)}</p>
                     <dl class="recycle-meta">

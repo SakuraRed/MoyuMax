@@ -30,7 +30,7 @@ pub enum InstanceResourceKind {
 }
 
 impl InstanceResourceKind {
-    const fn database_value(self) -> &'static str {
+    pub(crate) const fn database_value(self) -> &'static str {
         match self {
             Self::ResourcePack => "resourcepack",
             Self::Shader => "shader",
@@ -356,7 +356,10 @@ impl AppService {
             .next())
     }
 
-    fn list_instance_resources_by_id(&self, resource_id: &str) -> Result<Vec<InstanceResource>> {
+    pub(crate) fn list_instance_resources_by_id(
+        &self,
+        resource_id: &str,
+    ) -> Result<Vec<InstanceResource>> {
         let connection = self.connection()?;
         let mut statement = connection.prepare(
             "

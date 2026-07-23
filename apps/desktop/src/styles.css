@@ -2127,6 +2127,13 @@ summary:focus-visible {
   font-size: 11.5px;
 }
 
+.resource-row-actions {
+  display: flex;
+  flex: none;
+  align-items: center;
+  gap: 10px;
+}
+
 .datapack-import-form {
   display: flex;
   align-items: flex-end;
@@ -3225,6 +3232,84 @@ summary:focus-visible {
   background: var(--surface);
 }
 
+.screenshot-filters {
+  display: flex;
+  gap: 8px;
+}
+
+.filter-chip {
+  height: 30px;
+  padding: 0 12px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  color: var(--text-2);
+  background: var(--surface);
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.filter-chip.active {
+  border-color: var(--accent);
+  color: var(--accent);
+  background: var(--accent-dim);
+}
+
+.screenshot-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+  gap: 10px;
+}
+
+.screenshot-card {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 6px;
+  padding: var(--frame-row-inset-block) var(--frame-row-inset-inline);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  color: var(--text-3);
+  background: var(--bg-app);
+  text-align: left;
+  cursor: pointer;
+}
+
+.screenshot-card.selected {
+  border-color: var(--accent);
+  outline: 1px solid var(--accent);
+}
+
+.screenshot-card .screenshot-name {
+  max-width: 100%;
+  overflow-wrap: anywhere;
+  color: var(--text);
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.screenshot-card small {
+  font-size: 11px;
+}
+
+.screenshot-actions {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-top: 12px;
+  padding: var(--frame-row-inset-block) var(--frame-row-inset-inline);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface-2);
+}
+
+.screenshot-actions > span {
+  min-width: 0;
+  overflow-wrap: anywhere;
+  color: var(--text-2);
+  font-size: 12px;
+}
+
 .backup-empty-row {
   padding: var(--frame-row-inset-block) var(--frame-row-inset-inline);
   border: 1px solid var(--border);
@@ -3459,6 +3544,15 @@ summary:focus-visible {
 
   .world-toolbar select {
     max-width: none;
+  }
+
+  .screenshot-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .screenshot-actions {
+    align-items: stretch;
+    flex-direction: column;
   }
 
   .recycle-actions {
