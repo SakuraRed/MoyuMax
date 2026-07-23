@@ -9,6 +9,7 @@
     ManagedInstance,
     MoyuRuntime,
     OnboardingSelection,
+    WorldBackupSummary,
   } from "../runtime";
   import AppShell from "./AppShell.svelte";
   import Icon from "./Icon.svelte";
@@ -115,6 +116,20 @@
         return "已停止";
       case "interrupted":
         return "启动器中断";
+    }
+  }
+
+  function backupStateLabel(backup: WorldBackupSummary | null | undefined): string {
+    if (!backup) return "未记录";
+    switch (backup.state) {
+      case "ready":
+        return "已备份";
+      case "skipped":
+        return "无世界";
+      case "failed":
+        return "备份失败";
+      case "staging":
+        return "正在备份";
     }
   }
 
@@ -267,6 +282,7 @@
                 <small>本地离线身份：MoyuMaxPlayer</small>
                 {#if latest && !active}
                   <small class="latest-session">最近会话：<span>{sessionStateLabel(latest.state)}</span>{#if latest.exitCode !== null} · 退出码 {latest.exitCode}{/if}</small>
+                  <small class="latest-backups">世界备份：启动前 {backupStateLabel(latest.preLaunchBackup)} · 退出后 {backupStateLabel(latest.postExitBackup)}</small>
                 {/if}
               </div>
               <div class="instance-actions">

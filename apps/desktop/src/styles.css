@@ -2694,7 +2694,7 @@ summary:focus-visible {
 
 .data-overview {
   display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
+  grid-template-columns: repeat(4, minmax(0, 1fr));
   gap: 1px;
   margin-bottom: 14px;
   overflow: hidden;
@@ -2748,6 +2748,125 @@ summary:focus-visible {
 .recycle-list {
   display: grid;
   gap: 12px;
+}
+
+.backup-section,
+.recycle-section {
+  margin-bottom: 14px;
+  padding: var(--frame-panel-inset-block) var(--frame-panel-inset-inline);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--surface);
+}
+
+.backup-section > header,
+.recycle-section > header {
+  margin-bottom: 14px;
+}
+
+.backup-section h2,
+.backup-section p,
+.recycle-section > header h2,
+.recycle-section > header p,
+.backup-row h3,
+.backup-row p {
+  margin: 0;
+}
+
+.backup-section h2,
+.recycle-section > header h2 {
+  font-size: 15px;
+}
+
+.backup-section header p,
+.recycle-section > header p {
+  margin-top: 3px;
+  color: var(--text-3);
+  font-size: 12px;
+}
+
+.backup-list {
+  overflow: hidden;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+}
+
+.backup-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 18px;
+  padding: var(--frame-row-inset-block) var(--frame-row-inset-inline);
+  border-bottom: 1px solid var(--border);
+}
+
+.backup-row:last-child {
+  border-bottom: 0;
+}
+
+.backup-row.failed {
+  background: var(--danger-dim);
+}
+
+.backup-row > div {
+  min-width: 0;
+}
+
+.backup-title-line {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+}
+
+.backup-title-line h3 {
+  min-width: 0;
+  overflow-wrap: anywhere;
+  font-size: 13.5px;
+}
+
+.backup-title-line span {
+  flex: none;
+  padding: var(--compact-label-inset-block) var(--compact-label-inset-inline);
+  border-radius: 10px;
+  color: var(--text-2);
+  background: var(--surface-3);
+  font-size: 10.5px;
+}
+
+.backup-row p,
+.backup-row small {
+  display: block;
+  margin-top: 4px;
+  color: var(--text-3);
+  font-size: 11.5px;
+}
+
+.backup-row.failed small,
+.backup-row.failed > strong {
+  color: var(--danger);
+}
+
+.backup-row > strong {
+  color: var(--text-2);
+  font-size: 11.5px;
+}
+
+.backup-empty-row {
+  padding: var(--frame-row-inset-block) var(--frame-row-inset-inline);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  color: var(--text-3);
+  background: var(--surface-2);
+  font-size: 12px;
+}
+
+.data-empty.compact-empty {
+  min-height: 150px;
+  background: var(--surface-2);
+}
+
+.recycle-section .recycle-card {
+  background: var(--surface-2);
 }
 
 .recycle-card {
@@ -2930,6 +3049,16 @@ summary:focus-visible {
 
   .data-heading {
     flex-direction: column;
+  }
+
+  .data-overview {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .backup-row {
+    align-items: flex-start;
+    grid-template-columns: minmax(0, 1fr);
+    gap: 6px;
   }
 
   .recycle-actions {

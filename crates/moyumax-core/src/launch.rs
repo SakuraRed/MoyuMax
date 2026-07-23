@@ -14,8 +14,9 @@ use tokio::{process::Command, sync::oneshot};
 use uuid::Uuid;
 
 use crate::{
-    AppService, CoreError, ManagedInstanceSummary, Result, append_launch_diagnostic_event,
-    remove_launch_diagnostic_files, unix_timestamp, write_launch_diagnostic_files,
+    AppService, BackupTrigger, CoreError, ManagedInstanceSummary, Result, WorldBackupSummary,
+    append_launch_diagnostic_event, remove_launch_diagnostic_files, unix_timestamp,
+    write_launch_diagnostic_files,
 };
 
 const WINDOWS_VERSION: &str = "10.0.19045";
@@ -147,6 +148,10 @@ pub struct LaunchSessionSummary {
     pub stdout_path: String,
     pub stderr_path: String,
     pub error_summary: Option<String>,
+    #[serde(default)]
+    pub pre_launch_backup: Option<WorldBackupSummary>,
+    #[serde(default)]
+    pub post_exit_backup: Option<WorldBackupSummary>,
 }
 
 pub struct LaunchExecution {
@@ -239,7 +244,17 @@ impl AppService {
             "运行时清单与受管共享存储索引不一致",
         )?;
         let prepared = prepare_launch_from_runtime(&instance, &runtime, account, options)?;
+        let already_active: bool = self.connection()?.query_row(
+            "SELECT EXISTS(SELECT 1 FROM launch_sessions WHERE instance_id = ?1 AND state IN ('starting', 'running'))",
+            params![instance.id],
+            |row| row.get(0),
+        )?;
+        if already_active {
+            return Err(CoreError::Launch("该实例已经在运行".to_owned()));
+        }
         let session_id = Uuid::new_v4().to_string();
+        let pre_launch_backup =
+            self.create_world_backup(&instance.id, BackupTrigger::PreLaunch, Some(&session_id))?;
         let logs_directory = prepared.working_directory.join("logs/moyumax");
         let stdout_path = logs_directory.join(format!("{session_id}.stdout.log"));
         let stderr_path = logs_directory.join(format!("{session_id}.stderr.log"));
@@ -254,6 +269,8 @@ impl AppService {
             stdout_path: path_string(&stdout_path)?,
             stderr_path: path_string(&stderr_path)?,
             error_summary: None,
+            pre_launch_backup: Some(pre_launch_backup),
+            post_exit_backup: None,
         };
         let mut connection = self.connection()?;
         let transaction = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
@@ -319,40 +336,67 @@ impl AppService {
                 row.get::<_, Option<String>>(9)?,
             ))
         })?;
-        rows.map(|row| {
-            let (
-                id,
-                instance_id,
-                player_name,
-                state,
-                started_at_unix_seconds,
-                ended_at_unix_seconds,
-                exit_code,
-                stdout_path,
-                stderr_path,
-                error_summary,
-            ) = row?;
-            Ok(LaunchSessionSummary {
-                id,
-                instance_id,
-                player_name,
-                state: LaunchSessionState::from_database(&state)?,
-                started_at_unix_seconds,
-                ended_at_unix_seconds,
-                exit_code,
-                stdout_path,
-                stderr_path,
-                error_summary,
+        let mut sessions = rows
+            .map(|row| {
+                let (
+                    id,
+                    instance_id,
+                    player_name,
+                    state,
+                    started_at_unix_seconds,
+                    ended_at_unix_seconds,
+                    exit_code,
+                    stdout_path,
+                    stderr_path,
+                    error_summary,
+                ) = row?;
+                Ok(LaunchSessionSummary {
+                    id,
+                    instance_id,
+                    player_name,
+                    state: LaunchSessionState::from_database(&state)?,
+                    started_at_unix_seconds,
+                    ended_at_unix_seconds,
+                    exit_code,
+                    stdout_path,
+                    stderr_path,
+                    error_summary,
+                    pre_launch_backup: None,
+                    post_exit_backup: None,
+                })
             })
-        })
-        .collect()
+            .collect::<Result<Vec<_>>>()?;
+        for session in &mut sessions {
+            session.pre_launch_backup =
+                self.backup_for_session(&session.id, BackupTrigger::PreLaunch)?;
+            session.post_exit_backup =
+                self.backup_for_session(&session.id, BackupTrigger::PostExit)?;
+        }
+        Ok(sessions)
     }
 
     pub(crate) fn recover_interrupted_launch_sessions(&self) -> Result<()> {
+        let interrupted = self
+            .list_launch_sessions()?
+            .into_iter()
+            .filter(|session| {
+                matches!(
+                    session.state,
+                    LaunchSessionState::Starting | LaunchSessionState::Running
+                )
+            })
+            .collect::<Vec<_>>();
         self.connection()?.execute(
             "UPDATE launch_sessions SET state = 'interrupted', ended_at_unix_seconds = ?1, error_summary = COALESCE(error_summary, '启动器退出时游戏会话仍在运行') WHERE state IN ('starting', 'running')",
             params![unix_timestamp()],
         )?;
+        for session in interrupted {
+            let _ = self.create_world_backup(
+                &session.instance_id,
+                BackupTrigger::PostExit,
+                Some(&session.id),
+            );
+        }
         Ok(())
     }
 
@@ -539,7 +583,9 @@ pub async fn run_launch_execution(
         Ok(outcome) => outcome,
         Err(error) => {
             let summary = error.to_string();
-            let _ = service.finish_failed_launch_session(&session_id, None, &summary);
+            if let Ok(session) = service.finish_failed_launch_session(&session_id, None, &summary) {
+                let _ = attach_post_exit_backup(service, session).await;
+            }
             return Err(error);
         }
     };
@@ -552,7 +598,7 @@ pub async fn run_launch_execution(
             None,
         )?;
         let _ = append_launch_diagnostic_event(&session, "用户请求停止游戏，会话已结束");
-        return Ok(session);
+        return Ok(attach_post_exit_backup(service, session).await);
     }
     if status.success() {
         let session = service.finish_launch_session(
@@ -562,14 +608,33 @@ pub async fn run_launch_execution(
             None,
         )?;
         let _ = append_launch_diagnostic_event(&session, "游戏正常退出");
-        Ok(session)
+        Ok(attach_post_exit_backup(service, session).await)
     } else {
         let summary = exit_code.map_or_else(
             || "游戏进程异常终止且没有退出码".to_owned(),
             |code| format!("游戏进程退出码：{code}"),
         );
-        service.finish_failed_launch_session(&session_id, exit_code, &summary)
+        let session = service.finish_failed_launch_session(&session_id, exit_code, &summary)?;
+        Ok(attach_post_exit_backup(service, session).await)
     }
+}
+
+async fn attach_post_exit_backup(
+    service: &AppService,
+    session: LaunchSessionSummary,
+) -> LaunchSessionSummary {
+    let backup_service = service.clone();
+    let instance_id = session.instance_id.clone();
+    let session_id = session.id.clone();
+    let _ = tokio::task::spawn_blocking(move || {
+        backup_service.create_world_backup(&instance_id, BackupTrigger::PostExit, Some(&session_id))
+    })
+    .await;
+    service
+        .list_launch_sessions()
+        .ok()
+        .and_then(|sessions| sessions.into_iter().find(|item| item.id == session.id))
+        .unwrap_or(session)
 }
 
 fn diagnostic_launch_script(prepared: &PreparedLaunch) -> Result<String> {

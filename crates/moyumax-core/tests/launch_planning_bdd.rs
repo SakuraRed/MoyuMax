@@ -1,8 +1,8 @@
 use std::{fs, path::Path};
 
 use moyumax_core::{
-    AppService, LaunchAccount, LaunchOptions, LaunchSessionState, ManagedInstanceSummary,
-    prepare_launch_from_runtime, run_launch_execution,
+    AppService, BackupState, LaunchAccount, LaunchOptions, LaunchSessionState,
+    ManagedInstanceSummary, prepare_launch_from_runtime, run_launch_execution,
 };
 use rusqlite::{Connection, params};
 use serde_json::json;
@@ -205,7 +205,43 @@ fn m4_launch_005_duplicate_running_instance_is_rejected() {
 
     assert!(error.to_string().contains("已经在运行"));
     assert_eq!(service.list_launch_sessions().unwrap().len(), 1);
+    assert_eq!(
+        service
+            .list_world_backups(Some(&fixture.instance.id))
+            .unwrap()
+            .len(),
+        1
+    );
     assert_eq!(first.session().state, LaunchSessionState::Starting);
+    assert_eq!(
+        first.session().pre_launch_backup.as_ref().unwrap().state,
+        BackupState::Ready
+    );
+}
+
+#[test]
+fn m8_backup_003_unsafe_saves_root_blocks_launch_before_session_creation() {
+    let fixture = LaunchFixture::new();
+    let service = fixture.register_with_service();
+    fs::remove_dir_all(fixture.root.join(".minecraft/saves")).unwrap();
+    fs::write(fixture.root.join(".minecraft/saves"), b"not-a-directory").unwrap();
+
+    let error = service
+        .create_launch_execution(
+            &fixture.instance.id,
+            &LaunchAccount::offline("LocalPlayer").unwrap(),
+            &LaunchOptions::default(),
+        )
+        .unwrap_err();
+
+    assert!(error.to_string().contains("存档根"));
+    assert!(service.list_launch_sessions().unwrap().is_empty());
+    let backup = service
+        .list_world_backups(Some(&fixture.instance.id))
+        .unwrap()
+        .remove(0);
+    assert_eq!(backup.state, BackupState::Failed);
+    assert!(backup.archive_path.is_none());
 }
 
 #[test]
@@ -271,6 +307,14 @@ async fn m4_launch_006_explicit_stop_persists_stopped_state_and_logs() {
     assert!(Path::new(&completed.stdout_path).is_file());
     assert!(Path::new(&completed.stderr_path).is_file());
     assert!(service.list_crash_reports().unwrap().is_empty());
+    assert_eq!(
+        completed.pre_launch_backup.as_ref().unwrap().state,
+        BackupState::Ready
+    );
+    assert_eq!(
+        completed.post_exit_backup.as_ref().unwrap().state,
+        BackupState::Ready
+    );
 }
 
 #[test]
@@ -302,6 +346,14 @@ fn m4_launch_007_reopen_marks_orphaned_session_interrupted() {
         session
             .error_summary
             .is_some_and(|summary| summary.contains("启动器退出"))
+    );
+    assert_eq!(
+        session.pre_launch_backup.as_ref().unwrap().state,
+        BackupState::Ready
+    );
+    assert_eq!(
+        session.post_exit_backup.as_ref().unwrap().state,
+        BackupState::Ready
     );
     let report = reopened.list_crash_reports().unwrap().remove(0);
     assert_eq!(report.launch_session_id, session_id);
@@ -348,6 +400,10 @@ async fn m4_launch_009_closed_stop_channel_is_not_a_stop_request() {
         completed.state,
         LaunchSessionState::Completed | LaunchSessionState::Failed
     ));
+    assert_eq!(
+        completed.post_exit_backup.as_ref().unwrap().state,
+        BackupState::Ready
+    );
 }
 
 #[tokio::test]
@@ -395,6 +451,14 @@ async fn m4_launch_003_nonzero_process_exit_persists_logs_and_failure_state() {
     assert!(Path::new(&completed.stdout_path).is_file());
     assert!(Path::new(&completed.stderr_path).is_file());
     assert_eq!(service.list_launch_sessions().unwrap()[0].id, session_id);
+    assert_eq!(
+        completed.pre_launch_backup.as_ref().unwrap().state,
+        BackupState::Ready
+    );
+    assert_eq!(
+        completed.post_exit_backup.as_ref().unwrap().state,
+        BackupState::Ready
+    );
     let report = service.list_crash_reports().unwrap().remove(0);
     assert_eq!(report.launch_session_id, session_id);
     assert!(
@@ -429,6 +493,11 @@ async fn m4_launch_011_log_initialization_failure_is_persisted() {
     assert_eq!(session.state, LaunchSessionState::Failed);
     assert!(session.ended_at_unix_seconds.is_some());
     assert!(session.error_summary.is_some());
+    assert_eq!(
+        session.pre_launch_backup.as_ref().unwrap().state,
+        BackupState::Ready
+    );
+    assert!(session.post_exit_backup.is_none());
     let report = service.list_crash_reports().unwrap().remove(0);
     assert_eq!(report.launch_session_id, session.id);
     assert!(
@@ -451,11 +520,11 @@ struct LaunchFixture {
 impl LaunchFixture {
     fn new() -> Self {
         let directory = TempDir::new().unwrap();
-        let root = directory.path().join("instance");
+        let root = directory.path().join("instances/instance-id");
         let shared = directory.path().join("store");
         let java_home = directory.path().join("java");
         for directory in [
-            root.join(".minecraft"),
+            root.join(".minecraft/saves/Test World"),
             root.join("natives"),
             java_home.join("bin"),
             shared.join("minecraft/libraries"),
@@ -475,6 +544,11 @@ impl LaunchFixture {
         ] {
             fs::write(file, b"fixture").unwrap();
         }
+        fs::write(
+            root.join(".minecraft/saves/Test World/level.dat"),
+            b"backup-fixture",
+        )
+        .unwrap();
         let instance = ManagedInstanceSummary {
             id: "instance-id".to_owned(),
             name: "启动测试".to_owned(),

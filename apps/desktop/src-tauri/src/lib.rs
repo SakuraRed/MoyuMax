@@ -12,7 +12,7 @@ use moyumax_core::{
     LaunchSessionSummary, ManagedInstanceSummary, MetadataClient, ModrinthClient,
     ModrinthSearchPage, ModrinthSearchQuery, OnboardingSelection, RecoveryDecision, RecycleBinItem,
     RecyclePurgeResult, ResolvedInstallRequest, ResolvedLoader, TaskState, VersionCatalog,
-    run_launch_execution,
+    WorldBackupSummary, run_launch_execution,
 };
 use serde::Serialize;
 use tauri::{Manager, State};
@@ -463,6 +463,16 @@ async fn purge_recycle_bin_item(
 }
 
 #[tauri::command]
+fn list_world_backups(
+    service: State<'_, AppService>,
+    instance_id: Option<String>,
+) -> Result<Vec<WorldBackupSummary>, String> {
+    service
+        .list_world_backups(instance_id.as_deref())
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
 async fn start_instance(
     service: State<'_, AppService>,
     coordinator: State<'_, LaunchCoordinator>,
@@ -621,6 +631,7 @@ pub fn run() {
             recycle_instance,
             restore_recycle_bin_item,
             purge_recycle_bin_item,
+            list_world_backups,
             start_instance,
             stop_instance,
             list_launch_sessions,

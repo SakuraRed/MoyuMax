@@ -8,6 +8,7 @@ use rusqlite::{Connection, OptionalExtension, TransactionBehavior, params};
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
+mod backup;
 mod catalog;
 mod content;
 mod diagnostics;
@@ -16,6 +17,7 @@ mod install;
 mod launch;
 mod recycle;
 
+pub use backup::*;
 pub use catalog::*;
 pub use content::*;
 pub use diagnostics::*;
@@ -103,6 +105,8 @@ pub enum CoreError {
     Diagnostics(String),
     #[error("无法管理内置回收站：{0}")]
     Recycle(String),
+    #[error("无法备份世界存档：{0}")]
+    Backup(String),
 }
 
 pub type Result<T> = std::result::Result<T, CoreError>;
@@ -126,6 +130,7 @@ impl AppService {
         service.migrate()?;
         service.recover_interrupted_install_tasks()?;
         service.recover_interrupted_content_tasks()?;
+        service.recover_interrupted_world_backups()?;
         service.recover_interrupted_launch_sessions()?;
         service.recover_interrupted_recycle_operations()?;
         service.generate_missing_crash_reports()?;
@@ -318,7 +323,27 @@ impl AppService {
             );
             CREATE INDEX IF NOT EXISTS idx_recycle_items_state_deleted
                 ON recycle_bin_items(state, deleted_at_unix_seconds);
-            PRAGMA user_version = 7;
+            CREATE TABLE IF NOT EXISTS world_backups (
+                id TEXT PRIMARY KEY NOT NULL,
+                instance_id TEXT NOT NULL,
+                instance_name TEXT NOT NULL,
+                launch_session_id TEXT,
+                trigger TEXT NOT NULL,
+                state TEXT NOT NULL,
+                archive_path TEXT,
+                world_count INTEGER NOT NULL,
+                source_bytes INTEGER NOT NULL,
+                archive_bytes INTEGER NOT NULL,
+                created_at_unix_seconds INTEGER NOT NULL,
+                completed_at_unix_seconds INTEGER,
+                error_summary TEXT,
+                UNIQUE(launch_session_id, trigger)
+            );
+            CREATE INDEX IF NOT EXISTS idx_world_backups_instance_created
+                ON world_backups(instance_id, created_at_unix_seconds DESC, id DESC);
+            CREATE INDEX IF NOT EXISTS idx_world_backups_state_created
+                ON world_backups(state, created_at_unix_seconds);
+            PRAGMA user_version = 8;
             ",
         )?;
         Ok(())

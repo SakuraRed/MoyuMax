@@ -1,7 +1,14 @@
 <script lang="ts">
   import { onMount, tick } from "svelte";
 
-  import type { MoyuRuntime, OnboardingSelection, RecycleBinItem } from "../runtime";
+  import type {
+    BackupState,
+    BackupTrigger,
+    MoyuRuntime,
+    OnboardingSelection,
+    RecycleBinItem,
+    WorldBackupSummary,
+  } from "../runtime";
   import AppShell from "./AppShell.svelte";
   import Icon from "./Icon.svelte";
 
@@ -30,6 +37,7 @@
   }: Props = $props();
 
   let items = $state<RecycleBinItem[]>([]);
+  let backups = $state<WorldBackupSummary[]>([]);
   let loading = $state(true);
   let changingItem = $state<string | null>(null);
   let purgeCandidate = $state<RecycleBinItem | null>(null);
@@ -37,6 +45,7 @@
   let message = $state("");
   let errorMessage = $state("");
   const totalBytes = $derived(items.reduce((sum, item) => sum + item.sizeBytes, 0));
+  const backupBytes = $derived(backups.reduce((sum, backup) => sum + backup.archiveBytes, 0));
 
   onMount(() => {
     void loadItems();
@@ -46,7 +55,10 @@
     loading = true;
     errorMessage = "";
     try {
-      items = await runtime.listRecycleBinItems();
+      [items, backups] = await Promise.all([
+        runtime.listRecycleBinItems(),
+        runtime.listWorldBackups(),
+      ]);
     } catch (error) {
       errorMessage = error instanceof Error ? error.message : String(error);
     } finally {
@@ -141,13 +153,41 @@
   }
 
   function deletedLabel(item: RecycleBinItem): string {
+    return timestampLabel(item.deletedAtUnixSeconds);
+  }
+
+  function timestampLabel(unixSeconds: number): string {
     return new Intl.DateTimeFormat("zh-CN", {
       year: "numeric",
       month: "2-digit",
       day: "2-digit",
       hour: "2-digit",
       minute: "2-digit",
-    }).format(new Date(item.deletedAtUnixSeconds * 1000));
+    }).format(new Date(unixSeconds * 1000));
+  }
+
+  function backupTriggerLabel(trigger: BackupTrigger): string {
+    switch (trigger) {
+      case "preLaunch":
+        return "启动前";
+      case "postExit":
+        return "退出后";
+      case "manual":
+        return "手动";
+    }
+  }
+
+  function backupStateLabel(state: BackupState): string {
+    switch (state) {
+      case "ready":
+        return "已完成";
+      case "skipped":
+        return "无世界，已跳过";
+      case "failed":
+        return "失败";
+      case "staging":
+        return "写入中";
+    }
   }
 </script>
 
@@ -158,7 +198,7 @@
   navigationTargets={["home", "resources", "tasks"]}
   onNavigate={(target) => target === "home" ? onBack() : target === "resources" ? onOpenResources() : target === "tasks" ? onOpenTasks() : undefined}
   connectionStatus="完全本地管理 · 不自动清理"
-  taskStatus={changingItem ? "正在更新回收站" : `${items.length} 个回收站项目`}
+  taskStatus={changingItem ? "正在更新回收站" : `${backups.length} 个备份 · ${items.length} 个回收站项目`}
   {onMinimize}
   {onToggleMaximize}
   {onClose}
@@ -173,10 +213,11 @@
         <button class="button" disabled={loading || changingItem !== null} onclick={() => void loadItems()}>刷新</button>
       </header>
 
-      <section class="data-overview" aria-label="回收站摘要">
-        <div><span>项目</span><strong>{items.length}</strong></div>
-        <div><span>占用空间</span><strong>{formatBytes(totalBytes)}</strong></div>
-        <div><span>默认保留</span><strong>30 天</strong></div>
+      <section class="data-overview" aria-label="本地数据摘要">
+        <div><span>备份快照</span><strong>{backups.length}</strong></div>
+        <div><span>备份占用</span><strong>{formatBytes(backupBytes)}</strong></div>
+        <div><span>回收项目</span><strong>{items.length}</strong></div>
+        <div><span>回收占用</span><strong>{formatBytes(totalBytes)}</strong></div>
       </section>
 
       {#if loading}
@@ -185,46 +226,84 @@
           <div class="loading-line"></div>
           <span>正在读取本地回收站…</span>
         </section>
-      {:else if items.length === 0}
-        <section class="data-empty">
-          <Icon name="database" size={30} />
-          <h2>回收站为空</h2>
-          <p>从实例页面删除的内容会先保留在这里，不会同时删除托管 Java。</p>
-        </section>
       {:else}
-        <section class="recycle-list" aria-label="回收站项目">
-          {#each items as item}
-            <article class:failed={item.state === "failed"} class="recycle-card">
-              <div class="recycle-copy">
-                <div class="recycle-title-line">
-                  <h2>{item.displayName}</h2>
-                  <span>{item.kind === "instance" ? "实例" : item.kind}</span>
-                </div>
-                <p>{formatBytes(item.sizeBytes)} · {expiryLabel(item)}</p>
-                <dl class="recycle-meta">
-                  <div><dt>删除时间</dt><dd>{deletedLabel(item)}</dd></div>
-                  <div><dt>原位置</dt><dd><code>{item.originalPath}</code></dd></div>
-                </dl>
-                {#if item.state === "failed"}
-                  <small class="recycle-error">上次文件操作未能自动收敛，请保留两侧内容并查看诊断。</small>
-                {/if}
-              </div>
-              <div class="recycle-actions">
-                <button
-                  class="button primary"
-                  aria-label={`恢复“${item.displayName}”`}
-                  disabled={item.state !== "ready" || changingItem !== null}
-                  onclick={() => void restore(item)}
-                >{changingItem === item.id ? "正在恢复" : "恢复"}</button>
-                <button
-                  class="button danger-subtle"
-                  aria-label={`永久删除“${item.displayName}”`}
-                  disabled={item.state !== "ready" || changingItem !== null}
-                  onclick={() => void askPurge(item)}
-                >永久删除</button>
-              </div>
-            </article>
-          {/each}
+        <section class="backup-section" aria-labelledby="world-backups-title">
+          <header>
+            <div>
+              <h2 id="world-backups-title">世界备份</h2>
+              <p>游戏启动前和退出后自动备份，默认保留每个实例最近 20 个成功快照。</p>
+            </div>
+          </header>
+          {#if backups.length === 0}
+            <div class="backup-empty-row">还没有备份记录。包含世界的实例启动后会在这里出现。</div>
+          {:else}
+            <div class="backup-list">
+              {#each backups as backup}
+                <article class:failed={backup.state === "failed"} class="backup-row">
+                  <div>
+                    <div class="backup-title-line">
+                      <h3>{backup.instanceName}</h3>
+                      <span>{backupTriggerLabel(backup.trigger)}</span>
+                    </div>
+                    <p>{timestampLabel(backup.createdAtUnixSeconds)} · {backup.worldCount} 个世界 · {formatBytes(backup.archiveBytes || backup.sourceBytes)}</p>
+                    {#if backup.errorSummary}<small>{backup.errorSummary}</small>{/if}
+                  </div>
+                  <strong>{backupStateLabel(backup.state)}</strong>
+                </article>
+              {/each}
+            </div>
+          {/if}
+        </section>
+
+        <section class="recycle-section" aria-labelledby="recycle-bin-title">
+          <header>
+            <div>
+              <h2 id="recycle-bin-title">回收站</h2>
+              <p>实例默认保留 30 天，MoyuMax 不会未经同意自动清理。</p>
+            </div>
+          </header>
+          {#if items.length === 0}
+            <div class="data-empty compact-empty">
+              <Icon name="database" size={26} />
+              <h2>回收站为空</h2>
+              <p>删除实例不会同时删除托管 Java。</p>
+            </div>
+          {:else}
+            <div class="recycle-list" aria-label="回收站项目">
+              {#each items as item}
+                <article class:failed={item.state === "failed"} class="recycle-card">
+                  <div class="recycle-copy">
+                    <div class="recycle-title-line">
+                      <h2>{item.displayName}</h2>
+                      <span>{item.kind === "instance" ? "实例" : item.kind}</span>
+                    </div>
+                    <p>{formatBytes(item.sizeBytes)} · {expiryLabel(item)}</p>
+                    <dl class="recycle-meta">
+                      <div><dt>删除时间</dt><dd>{deletedLabel(item)}</dd></div>
+                      <div><dt>原位置</dt><dd><code>{item.originalPath}</code></dd></div>
+                    </dl>
+                    {#if item.state === "failed"}
+                      <small class="recycle-error">上次文件操作未能自动收敛，请保留两侧内容并查看诊断。</small>
+                    {/if}
+                  </div>
+                  <div class="recycle-actions">
+                    <button
+                      class="button primary"
+                      aria-label={`恢复“${item.displayName}”`}
+                      disabled={item.state !== "ready" || changingItem !== null}
+                      onclick={() => void restore(item)}
+                    >{changingItem === item.id ? "正在恢复" : "恢复"}</button>
+                    <button
+                      class="button danger-subtle"
+                      aria-label={`永久删除“${item.displayName}”`}
+                      disabled={item.state !== "ready" || changingItem !== null}
+                      onclick={() => void askPurge(item)}
+                    >永久删除</button>
+                  </div>
+                </article>
+              {/each}
+            </div>
+          {/if}
         </section>
       {/if}
     </div>

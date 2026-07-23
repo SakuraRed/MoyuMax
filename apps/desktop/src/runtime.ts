@@ -259,6 +259,25 @@ export interface InstalledContent {
   installedAtUnixSeconds: number;
 }
 
+export type BackupTrigger = "preLaunch" | "postExit" | "manual";
+export type BackupState = "staging" | "ready" | "skipped" | "failed";
+
+export interface WorldBackupSummary {
+  id: string;
+  instanceId: string;
+  instanceName: string;
+  launchSessionId: string | null;
+  trigger: BackupTrigger;
+  state: BackupState;
+  archivePath: string | null;
+  worldCount: number;
+  sourceBytes: number;
+  archiveBytes: number;
+  createdAtUnixSeconds: number;
+  completedAtUnixSeconds: number | null;
+  errorSummary: string | null;
+}
+
 export type LaunchSessionState =
   | "starting"
   | "running"
@@ -278,6 +297,8 @@ export interface LaunchSession {
   stdoutPath: string;
   stderrPath: string;
   errorSummary: string | null;
+  preLaunchBackup?: WorldBackupSummary | null;
+  postExitBackup?: WorldBackupSummary | null;
 }
 
 export type CrashCauseKind =
@@ -369,6 +390,7 @@ export interface MoyuRuntime {
   recycleInstance(instanceId: string): Promise<RecycleBinItem>;
   restoreRecycleBinItem(itemId: string): Promise<ManagedInstance>;
   purgeRecycleBinItem(itemId: string): Promise<RecyclePurgeResult>;
+  listWorldBackups(instanceId?: string): Promise<WorldBackupSummary[]>;
   startInstance(instanceId: string): Promise<LaunchSession>;
   stopInstance(instanceId: string): Promise<void>;
   listLaunchSessions(): Promise<LaunchSession[]>;
@@ -384,6 +406,7 @@ const BROWSER_STORAGE_KEY = "moyumax.browser.onboarding";
 const BROWSER_TASKS_KEY = "moyumax.browser.installTasks";
 const BROWSER_INSTANCES_KEY = "moyumax.browser.instances";
 const BROWSER_RECYCLE_BIN_KEY = "moyumax.browser.recycleBin";
+const BROWSER_WORLD_BACKUPS_KEY = "moyumax.browser.worldBackups";
 const BROWSER_LAUNCH_SESSIONS_KEY = "moyumax.browser.launchSessions";
 const BROWSER_CRASH_REPORTS_KEY = "moyumax.browser.crashReports";
 const BROWSER_CONTENT_TASKS_KEY = "moyumax.browser.contentTasks";
@@ -449,6 +472,10 @@ function createTauriRuntime(): MoyuRuntime {
       invoke<ManagedInstance>("restore_recycle_bin_item", { itemId }),
     purgeRecycleBinItem: (itemId) =>
       invoke<RecyclePurgeResult>("purge_recycle_bin_item", { itemId }),
+    listWorldBackups: (instanceId) =>
+      invoke<WorldBackupSummary[]>("list_world_backups", {
+        instanceId: instanceId ?? null,
+      }),
     startInstance: (instanceId) =>
       invoke<LaunchSession>("start_instance", { instanceId }),
     stopInstance: (instanceId) => invoke<void>("stop_instance", { instanceId }),
@@ -805,6 +832,11 @@ function createBrowserRuntime(): MoyuRuntime {
         removedSubjects: 1,
       };
     },
+    async listWorldBackups(instanceId) {
+      return browserWorldBackups().filter(
+        (backup) => instanceId === undefined || backup.instanceId === instanceId,
+      );
+    },
     async startInstance(instanceId) {
       const instance = browserInstances().find((candidate) => candidate.id === instanceId);
       if (!instance || instance.state !== "ready") {
@@ -821,8 +853,14 @@ function createBrowserRuntime(): MoyuRuntime {
         throw new Error("该实例已经在运行");
       }
       const now = Math.floor(Date.now() / 1000);
+      const sessionId = crypto.randomUUID();
+      const preLaunchBackup = createBrowserWorldBackup(
+        instance,
+        sessionId,
+        "preLaunch",
+      );
       const session: LaunchSession = {
-        id: crypto.randomUUID(),
+        id: sessionId,
         instanceId,
         playerName: "MoyuMaxPlayer",
         state: "running",
@@ -832,6 +870,8 @@ function createBrowserRuntime(): MoyuRuntime {
         stdoutPath: `${instance.rootDirectory}\\.minecraft\\logs\\moyumax\\browser.stdout.log`,
         stderrPath: `${instance.rootDirectory}\\.minecraft\\logs\\moyumax\\browser.stderr.log`,
         errorSummary: null,
+        preLaunchBackup,
+        postExitBackup: null,
       };
       sessions.unshift(session);
       window.localStorage.setItem(
@@ -850,6 +890,16 @@ function createBrowserRuntime(): MoyuRuntime {
       if (!session) throw new Error("该实例当前没有可停止的游戏进程");
       session.state = "stopped";
       session.endedAtUnixSeconds = Math.floor(Date.now() / 1000);
+      const instance = browserInstances().find(
+        (candidate) => candidate.id === instanceId,
+      );
+      if (instance) {
+        session.postExitBackup = createBrowserWorldBackup(
+          instance,
+          session.id,
+          "postExit",
+        );
+      }
       window.localStorage.setItem(
         BROWSER_LAUNCH_SESSIONS_KEY,
         JSON.stringify(sessions),
@@ -953,6 +1003,54 @@ function browserInstances(): ManagedInstance[] {
 function browserRecycleEntries(): BrowserRecycleEntry[] {
   const serialized = window.localStorage.getItem(BROWSER_RECYCLE_BIN_KEY);
   return serialized ? (JSON.parse(serialized) as BrowserRecycleEntry[]) : [];
+}
+
+function browserWorldBackups(): WorldBackupSummary[] {
+  const serialized = window.localStorage.getItem(BROWSER_WORLD_BACKUPS_KEY);
+  return serialized ? (JSON.parse(serialized) as WorldBackupSummary[]) : [];
+}
+
+function createBrowserWorldBackup(
+  instance: ManagedInstance,
+  sessionId: string,
+  trigger: BackupTrigger,
+): WorldBackupSummary {
+  const backups = browserWorldBackups();
+  const existing = backups.find(
+    (backup) =>
+      backup.launchSessionId === sessionId && backup.trigger === trigger,
+  );
+  if (existing) return existing;
+  const now = Math.floor(Date.now() / 1000);
+  const backup: WorldBackupSummary = {
+    id: `backup-${crypto.randomUUID()}`,
+    instanceId: instance.id,
+    instanceName: instance.name,
+    launchSessionId: sessionId,
+    trigger,
+    state: "ready",
+    archivePath: `D:\\MoyuMax\\data\\backups\\instances\\${instance.id}\\${now}-${trigger}.zip`,
+    worldCount: 1,
+    sourceBytes: 8 * 1024 * 1024,
+    archiveBytes: 2 * 1024 * 1024,
+    createdAtUnixSeconds: now,
+    completedAtUnixSeconds: now,
+    errorSummary: null,
+  };
+  backups.unshift(backup);
+  const retained = backups.filter((candidate) => candidate.instanceId !== instance.id);
+  retained.push(
+    ...backups
+      .filter((candidate) => candidate.instanceId === instance.id)
+      .slice(0, 20),
+  );
+  retained.sort(
+    (left, right) =>
+      right.createdAtUnixSeconds - left.createdAtUnixSeconds ||
+      right.id.localeCompare(left.id),
+  );
+  window.localStorage.setItem(BROWSER_WORLD_BACKUPS_KEY, JSON.stringify(retained));
+  return backup;
 }
 
 function browserLaunchSessions(): LaunchSession[] {
