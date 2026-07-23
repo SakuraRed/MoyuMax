@@ -306,6 +306,7 @@ impl LaunchCoordinator {
         let instance_id = session.instance_id.clone();
         let (stop_sender, stop_receiver) = oneshot::channel();
         self.register_stop_request(&instance_id, stop_sender)?;
+        moyumax_core::spawn_scheduled_world_backups(service.clone(), session.id.clone());
         let coordinator = self.clone();
         tauri::async_runtime::spawn(async move {
             let _ = run_launch_execution(&service, execution, stop_receiver).await;
@@ -349,6 +350,13 @@ struct InstallPreview {
 struct ContentInstallPreview {
     id: String,
     plan: ContentInstallPlan,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct WorldBackupSettings {
+    interval_minutes: u64,
+    keep_count: u64,
 }
 
 #[derive(Debug, Serialize)]
@@ -842,6 +850,37 @@ fn restore_recycled_entry(
 ) -> Result<RecycleBinItem, String> {
     service
         .restore_recycled_entry(&item_id)
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+fn get_world_backup_settings(
+    service: State<'_, AppService>,
+) -> Result<WorldBackupSettings, String> {
+    Ok(WorldBackupSettings {
+        interval_minutes: service
+            .world_backup_interval_minutes()
+            .map_err(|error| error.to_string())?,
+        keep_count: service
+            .world_backup_keep_count()
+            .map_err(|error| error.to_string())?,
+    })
+}
+
+#[tauri::command]
+fn set_world_backup_interval_minutes(
+    service: State<'_, AppService>,
+    minutes: u64,
+) -> Result<(), String> {
+    service
+        .set_world_backup_interval_minutes(minutes)
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+fn set_world_backup_keep_count(service: State<'_, AppService>, count: u64) -> Result<(), String> {
+    service
+        .set_world_backup_keep_count(count)
         .map_err(|error| error.to_string())
 }
 
@@ -1440,6 +1479,9 @@ pub fn run() {
             delete_instance_resource,
             delete_instance_world,
             restore_recycled_entry,
+            get_world_backup_settings,
+            set_world_backup_interval_minutes,
+            set_world_backup_keep_count,
             retry_content_task,
             resolve_content_task_recovery,
             list_instances,

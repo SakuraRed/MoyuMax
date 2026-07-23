@@ -45,6 +45,7 @@ corepack pnpm --filter @moyumax/desktop tauri dev
 - [实例资源内容管理](docs/plans/MILESTONE-16-INSTANCE-RESOURCES.md)
 - [世界存档管理](docs/plans/MILESTONE-17-WORLD-MANAGEMENT.md)
 - [截图管理与删除回收站统一](docs/plans/MILESTONE-18-SCREENSHOTS-RECYCLE.md)
+- [运行期间增量备份与世界历史](docs/plans/MILESTONE-19-INCREMENTAL-BACKUP.md)
 - [下载来源统一与多线程加速计划](docs/plans/DOWNLOAD-SOURCES-AND-ACCELERATION.md)
 - [技术栈决策](docs/architecture/ADR-0001-DESKTOP-STACK.md)
 

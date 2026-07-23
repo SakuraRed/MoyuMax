@@ -365,6 +365,8 @@
         return "退出后";
       case "manual":
         return "手动";
+      case "scheduled":
+        return "定时";
     }
   }
 
@@ -543,6 +545,7 @@
                     <div class="backup-title-line">
                       <h3>{backup.instanceName}</h3>
                       <span>{backupTriggerLabel(backup.trigger)}</span>
+                      <span>{backup.kind === "incremental" ? "增量" : "完整"}</span>
                     </div>
                     <p>{timestampLabel(backup.createdAtUnixSeconds)} · {backup.worldCount} 个世界 · {formatBytes(backup.archiveBytes || backup.sourceBytes)}</p>
                     {#if backup.errorSummary}<small>{backup.errorSummary}</small>{/if}

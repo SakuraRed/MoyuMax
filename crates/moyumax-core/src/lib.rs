@@ -461,6 +461,17 @@ impl AppService {
                 ",
             )?;
         }
+        // v14:世界备份类型（全量/增量）与恢复链基准。
+        let version: i64 = connection.query_row("PRAGMA user_version", [], |row| row.get(0))?;
+        if version < 14 {
+            connection.execute_batch(
+                "
+                ALTER TABLE world_backups ADD COLUMN kind TEXT NOT NULL DEFAULT 'full';
+                ALTER TABLE world_backups ADD COLUMN base_backup_id TEXT;
+                PRAGMA user_version = 14;
+                ",
+            )?;
+        }
         Ok(())
     }
 

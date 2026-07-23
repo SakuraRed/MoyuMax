@@ -339,8 +339,9 @@ export interface InstanceWorldInfo {
   lastPlayedUnixSeconds: number | null;
 }
 
-export type BackupTrigger = "preLaunch" | "postExit" | "manual";
+export type BackupTrigger = "preLaunch" | "postExit" | "manual" | "scheduled";
 export type BackupState = "staging" | "ready" | "skipped" | "failed";
+export type BackupKind = "full" | "incremental";
 
 export interface WorldBackupSummary {
   id: string;
@@ -356,6 +357,13 @@ export interface WorldBackupSummary {
   createdAtUnixSeconds: number;
   completedAtUnixSeconds: number | null;
   errorSummary: string | null;
+  kind: BackupKind;
+  baseBackupId: string | null;
+}
+
+export interface WorldBackupSettings {
+  intervalMinutes: number;
+  keepCount: number;
 }
 
 export type LaunchSessionState =
@@ -568,6 +576,9 @@ export interface MoyuRuntime {
   deleteInstanceResource(resourceId: string): Promise<RecycleBinItem>;
   deleteInstanceWorld(instanceId: string, worldName: string): Promise<RecycleBinItem>;
   restoreRecycledEntry(itemId: string): Promise<RecycleBinItem>;
+  getWorldBackupSettings(): Promise<WorldBackupSettings>;
+  setWorldBackupIntervalMinutes(minutes: number): Promise<void>;
+  setWorldBackupKeepCount(count: number): Promise<void>;
   retryContentTask(taskId: string): Promise<void>;
   resolveContentTaskRecovery(taskId: string, decision: RecoveryDecision): Promise<void>;
   listInstances(): Promise<ManagedInstance[]>;
@@ -633,6 +644,7 @@ const BROWSER_INSTANCE_RESOURCES_KEY = "moyumax.browser.instanceResources";
 const BROWSER_INSTANCE_WORLDS_KEY = "moyumax.browser.instanceWorlds";
 const BROWSER_WORLD_DETAILS_KEY = "moyumax.browser.worldDetails";
 const BROWSER_SCREENSHOTS_KEY = "moyumax.browser.screenshots";
+const BROWSER_BACKUP_SETTINGS_KEY = "moyumax.browser.backupSettings";
 const BROWSER_MODRINTH_OFFLINE_KEY = "moyumax.browser.modrinthOffline";
 const BROWSER_CLOSE_BEHAVIOR_KEY = "moyumax.browser.windowCloseBehavior";
 const BROWSER_SHELL_STATE_KEY = "moyumax.browser.shellState";
@@ -781,6 +793,12 @@ function createTauriRuntime(): MoyuRuntime {
       invoke<RecycleBinItem>("delete_instance_world", { instanceId, worldName }),
     restoreRecycledEntry: (itemId) =>
       invoke<RecycleBinItem>("restore_recycled_entry", { itemId }),
+    getWorldBackupSettings: () =>
+      invoke<WorldBackupSettings>("get_world_backup_settings"),
+    setWorldBackupIntervalMinutes: (minutes) =>
+      invoke<void>("set_world_backup_interval_minutes", { minutes }),
+    setWorldBackupKeepCount: (count) =>
+      invoke<void>("set_world_backup_keep_count", { count }),
     retryContentTask: (taskId) => invoke<void>("retry_content_task", { taskId }),
     resolveContentTaskRecovery: (taskId, decision) =>
       invoke<void>("resolve_content_task_recovery", { taskId, decision }),
@@ -1360,10 +1378,25 @@ function createBrowserRuntime(): MoyuRuntime {
         createdAtUnixSeconds: now,
         completedAtUnixSeconds: now,
         errorSummary: null,
+        kind: "full",
+        baseBackupId: null,
       };
       backups.unshift(recovery);
       window.localStorage.setItem(BROWSER_WORLD_BACKUPS_KEY, JSON.stringify(backups));
       return recovery;
+    },
+    async getWorldBackupSettings() {
+      return browserBackupSettings();
+    },
+    async setWorldBackupIntervalMinutes(minutes) {
+      if (minutes > 1440) throw new Error("备份间隔不能超过 1440 分钟");
+      const settings = { ...browserBackupSettings(), intervalMinutes: minutes };
+      window.localStorage.setItem(BROWSER_BACKUP_SETTINGS_KEY, JSON.stringify(settings));
+    },
+    async setWorldBackupKeepCount(count) {
+      if (count === 0 || count > 100) throw new Error("备份保留数量必须在 1 到 100 之间");
+      const settings = { ...browserBackupSettings(), keepCount: count };
+      window.localStorage.setItem(BROWSER_BACKUP_SETTINGS_KEY, JSON.stringify(settings));
     },
     async listInstanceScreenshots(instanceId) {
       return browserScreenshots()[instanceId] ?? [];
@@ -2063,6 +2096,13 @@ function browserScreenshots(): Record<string, InstanceScreenshot[]> {
   return serialized ? (JSON.parse(serialized) as Record<string, InstanceScreenshot[]>) : {};
 }
 
+function browserBackupSettings(): WorldBackupSettings {
+  const serialized = window.localStorage.getItem(BROWSER_BACKUP_SETTINGS_KEY);
+  return serialized
+    ? (JSON.parse(serialized) as WorldBackupSettings)
+    : { intervalMinutes: 30, keepCount: 20 };
+}
+
 function browserPushRecycleEntry(input: {
   kind: RecycleItemKind;
   subjectId: string;
@@ -2166,6 +2206,8 @@ function createBrowserWorldBackup(
     createdAtUnixSeconds: now,
     completedAtUnixSeconds: now,
     errorSummary: null,
+    kind: "full",
+    baseBackupId: null,
   };
   backups.unshift(backup);
   const retained = backups.filter((candidate) => candidate.instanceId !== instance.id);

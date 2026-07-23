@@ -2,18 +2,22 @@ use std::{
     fs,
     io::Write,
     path::{Component, Path, PathBuf},
+    time::UNIX_EPOCH,
 };
 
 use rusqlite::{OptionalExtension, params};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use uuid::Uuid;
-use zip::{CompressionMethod, ZipWriter, write::SimpleFileOptions};
+use zip::{CompressionMethod, ZipArchive, ZipWriter, write::SimpleFileOptions};
 
-use crate::{AppService, CoreError, Result, unix_timestamp};
+use crate::{AppService, CoreError, Result, read_setting, unix_timestamp, write_setting};
 
-const BACKUP_SCHEMA_VERSION: u16 = 1;
-const DEFAULT_SUCCESSFUL_BACKUPS_PER_INSTANCE: usize = 20;
+const BACKUP_SCHEMA_VERSION: u16 = 2;
+const DEFAULT_BACKUP_INTERVAL_MINUTES: u64 = 30;
+const DEFAULT_BACKUP_KEEP_COUNT: usize = 20;
+const SETTING_BACKUP_INTERVAL: &str = "world_backup_interval_minutes";
+const SETTING_BACKUP_KEEP: &str = "world_backup_keep_count";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -21,6 +25,7 @@ pub enum BackupTrigger {
     PreLaunch,
     PostExit,
     Manual,
+    Scheduled,
 }
 
 impl BackupTrigger {
@@ -29,6 +34,7 @@ impl BackupTrigger {
             Self::PreLaunch => "pre_launch",
             Self::PostExit => "post_exit",
             Self::Manual => "manual",
+            Self::Scheduled => "scheduled",
         }
     }
 
@@ -37,8 +43,36 @@ impl BackupTrigger {
             "pre_launch" => Ok(Self::PreLaunch),
             "post_exit" => Ok(Self::PostExit),
             "manual" => Ok(Self::Manual),
+            "scheduled" => Ok(Self::Scheduled),
             _ => Err(CoreError::InvalidStoredState(format!(
                 "未知世界备份触发原因：{value}"
+            ))),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub enum BackupKind {
+    #[default]
+    Full,
+    Incremental,
+}
+
+impl BackupKind {
+    const fn database_value(self) -> &'static str {
+        match self {
+            Self::Full => "full",
+            Self::Incremental => "incremental",
+        }
+    }
+
+    fn from_database(value: &str) -> Result<Self> {
+        match value {
+            "full" => Ok(Self::Full),
+            "incremental" => Ok(Self::Incremental),
+            _ => Err(CoreError::InvalidStoredState(format!(
+                "未知世界备份类型：{value}"
             ))),
         }
     }
@@ -92,6 +126,27 @@ pub struct WorldBackupSummary {
     pub created_at_unix_seconds: i64,
     pub completed_at_unix_seconds: Option<i64>,
     pub error_summary: Option<String>,
+    #[serde(default)]
+    pub kind: BackupKind,
+    #[serde(default)]
+    pub base_backup_id: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BackupManifestFile {
+    pub path: String,
+    pub size: u64,
+    pub mtime: i64,
+}
+
+/// 备份归档 manifest.json 的可读子集（v1 清单缺失字段按默认处理）。
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(rename_all = "camelCase", default)]
+pub(crate) struct BackupManifest {
+    pub kind: BackupKind,
+    pub files: Vec<BackupManifestFile>,
+    pub deleted: Vec<String>,
 }
 
 #[derive(Debug)]
@@ -100,6 +155,7 @@ struct ArchiveEntry {
     name: String,
     directory: bool,
     size: u64,
+    mtime: i64,
 }
 
 #[derive(Debug)]
@@ -116,7 +172,8 @@ impl AppService {
             "
             SELECT id, instance_id, instance_name, launch_session_id, trigger, state,
                    archive_path, world_count, source_bytes, archive_bytes,
-                   created_at_unix_seconds, completed_at_unix_seconds, error_summary
+                   created_at_unix_seconds, completed_at_unix_seconds, error_summary,
+                   kind, base_backup_id
             FROM world_backups
             WHERE ?1 IS NULL OR instance_id = ?1
             ORDER BY created_at_unix_seconds DESC, id DESC
@@ -157,6 +214,8 @@ impl AppService {
             created_at_unix_seconds: created_at,
             completed_at_unix_seconds: None,
             error_summary: None,
+            kind: BackupKind::Full,
+            base_backup_id: None,
         };
 
         let preparation =
@@ -197,7 +256,9 @@ impl AppService {
         self.insert_world_backup(&backup)?;
 
         let write_result = (|| -> Result<u64> {
-            let file = write_world_backup_zip(&partial_path, &backup, &preparation)?;
+            let included = preparation.entries.iter().collect::<Vec<_>>();
+            let file =
+                write_world_backup_zip(&partial_path, &backup, &preparation, &included, &[])?;
             file.sync_all()?;
             fs::rename(&partial_path, &archive_path)?;
             Ok(fs::metadata(&archive_path)?.len())
@@ -267,7 +328,8 @@ impl AppService {
                 "
                 SELECT id, instance_id, instance_name, launch_session_id, trigger, state,
                        archive_path, world_count, source_bytes, archive_bytes,
-                       created_at_unix_seconds, completed_at_unix_seconds, error_summary
+                       created_at_unix_seconds, completed_at_unix_seconds, error_summary,
+                       kind, base_backup_id
                 FROM world_backups
                 WHERE launch_session_id = ?1 AND trigger = ?2
                 ",
@@ -311,8 +373,9 @@ impl AppService {
             INSERT INTO world_backups (
                 id, instance_id, instance_name, launch_session_id, trigger, state,
                 archive_path, world_count, source_bytes, archive_bytes,
-                created_at_unix_seconds, completed_at_unix_seconds, error_summary
-            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)
+                created_at_unix_seconds, completed_at_unix_seconds, error_summary,
+                kind, base_backup_id
+            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15)
             ",
             params![
                 backup.id,
@@ -328,6 +391,8 @@ impl AppService {
                 backup.created_at_unix_seconds,
                 backup.completed_at_unix_seconds,
                 backup.error_summary,
+                backup.kind.database_value(),
+                backup.base_backup_id,
             ],
         )?;
         Ok(())
@@ -368,21 +433,53 @@ impl AppService {
     }
 
     fn prune_world_backups(&self, instance_id: &str) -> Result<()> {
-        let backups = self
-            .list_world_backups(Some(instance_id))?
+        let keep = usize::try_from(self.world_backup_keep_count()?)
+            .map_err(|_| CoreError::Backup("备份保留数量超出可表示范围".to_owned()))?;
+        // 按创建时间 + 插入序升序；从最旧开始，只清理没有增量子级的备份，恢复链不得悬空。
+        let connection = self.connection()?;
+        let mut statement = connection.prepare(
+            "
+            SELECT id, instance_id, instance_name, launch_session_id, trigger, state,
+                   archive_path, world_count, source_bytes, archive_bytes,
+                   created_at_unix_seconds, completed_at_unix_seconds, error_summary,
+                   kind, base_backup_id
+            FROM world_backups
+            WHERE instance_id = ?1 AND state = 'ready'
+            ORDER BY created_at_unix_seconds, rowid
+            ",
+        )?;
+        let mut backups = statement
+            .query_map(params![instance_id], read_backup_row)?
+            .collect::<std::result::Result<Vec<_>, _>>()?
             .into_iter()
-            .filter(|backup| backup.state == BackupState::Ready)
-            .skip(DEFAULT_SUCCESSFUL_BACKUPS_PER_INSTANCE)
-            .collect::<Vec<_>>();
-        for backup in backups {
-            let Some(path) = backup.archive_path.as_deref().map(PathBuf::from) else {
-                continue;
+            .map(decode_backup)
+            .collect::<std::result::Result<Vec<_>, _>>()
+            .map_err(CoreError::from)?;
+        drop(statement);
+        drop(connection);
+        let data_directory = self.selected_data_directory()?;
+        let mut blocked = std::collections::HashSet::new();
+        while backups.len() > keep {
+            let Some(position) = backups.iter().position(|candidate| {
+                !blocked.contains(&candidate.id)
+                    && !backups
+                        .iter()
+                        .any(|other| other.base_backup_id.as_deref() == Some(candidate.id.as_str()))
+            }) else {
+                break;
             };
-            if validate_archive_path(&self.selected_data_directory()?, instance_id, &path).is_err()
-            {
-                continue;
-            }
-            if remove_file_if_exists(&path).is_err() {
+            let backup = backups.remove(position);
+            let removable = backup
+                .archive_path
+                .as_deref()
+                .map(PathBuf::from)
+                .is_none_or(|path| {
+                    validate_archive_path(&data_directory, instance_id, &path).is_ok()
+                        && remove_file_if_exists(&path).is_ok()
+                });
+            if !removable {
+                blocked.insert(backup.id.clone());
+                backups.insert(position, backup);
                 continue;
             }
             self.connection()?.execute(
@@ -392,6 +489,199 @@ impl AppService {
         }
         Ok(())
     }
+
+    /// 定时（运行期间）备份：有可用基准时创建只含差异的增量备份，否则回退为全量。
+    /// 定时备份不占用会话触发唯一槽，launch_session_id 存 NULL。
+    pub fn create_scheduled_world_backup(&self, instance_id: &str) -> Result<WorldBackupSummary> {
+        let (instance_name, instance_root) = self.backup_instance(instance_id)?;
+        let preparation = prepare_world_backup(&self.selected_data_directory()?, &instance_root)?;
+        if preparation.worlds.is_empty() {
+            return Err(CoreError::Backup("实例没有世界，跳过定时备份".to_owned()));
+        }
+        let base = self.latest_ready_backup(instance_id)?;
+        let base_manifest = base
+            .as_ref()
+            .and_then(|backup| backup.archive_path.as_deref().map(PathBuf::from))
+            .and_then(|path| read_backup_manifest(&path).ok())
+            .filter(|manifest| !manifest.files.is_empty());
+        let Some((base_backup, manifest)) = base.zip(base_manifest) else {
+            // 没有可用基准索引：回退为全量定时备份。
+            return self.create_world_backup(instance_id, BackupTrigger::Scheduled, None);
+        };
+
+        let base_index = manifest
+            .files
+            .iter()
+            .map(|file| (file.path.clone(), (file.size, file.mtime)))
+            .collect::<std::collections::HashMap<_, _>>();
+        let mut changed = Vec::new();
+        let mut current_paths = std::collections::HashSet::new();
+        for entry in &preparation.entries {
+            if entry.directory {
+                continue;
+            }
+            let path = entry.name.trim_start_matches("worlds/").to_owned();
+            current_paths.insert(path.clone());
+            let changed_file = base_index
+                .get(&path)
+                .is_none_or(|(size, mtime)| *size != entry.size || *mtime != entry.mtime);
+            if changed_file {
+                changed.push(entry);
+            }
+        }
+        let mut deleted = manifest
+            .files
+            .iter()
+            .map(|file| file.path.clone())
+            .filter(|path| !current_paths.contains(path))
+            .collect::<Vec<_>>();
+        deleted.sort();
+        if changed.is_empty() && deleted.is_empty() {
+            // saves 自基准以来没有变化，不产生新备份。
+            return Ok(base_backup);
+        }
+
+        let created_at = unix_timestamp();
+        let mut backup = WorldBackupSummary {
+            id: Uuid::new_v4().to_string(),
+            instance_id: instance_id.to_owned(),
+            instance_name,
+            launch_session_id: None,
+            trigger: BackupTrigger::Scheduled,
+            state: BackupState::Staging,
+            archive_path: None,
+            world_count: u64::try_from(preparation.worlds.len())
+                .map_err(|_| CoreError::Backup("世界数量超过可表示范围".to_owned()))?,
+            source_bytes: preparation.source_bytes,
+            archive_bytes: 0,
+            created_at_unix_seconds: created_at,
+            completed_at_unix_seconds: None,
+            error_summary: None,
+            kind: BackupKind::Incremental,
+            base_backup_id: Some(base_backup.id.clone()),
+        };
+        let backup_root = self
+            .selected_data_directory()?
+            .join("backups")
+            .join("instances")
+            .join(instance_id);
+        fs::create_dir_all(&backup_root)?;
+        let archive_path = backup_root.join(format!("{}.zip", backup.id));
+        validate_archive_path(&self.selected_data_directory()?, instance_id, &archive_path)?;
+        let partial_path = partial_path(&archive_path);
+        if archive_path.exists() || partial_path.exists() {
+            return Err(CoreError::Backup("备份目标已被占用，请重试".to_owned()));
+        }
+        backup.archive_path = Some(path_text(&archive_path)?);
+        self.insert_world_backup(&backup)?;
+
+        let write_result = (|| -> Result<u64> {
+            let file =
+                write_world_backup_zip(&partial_path, &backup, &preparation, &changed, &deleted)?;
+            file.sync_all()?;
+            fs::rename(&partial_path, &archive_path)?;
+            Ok(fs::metadata(&archive_path)?.len())
+        })();
+        let archive_bytes = match write_result {
+            Ok(bytes) => bytes,
+            Err(error) => {
+                let _ = remove_file_if_exists(&partial_path);
+                let _ = remove_file_if_exists(&archive_path);
+                self.mark_world_backup_failed(&backup.id, &error.to_string())?;
+                return Err(CoreError::Backup(error.to_string()));
+            }
+        };
+        backup.state = BackupState::Ready;
+        backup.archive_bytes = archive_bytes;
+        backup.completed_at_unix_seconds = Some(unix_timestamp());
+        self.finalize_world_backup(&backup)?;
+        self.prune_world_backups(instance_id)?;
+        Ok(backup)
+    }
+
+    fn latest_ready_backup(&self, instance_id: &str) -> Result<Option<WorldBackupSummary>> {
+        let connection = self.connection()?;
+        connection
+            .query_row(
+                "
+                SELECT id, instance_id, instance_name, launch_session_id, trigger, state,
+                       archive_path, world_count, source_bytes, archive_bytes,
+                       created_at_unix_seconds, completed_at_unix_seconds, error_summary,
+                       kind, base_backup_id
+                FROM world_backups
+                WHERE instance_id = ?1 AND state = 'ready' AND archive_path IS NOT NULL
+                ORDER BY created_at_unix_seconds DESC, rowid DESC
+                LIMIT 1
+                ",
+                params![instance_id],
+                read_backup_row,
+            )
+            .optional()?
+            .map(decode_backup)
+            .transpose()
+            .map_err(CoreError::from)
+    }
+
+    /// 定时备份间隔（分钟）；0 表示关闭运行期间备份。
+    pub fn world_backup_interval_minutes(&self) -> Result<u64> {
+        let connection = self.connection()?;
+        let value = read_setting(&connection, SETTING_BACKUP_INTERVAL)?;
+        Ok(value
+            .and_then(|value| value.parse::<u64>().ok())
+            .unwrap_or(DEFAULT_BACKUP_INTERVAL_MINUTES))
+    }
+
+    pub fn set_world_backup_interval_minutes(&self, minutes: u64) -> Result<()> {
+        if minutes > 24 * 60 {
+            return Err(CoreError::Backup("备份间隔不能超过 1440 分钟".to_owned()));
+        }
+        let connection = self.connection()?;
+        write_setting(&connection, SETTING_BACKUP_INTERVAL, &minutes.to_string())
+    }
+
+    /// 每个实例保留的成功备份数量（1–100）。
+    pub fn world_backup_keep_count(&self) -> Result<u64> {
+        let connection = self.connection()?;
+        let value = read_setting(&connection, SETTING_BACKUP_KEEP)?;
+        Ok(value
+            .and_then(|value| value.parse::<u64>().ok())
+            .unwrap_or(DEFAULT_BACKUP_KEEP_COUNT as u64))
+    }
+
+    pub fn set_world_backup_keep_count(&self, count: u64) -> Result<()> {
+        if count == 0 || count > 100 {
+            return Err(CoreError::Backup(
+                "备份保留数量必须在 1 到 100 之间".to_owned(),
+            ));
+        }
+        let connection = self.connection()?;
+        write_setting(&connection, SETTING_BACKUP_KEEP, &count.to_string())
+    }
+}
+
+/// 游戏会话运行期间的定时备份循环：按间隔创建增量备份，会话结束或间隔为 0 即停止。
+pub fn spawn_scheduled_world_backups(service: AppService, session_id: String) {
+    tokio::spawn(async move {
+        loop {
+            let interval = match service.world_backup_interval_minutes() {
+                Ok(interval) => interval,
+                Err(_) => break,
+            };
+            if interval == 0 {
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_secs(interval.saturating_mul(60))).await;
+            let session = service
+                .list_launch_sessions()
+                .ok()
+                .and_then(|sessions| sessions.into_iter().find(|item| item.id == session_id));
+            let Some(session) = session else { break };
+            if session.state != crate::LaunchSessionState::Running {
+                break;
+            }
+            let _ = service.create_scheduled_world_backup(&session.instance_id);
+        }
+    });
 }
 
 type StoredBackup = (
@@ -407,6 +697,8 @@ type StoredBackup = (
     i64,
     i64,
     Option<i64>,
+    Option<String>,
+    String,
     Option<String>,
 );
 
@@ -425,6 +717,8 @@ fn read_backup_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<StoredBackup> {
         row.get(10)?,
         row.get(11)?,
         row.get(12)?,
+        row.get(13)?,
+        row.get(14)?,
     ))
 }
 
@@ -443,6 +737,8 @@ fn decode_backup(stored: StoredBackup) -> rusqlite::Result<WorldBackupSummary> {
         created_at,
         completed_at,
         error_summary,
+        kind,
+        base_backup_id,
     ) = stored;
     Ok(WorldBackupSummary {
         id,
@@ -458,6 +754,8 @@ fn decode_backup(stored: StoredBackup) -> rusqlite::Result<WorldBackupSummary> {
         created_at_unix_seconds: created_at,
         completed_at_unix_seconds: completed_at,
         error_summary,
+        kind: BackupKind::from_database(&kind).map_err(to_sql_error)?,
+        base_backup_id,
     })
 }
 
@@ -522,6 +820,12 @@ fn collect_archive_entries(
         )));
     }
     let name = archive_name(saves_root, current, metadata.is_dir())?;
+    let mtime = metadata
+        .modified()
+        .ok()
+        .and_then(|modified| modified.duration_since(UNIX_EPOCH).ok())
+        .and_then(|duration| i64::try_from(duration.as_nanos()).ok())
+        .unwrap_or_default();
     entries.push(ArchiveEntry {
         source: current.to_path_buf(),
         name,
@@ -531,6 +835,7 @@ fn collect_archive_entries(
         } else {
             0
         },
+        mtime,
     });
     if metadata.is_dir() {
         let mut children = fs::read_dir(current)?.collect::<std::io::Result<Vec<_>>>()?;
@@ -569,26 +874,44 @@ fn write_world_backup_zip(
     partial_path: &Path,
     backup: &WorldBackupSummary,
     preparation: &BackupPreparation,
+    included: &[&ArchiveEntry],
+    deleted: &[String],
 ) -> Result<fs::File> {
     let file = fs::File::create(partial_path)?;
     let mut writer = ZipWriter::new(file);
     let options = SimpleFileOptions::default()
         .compression_method(CompressionMethod::Deflated)
         .unix_permissions(0o600);
+    let files_index = preparation
+        .entries
+        .iter()
+        .filter(|entry| !entry.directory)
+        .map(|entry| {
+            json!({
+                "path": entry.name.trim_start_matches("worlds/"),
+                "size": entry.size,
+                "mtime": entry.mtime,
+            })
+        })
+        .collect::<Vec<_>>();
     let manifest = serde_json::to_vec_pretty(&json!({
         "schemaVersion": BACKUP_SCHEMA_VERSION,
+        "kind": backup.kind,
         "backupId": backup.id,
+        "baseBackupId": backup.base_backup_id,
         "instanceId": backup.instance_id,
         "instanceName": backup.instance_name,
         "trigger": backup.trigger,
         "createdAtUnixSeconds": backup.created_at_unix_seconds,
         "worlds": preparation.worlds,
+        "files": files_index,
+        "deleted": deleted,
     }))?;
     writer
         .start_file("manifest.json", options)
         .map_err(zip_error)?;
     writer.write_all(&manifest)?;
-    for entry in &preparation.entries {
+    for entry in included {
         if entry.directory {
             writer
                 .add_directory(&entry.name, options)
@@ -600,6 +923,21 @@ fn write_world_backup_zip(
         }
     }
     writer.finish().map_err(zip_error)
+}
+
+/// 读取备份归档的 manifest.json（v1 清单缺少文件索引时返回空索引）。
+pub(crate) fn read_backup_manifest(archive_path: &Path) -> Result<BackupManifest> {
+    let file = fs::File::open(archive_path)?;
+    let mut archive = ZipArchive::new(file)
+        .map_err(|error| CoreError::Backup(format!("备份归档无法读取：{error}")))?;
+    let mut entry = archive
+        .by_name("manifest.json")
+        .map_err(|error| CoreError::Backup(format!("备份归档缺少清单：{error}")))?;
+    let mut buffer = Vec::new();
+    std::io::copy(&mut entry, &mut buffer)?;
+    let manifest = serde_json::from_slice(&buffer)
+        .map_err(|error| CoreError::Backup(format!("备份清单无效：{error}")))?;
+    Ok(manifest)
 }
 
 fn validate_instance_root(data_directory: &Path, instance_root: &Path) -> Result<()> {

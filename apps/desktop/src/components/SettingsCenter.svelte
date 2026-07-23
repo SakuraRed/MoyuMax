@@ -43,6 +43,9 @@
   let deleteAffected = $state<ReferencingInstance[]>([]);
   let assignTarget = $state("");
   let assignInstance = $state("");
+  let backupInterval = $state(30);
+  let backupKeep = $state(20);
+  let backupSettingsLoaded = $state(false);
 
   onMount(() => {
     void refresh();
@@ -56,6 +59,42 @@
         runtime.listDeletedJavaEnvironments(),
         runtime.listInstances(),
       ]);
+      if (!backupSettingsLoaded) {
+        const backupSettings = await runtime.getWorldBackupSettings();
+        backupInterval = backupSettings.intervalMinutes;
+        backupKeep = backupSettings.keepCount;
+        backupSettingsLoaded = true;
+      }
+    } catch (error) {
+      errorMessage = error instanceof Error ? error.message : String(error);
+    }
+  }
+
+  async function saveBackupInterval(): Promise<void> {
+    errorMessage = "";
+    notice = "";
+    if (!Number.isFinite(backupInterval) || backupInterval < 0 || backupInterval > 1440) {
+      errorMessage = "备份间隔必须在 0 到 1440 分钟之间";
+      return;
+    }
+    try {
+      await runtime.setWorldBackupIntervalMinutes(Math.floor(backupInterval));
+      notice = backupInterval === 0 ? "已关闭运行期间定时备份" : `运行期间每 ${Math.floor(backupInterval)} 分钟创建增量备份`;
+    } catch (error) {
+      errorMessage = error instanceof Error ? error.message : String(error);
+    }
+  }
+
+  async function saveBackupKeep(): Promise<void> {
+    errorMessage = "";
+    notice = "";
+    if (!Number.isFinite(backupKeep) || backupKeep < 1 || backupKeep > 100) {
+      errorMessage = "备份保留数量必须在 1 到 100 之间";
+      return;
+    }
+    try {
+      await runtime.setWorldBackupKeepCount(Math.floor(backupKeep));
+      notice = `每个实例最多保留 ${Math.floor(backupKeep)} 个备份`;
     } catch (error) {
       errorMessage = error instanceof Error ? error.message : String(error);
     }
@@ -206,6 +245,39 @@
     {#if notice}
       <div class="java-notice" role="status">{notice}</div>
     {/if}
+
+    <section class="backup-settings" aria-labelledby="backup-settings-title">
+      <header>
+        <div>
+          <h2 id="backup-settings-title">世界备份</h2>
+          <p>启动前与退出后始终创建完整备份；游戏运行期间按间隔创建只含变化的增量备份。</p>
+        </div>
+      </header>
+      <div class="backup-settings-grid">
+        <label>
+          <span>运行期间备份间隔（分钟，0 关闭）</span>
+          <input
+            type="number"
+            min="0"
+            max="1440"
+            aria-label="运行期间备份间隔（分钟）"
+            bind:value={backupInterval}
+            onchange={() => void saveBackupInterval()}
+          />
+        </label>
+        <label>
+          <span>每个实例保留备份数量（1–100）</span>
+          <input
+            type="number"
+            min="1"
+            max="100"
+            aria-label="每个实例保留备份数量"
+            bind:value={backupKeep}
+            onchange={() => void saveBackupKeep()}
+          />
+        </label>
+      </div>
+    </section>
 
     {#if environments.length === 0 && deletedEnvironments.length === 0}
       <section class="task-empty"><Icon name="box" size={28} /><h2>还没有托管环境</h2><p>安装第一个游戏时，MoyuMax 会自动选择并安装兼容的 Azul Zulu 环境。</p></section>

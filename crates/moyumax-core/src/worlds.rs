@@ -184,10 +184,25 @@ impl AppService {
             fs::remove_dir_all(&staging)?;
         }
         fs::create_dir_all(&staging)?;
-        let archive_file = fs::File::open(archive_path)?;
-        let mut archive = ZipArchive::new(archive_file)
-            .map_err(|error| CoreError::Backup(format!("备份归档无法读取：{error}")))?;
-        if let Err(error) = extract_backup_worlds(&mut archive, &staging) {
+        let chain = self.resolve_backup_chain(&backup)?;
+        let chain_result = (|| -> Result<()> {
+            for link in &chain {
+                let link_path = link
+                    .archive_path
+                    .as_deref()
+                    .ok_or_else(|| CoreError::Backup("恢复链中的备份缺少归档路径".to_owned()))?;
+                let archive_file = fs::File::open(link_path)?;
+                let mut archive = ZipArchive::new(archive_file)
+                    .map_err(|error| CoreError::Backup(format!("备份归档无法读取：{error}")))?;
+                extract_backup_worlds(&mut archive, &staging)?;
+                if link.kind == crate::BackupKind::Incremental {
+                    let manifest = crate::read_backup_manifest(Path::new(link_path))?;
+                    apply_manifest_deletions(&staging, &manifest.deleted)?;
+                }
+            }
+            Ok(())
+        })();
+        if let Err(error) = chain_result {
             let _ = fs::remove_dir_all(&staging);
             return Err(error);
         }
@@ -214,6 +229,35 @@ impl AppService {
             fs::remove_dir_all(&old_saves)?;
         }
         Ok(recovery_point)
+    }
+
+    /// 解析回滚恢复链：从目标沿 base_backup_id 回到最近的全量备份。
+    fn resolve_backup_chain(&self, target: &WorldBackupSummary) -> Result<Vec<WorldBackupSummary>> {
+        let all = self.list_world_backups(Some(&target.instance_id))?;
+        let mut chain = vec![target.clone()];
+        let mut current = target.clone();
+        while current.kind == crate::BackupKind::Incremental {
+            let base_id = current
+                .base_backup_id
+                .as_deref()
+                .ok_or_else(|| CoreError::Backup("增量备份缺少基准，恢复链断裂".to_owned()))?;
+            let base = all
+                .iter()
+                .find(|candidate| candidate.id == base_id)
+                .ok_or_else(|| {
+                    CoreError::Backup("恢复链基准备份缺失，无法回滚到该时间点".to_owned())
+                })?;
+            if base.state != crate::BackupState::Ready {
+                return Err(CoreError::Backup("恢复链基准备份不可用".to_owned()));
+            }
+            chain.push(base.clone());
+            current = base.clone();
+            if chain.len() > 128 {
+                return Err(CoreError::Backup("恢复链过长，已中止回滚".to_owned()));
+            }
+        }
+        chain.reverse();
+        Ok(chain)
     }
 
     /// 重启收敛：完成或撤销中断的回滚交换，saves 必须完整可用。
@@ -391,6 +435,28 @@ fn extract_backup_worlds(archive: &mut ZipArchive<fs::File>, staging: &Path) -> 
         let mut output = fs::File::create(&target)?;
         std::io::copy(&mut entry, &mut output)?;
         output.flush()?;
+    }
+    Ok(())
+}
+
+/// 应用增量清单中的删除项（路径必须停留在暂存区内）。
+fn apply_manifest_deletions(staging: &Path, deleted: &[String]) -> Result<()> {
+    for path in deleted {
+        let relative = Path::new(path);
+        if relative
+            .components()
+            .any(|component| !matches!(component, Component::Normal(_)))
+        {
+            return Err(CoreError::Backup(format!(
+                "增量清单包含不安全删除路径：{path}"
+            )));
+        }
+        let target = staging.join(relative);
+        if target.is_dir() {
+            fs::remove_dir_all(&target)?;
+        } else if target.exists() {
+            fs::remove_file(&target)?;
+        }
     }
     Ok(())
 }
