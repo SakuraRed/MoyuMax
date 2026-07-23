@@ -157,6 +157,14 @@ export const zhCN: Record<string, string> = {
   "settings.update.minVersion": "该发布要求最低可升级版本 {version}",
   "settings.update.promptLabel": "更新提示",
   "settings.update.promptHint": "关闭后不再提示新版本；无论如何都不会自动下载或安装。",
+  "settings.about.title": "关于 MoyuMax",
+  "settings.about.description": "版本、许可与来源证明。",
+  "settings.about.version": "版本",
+  "settings.about.license": "许可证",
+  "settings.about.repository": "源码仓库",
+  "settings.about.sbom": "SBOM 与第三方许可",
+  "settings.about.unsignedTitle": "未签名的开发预览构建",
+  "settings.about.unsignedBody": "本构建未进行 Authenticode 签名，属于开发预览版，不是正式发行版。正式发布将附带签名、SBOM 与来源证明。",
 
   // 账户区（SettingsCenter）
   "settings.accounts.title": "账户",

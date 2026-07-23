@@ -152,6 +152,14 @@ export const en: Record<string, string> = {
   "settings.update.minVersion": "This release requires version {version} or newer to upgrade directly",
   "settings.update.promptLabel": "Update notifications",
   "settings.update.promptHint": "When off, new versions are not announced; nothing is ever downloaded or installed automatically.",
+  "settings.about.title": "About MoyuMax",
+  "settings.about.description": "Version, license, and provenance.",
+  "settings.about.version": "Version",
+  "settings.about.license": "License",
+  "settings.about.repository": "Source repository",
+  "settings.about.sbom": "SBOM & third-party licenses",
+  "settings.about.unsignedTitle": "Unsigned development preview build",
+  "settings.about.unsignedBody": "This build is not Authenticode-signed and is a development preview, not a formal release. Formal releases will ship with signature, SBOM, and provenance.",
 
   // Accounts section (SettingsCenter)
   "settings.accounts.title": "Accounts",

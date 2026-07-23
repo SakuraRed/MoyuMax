@@ -152,6 +152,14 @@ export const zhTW: Record<string, string> = {
   "settings.update.minVersion": "該發佈要求最低可升級版本 {version}",
   "settings.update.promptLabel": "更新提示",
   "settings.update.promptHint": "關閉後不再提示新版本；無論如何都不會自動下載或安裝。",
+  "settings.about.title": "關於 MoyuMax",
+  "settings.about.description": "版本、授權與來源證明。",
+  "settings.about.version": "版本",
+  "settings.about.license": "授權條款",
+  "settings.about.repository": "原始碼儲存庫",
+  "settings.about.sbom": "SBOM 與第三方授權",
+  "settings.about.unsignedTitle": "未簽署的開發預覽建置",
+  "settings.about.unsignedBody": "本建置未進行 Authenticode 簽署，屬於開發預覽版，並非正式發行版。正式發佈將附帶簽章、SBOM 與來源證明。",
 
   // 帳戶區（SettingsCenter）
   "settings.accounts.title": "帳戶",

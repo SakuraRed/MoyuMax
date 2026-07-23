@@ -834,6 +834,25 @@
       </div>
     {/if}
 
+    <section class="backup-settings" aria-labelledby="about-title">
+      <header>
+        <div>
+          <h2 id="about-title">{t("settings.about.title")}</h2>
+          <p>{t("settings.about.description")}</p>
+        </div>
+      </header>
+      <dl class="about-grid">
+        <div><dt>{t("settings.about.version")}</dt><dd>0.1.0-preview.1</dd></div>
+        <div><dt>{t("settings.about.license")}</dt><dd>GPL-3.0-only</dd></div>
+        <div><dt>{t("settings.about.repository")}</dt><dd>github.com/SakuraRed/MoyuMax</dd></div>
+        <div><dt>{t("settings.about.sbom")}</dt><dd>docs/SBOM.json · docs/THIRD-PARTY-LICENSES.md</dd></div>
+      </dl>
+      <div class="warning-panel">
+        <strong>{t("settings.about.unsignedTitle")}</strong>
+        <span>{t("settings.about.unsignedBody")}</span>
+      </div>
+    </section>
+
     {#if deletedEnvironments.length > 0}
       <section class="java-deleted" aria-label={t("settings.java.deletedSectionTitle")}>
         <h2>{t("settings.java.deletedSectionTitle")}</h2>

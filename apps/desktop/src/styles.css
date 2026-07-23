@@ -3457,6 +3457,31 @@ summary:focus-visible {
   overflow-wrap: anywhere;
 }
 
+.about-grid {
+  display: grid;
+  gap: 8px;
+  margin: 0 0 12px;
+}
+
+.about-grid > div {
+  display: flex;
+  gap: 12px;
+}
+
+.about-grid dt {
+  flex: none;
+  width: 140px;
+  color: var(--text-3);
+  font-size: 12px;
+}
+
+.about-grid dd {
+  margin: 0;
+  color: var(--text);
+  font-size: 12.5px;
+  overflow-wrap: anywhere;
+}
+
 .backup-empty-row {
   padding: var(--frame-row-inset-block) var(--frame-row-inset-inline);
   border: 1px solid var(--border);
