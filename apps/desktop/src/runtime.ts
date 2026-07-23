@@ -404,6 +404,19 @@ export interface ReleaseInfo {
   installer: UpdateAsset | null;
 }
 
+export interface ThemePack {
+  formatVersion: number;
+  name: string;
+  author: string;
+  colors: Record<string, string>;
+}
+
+export type UiBackground =
+  | { type: "default" }
+  | { type: "color"; color: string }
+  | { type: "image"; file: string }
+  | { type: "themePack"; pack: ThemePack };
+
 export const LITTLESKIN_YGGDRASIL_URL = "https://littleskin.cn/api/yggdrasil";
 
 export type LaunchSessionState =
@@ -641,6 +654,15 @@ export interface MoyuRuntime {
   checkForUpdates(): Promise<ReleaseInfo | null>;
   downloadUpdateInstaller(release: ReleaseInfo): Promise<string>;
   openUpdateLocation(path: string): Promise<void>;
+  getUiBackground(): Promise<UiBackground>;
+  setUiBackground(background: UiBackground): Promise<void>;
+  importBackgroundImage(sourcePath: string): Promise<UiBackground>;
+  importThemePack(sourcePath: string): Promise<ThemePack>;
+  readBackgroundImage(): Promise<[string, number[]] | null>;
+  /** 打开原生文件选择器挑选背景图片；用户取消时返回 null。 */
+  pickBackgroundImage(): Promise<string | null>;
+  /** 打开原生文件选择器挑选主题包 JSON；用户取消时返回 null。 */
+  pickThemePackFile(): Promise<string | null>;
   retryContentTask(taskId: string): Promise<void>;
   resolveContentTaskRecovery(taskId: string, decision: RecoveryDecision): Promise<void>;
   listInstances(): Promise<ManagedInstance[]>;
@@ -886,6 +908,33 @@ function createTauriRuntime(): MoyuRuntime {
     downloadUpdateInstaller: (release) =>
       invoke<string>("download_update_installer", { release }),
     openUpdateLocation: (path) => invoke<void>("open_update_location", { path }),
+    getUiBackground: () => invoke<UiBackground>("get_ui_background"),
+    setUiBackground: (background) =>
+      invoke<void>("set_ui_background", { background }),
+    importBackgroundImage: (sourcePath) =>
+      invoke<UiBackground>("import_background_image", { sourcePath }),
+    importThemePack: (sourcePath) =>
+      invoke<ThemePack>("import_theme_pack", { sourcePath }),
+    readBackgroundImage: () =>
+      invoke<[string, number[]] | null>("read_background_image"),
+    pickBackgroundImage: async () => {
+      const { open } = await import("@tauri-apps/plugin-dialog");
+      const selected = await open({
+        multiple: false,
+        directory: false,
+        filters: [{ name: "背景图片", extensions: ["png", "jpg", "jpeg", "webp"] }],
+      });
+      return typeof selected === "string" ? selected : null;
+    },
+    pickThemePackFile: async () => {
+      const { open } = await import("@tauri-apps/plugin-dialog");
+      const selected = await open({
+        multiple: false,
+        directory: false,
+        filters: [{ name: "主题包", extensions: ["json"] }],
+      });
+      return typeof selected === "string" ? selected : null;
+    },
     retryContentTask: (taskId) => invoke<void>("retry_content_task", { taskId }),
     resolveContentTaskRecovery: (taskId, decision) =>
       invoke<void>("resolve_content_task_recovery", { taskId, decision }),
@@ -1628,6 +1677,65 @@ function createBrowserRuntime(): MoyuRuntime {
     },
     async openUpdateLocation(path) {
       window.localStorage.setItem("moyumax.browser.openedLocation", path);
+    },
+    async getUiBackground() {
+      const serialized = window.localStorage.getItem("moyumax.browser.uiBackground");
+      return serialized
+        ? (JSON.parse(serialized) as UiBackground)
+        : { type: "default" };
+    },
+    async setUiBackground(background) {
+      window.localStorage.setItem(
+        "moyumax.browser.uiBackground",
+        JSON.stringify(background),
+      );
+    },
+    async importBackgroundImage(_sourcePath) {
+      const background: UiBackground = { type: "image", file: "background-mock.png" };
+      window.localStorage.setItem(
+        "moyumax.browser.uiBackground",
+        JSON.stringify(background),
+      );
+      return background;
+    },
+    async importThemePack(sourcePath) {
+      const raw = window.localStorage.getItem("moyumax.browser.themePackJson") ?? "";
+      void sourcePath;
+      let pack: ThemePack;
+      try {
+        pack = JSON.parse(raw) as ThemePack;
+      } catch {
+        throw new Error("主题包不是有效的 JSON");
+      }
+      if (pack.formatVersion !== 1) throw new Error("不支持的主题包格式版本");
+      const entries = Object.entries(pack.colors ?? {});
+      if (entries.length === 0) throw new Error("主题包没有颜色定义");
+      for (const [token, value] of entries) {
+        if (!/^#[0-9a-fA-F]{6}$/.test(value)) {
+          throw new Error(`颜色必须是 #rrggbb 形式：${token}`);
+        }
+      }
+      const background: UiBackground = { type: "themePack", pack };
+      window.localStorage.setItem(
+        "moyumax.browser.uiBackground",
+        JSON.stringify(background),
+      );
+      return pack;
+    },
+    async readBackgroundImage() {
+      const serialized = window.localStorage.getItem("moyumax.browser.uiBackground");
+      const background = serialized ? (JSON.parse(serialized) as UiBackground) : null;
+      if (background?.type !== "image") return null;
+      // 1x1 深色 PNG，供浏览器模拟图片渲染。
+      const pngBase64 =
+        "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==";
+      return ["image/png", Array.from(Uint8Array.from(atob(pngBase64), (c) => c.charCodeAt(0)))];
+    },
+    async pickBackgroundImage() {
+      return window.localStorage.getItem("moyumax.browser.pickedBackgroundImage");
+    },
+    async pickThemePackFile() {
+      return window.localStorage.getItem("moyumax.browser.pickedThemePack");
     },
     async listInstanceScreenshots(instanceId) {
       return browserScreenshots()[instanceId] ?? [];

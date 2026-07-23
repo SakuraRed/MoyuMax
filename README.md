@@ -56,6 +56,7 @@ corepack pnpm --filter @moyumax/desktop tauri dev
 - [启动器更新检查与安全下载](docs/plans/MILESTONE-25-SELF-UPDATE.md)
 - [发布资产](docs/plans/MILESTONE-26-RELEASE-ASSETS.md)
 - [GitHub Actions Windows CI](docs/plans/MILESTONE-27-CI.md)
+- [自定义背景与纯数据主题包](docs/plans/MILESTONE-28-CUSTOM-THEME.md)
 - [下载来源统一与多线程加速计划](docs/plans/DOWNLOAD-SOURCES-AND-ACCELERATION.md)
 - [技术栈决策](docs/architecture/ADR-0001-DESKTOP-STACK.md)
 

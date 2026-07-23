@@ -3,6 +3,7 @@
 
   import {
     applyUiPreferences,
+    refreshBackgroundImage,
     t,
     UI_CONTRASTS,
     UI_LANGUAGES,
@@ -27,6 +28,7 @@
     OnboardingSelection,
     ReferencingInstance,
     ReleaseInfo,
+    UiBackground,
   } from "../runtime";
   import { LITTLESKIN_YGGDRASIL_URL } from "../runtime";
   import AppShell from "./AppShell.svelte";
@@ -79,6 +81,10 @@
   let updateResult = $state<"none" | ReleaseInfo | null>("none");
   let downloading = $state(false);
   let downloadedPath = $state("");
+  let backgroundType = $state<"default" | "color" | "image" | "themePack">("default");
+  let backgroundColor = $state("#1b1b1f");
+  let backgroundPackName = $state("");
+  let backgroundBusy = $state(false);
   let uiPreferencesLoaded = $state(false);
 
   onMount(() => {
@@ -95,15 +101,21 @@
         runtime.listAccounts(),
       ]);
       if (!backupSettingsLoaded) {
-        const [backupSettings, cliState, updateChecksState] = await Promise.all([
+        const [backupSettings, cliState, updateChecksState, storedBackground] = await Promise.all([
           runtime.getWorldBackupSettings(),
           runtime.getCliEnabled(),
           runtime.getUpdateChecksEnabled(),
+          runtime.getUiBackground(),
         ]);
         backupInterval = backupSettings.intervalMinutes;
         backupKeep = backupSettings.keepCount;
         cliEnabled = cliState;
         updateChecks = updateChecksState;
+        backgroundType = storedBackground.type;
+        if (storedBackground.type === "color") backgroundColor = storedBackground.color;
+        if (storedBackground.type === "themePack") {
+          backgroundPackName = `${storedBackground.pack.name}（${storedBackground.pack.author}）`;
+        }
         backupSettingsLoaded = true;
       }
       if (!uiPreferencesLoaded) {
@@ -241,6 +253,59 @@
     errorMessage = "";
     try {
       await runtime.openUpdateLocation(downloadedPath);
+    } catch (error) {
+      errorMessage = error instanceof Error ? error.message : String(error);
+    }
+  }
+
+  async function applyBackground(value: UiBackground): Promise<void> {
+    backgroundBusy = true;
+    errorMessage = "";
+    notice = "";
+    try {
+      await runtime.setUiBackground(value);
+      applyUiPreferences({ background: value });
+      await refreshBackgroundImage(runtime);
+      backgroundType = value.type;
+      backgroundPackName =
+        value.type === "themePack" ? `${value.pack.name}（${value.pack.author}）` : "";
+    } catch (error) {
+      errorMessage = error instanceof Error ? error.message : String(error);
+    } finally {
+      backgroundBusy = false;
+    }
+  }
+
+  async function selectBackgroundType(event: Event): Promise<void> {
+    const next = (event.currentTarget as HTMLSelectElement).value as typeof backgroundType;
+    if (next === "default") {
+      await applyBackground({ type: "default" });
+    } else {
+      backgroundType = next;
+    }
+  }
+
+  async function pickAndImportImage(): Promise<void> {
+    errorMessage = "";
+    try {
+      const path = await runtime.pickBackgroundImage();
+      if (!path) return;
+      const background = await runtime.importBackgroundImage(path);
+      await applyBackground(background);
+      notice = t("appearance.background.imageApplied");
+    } catch (error) {
+      errorMessage = error instanceof Error ? error.message : String(error);
+    }
+  }
+
+  async function pickAndImportThemePack(): Promise<void> {
+    errorMessage = "";
+    try {
+      const path = await runtime.pickThemePackFile();
+      if (!path) return;
+      const pack = await runtime.importThemePack(path);
+      await applyBackground({ type: "themePack", pack });
+      notice = t("appearance.background.packApplied").replace("{name}", pack.name);
     } catch (error) {
       errorMessage = error instanceof Error ? error.message : String(error);
     }
@@ -569,6 +634,54 @@
               >{t(contrastOption.labelKey)}</button>
             {/each}
           </div>
+        </div>
+        <div>
+          <span>{t("appearance.background.label")}</span>
+          <div class="background-controls">
+            <select
+              aria-label={t("appearance.background.label")}
+              value={backgroundType}
+              disabled={backgroundBusy}
+              onchange={(event) => void selectBackgroundType(event)}
+            >
+              <option value="default">{t("appearance.background.type.default")}</option>
+              <option value="color">{t("appearance.background.type.color")}</option>
+              <option value="image">{t("appearance.background.type.image")}</option>
+              <option value="themePack">{t("appearance.background.type.themePack")}</option>
+            </select>
+            {#if backgroundType === "color"}
+              <input
+                type="color"
+                aria-label={t("appearance.background.colorLabel")}
+                bind:value={backgroundColor}
+              />
+              <button
+                class="button ghost compact"
+                disabled={backgroundBusy}
+                onclick={() => void applyBackground({ type: "color", color: backgroundColor })}
+              >{t("appearance.background.applyColor")}</button>
+            {/if}
+            {#if backgroundType === "image"}
+              <button class="button ghost compact" disabled={backgroundBusy} onclick={() => void pickAndImportImage()}>
+                {t("appearance.background.pickImage")}
+              </button>
+              <button class="button ghost compact" disabled={backgroundBusy} onclick={() => void applyBackground({ type: "default" })}>
+                {t("appearance.background.clearImage")}
+              </button>
+            {/if}
+            {#if backgroundType === "themePack"}
+              <button class="button ghost compact" disabled={backgroundBusy} onclick={() => void pickAndImportThemePack()}>
+                {t("appearance.background.importPack")}
+              </button>
+              <button class="button ghost compact" disabled={backgroundBusy} onclick={() => void applyBackground({ type: "default" })}>
+                {t("appearance.background.removePack")}
+              </button>
+            {/if}
+          </div>
+          {#if backgroundPackName && backgroundType === "themePack"}
+            <small class="background-pack-name">{t("appearance.background.packActive")} {backgroundPackName}</small>
+          {/if}
+          <small class="background-note">{t("appearance.background.note")}</small>
         </div>
       </div>
     </section>

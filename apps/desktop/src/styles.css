@@ -3482,6 +3482,40 @@ summary:focus-visible {
   overflow-wrap: anywhere;
 }
 
+.background-controls {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  margin-top: 6px;
+}
+
+.background-controls select {
+  height: 34px;
+  padding: 0 var(--field-content-inset-inline);
+  border: 1px solid var(--border-strong);
+  border-radius: 7px;
+  color: var(--text);
+  background: var(--surface);
+}
+
+.background-controls input[type="color"] {
+  width: 44px;
+  height: 34px;
+  padding: 2px;
+  border: 1px solid var(--border-strong);
+  border-radius: 7px;
+  background: var(--surface);
+}
+
+.background-pack-name,
+.background-note {
+  display: block;
+  margin-top: 6px;
+  color: var(--text-3);
+  font-size: 11.5px;
+}
+
 .backup-empty-row {
   padding: var(--frame-row-inset-block) var(--frame-row-inset-inline);
   border: 1px solid var(--border);

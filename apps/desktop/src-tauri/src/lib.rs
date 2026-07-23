@@ -17,9 +17,9 @@ use moyumax_core::{
     JavaEnvironmentSummary, LaunchExecution, LaunchOptions, LaunchSessionSummary,
     ManagedInstanceSummary, MetadataClient, ModrinthClient, ModrinthSearchPage,
     ModrinthSearchQuery, OnboardingSelection, RecoveryDecision, RecycleBinItem, RecyclePurgeResult,
-    ReleaseInfo, ResolvedInstallRequest, ResolvedLoader, ShellState, SourcePolicy, UpdateClient,
-    VersionCatalog, WindowCloseBehavior, WorldBackupSummary, YggdrasilClient, min_version_block,
-    run_launch_execution,
+    ReleaseInfo, ResolvedInstallRequest, ResolvedLoader, ShellState, SourcePolicy, ThemePack,
+    UiBackground, UpdateClient, VersionCatalog, WindowCloseBehavior, WorldBackupSummary,
+    YggdrasilClient, min_version_block, run_launch_execution,
 };
 use serde::Serialize;
 use tauri::{Emitter, Manager, State};
@@ -1040,6 +1040,54 @@ fn open_update_location(path: String) -> Result<(), String> {
 }
 
 #[tauri::command]
+fn get_ui_background(service: State<'_, AppService>) -> Result<UiBackground, String> {
+    service.ui_background().map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+fn set_ui_background(
+    service: State<'_, AppService>,
+    background: UiBackground,
+) -> Result<(), String> {
+    service
+        .set_ui_background(&background)
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+fn import_background_image(
+    service: State<'_, AppService>,
+    source_path: String,
+) -> Result<UiBackground, String> {
+    service
+        .import_background_image(std::path::Path::new(&source_path))
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+fn import_theme_pack(
+    service: State<'_, AppService>,
+    source_path: String,
+) -> Result<ThemePack, String> {
+    let source = std::fs::read_to_string(&source_path)
+        .map_err(|error| format!("无法读取主题包：{error}"))?;
+    let pack = moyumax_core::parse_theme_pack(&source).map_err(|error| error.to_string())?;
+    service
+        .set_ui_background(&UiBackground::ThemePack { pack: pack.clone() })
+        .map_err(|error| error.to_string())?;
+    Ok(pack)
+}
+
+#[tauri::command]
+fn read_background_image(
+    service: State<'_, AppService>,
+) -> Result<Option<(String, Vec<u8>)>, String> {
+    service
+        .read_background_image()
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
 fn get_world_backup_settings(
     service: State<'_, AppService>,
 ) -> Result<WorldBackupSettings, String> {
@@ -1689,6 +1737,11 @@ pub fn run() {
             check_for_updates,
             download_update_installer,
             open_update_location,
+            get_ui_background,
+            set_ui_background,
+            import_background_image,
+            import_theme_pack,
+            read_background_image,
             retry_content_task,
             resolve_content_task_recovery,
             list_instances,

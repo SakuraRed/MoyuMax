@@ -1,7 +1,7 @@
 <script lang="ts">
   import type { Snippet } from "svelte";
 
-  import { t, uiContrast, uiMotion, uiTheme } from "../i18n.svelte";
+  import { t, uiBackground, uiBackgroundImageUrl, uiContrast, uiMotion, uiTheme } from "../i18n.svelte";
   import Icon from "./Icon.svelte";
 
   type NavigationKey = "home" | "instances" | "resources" | "tasks" | "data" | "settings";
@@ -48,9 +48,37 @@
     { key: "data" as const, name: "database" as const, labelKey: "nav.data" },
     { key: "settings" as const, name: "settings" as const, labelKey: "nav.settings" },
   ];
+
+  // 自定义背景:纯色改变量,图片压暗铺底(减少动画时降级),主题包叠加配色(高对比忽略)。
+  const backgroundStyle = $derived.by(() => {
+    const value = uiBackground();
+    if (value.type === "color") {
+      return `--bg-window: ${value.color}; --bg-app: ${value.color}`;
+    }
+    if (value.type === "image" && uiMotion() !== "reduce") {
+      const url = uiBackgroundImageUrl();
+      if (url) {
+        return `background-image: linear-gradient(rgba(14, 14, 18, 0.8), rgba(14, 14, 18, 0.8)), url(${url}); background-size: cover; background-position: center`;
+      }
+      return "";
+    }
+    if (value.type === "themePack" && uiContrast() !== "high") {
+      return Object.entries(value.pack.colors)
+        .map(([token, color]) => `--${token}: ${color}`)
+        .join("; ");
+    }
+    return "";
+  });
 </script>
 
-<div class="window" data-theme={uiTheme()} data-motion={uiMotion()} data-contrast={uiContrast()}>
+<div
+  class="window"
+  data-theme={uiTheme()}
+  data-motion={uiMotion()}
+  data-contrast={uiContrast()}
+  data-background={uiBackground().type}
+  style={backgroundStyle}
+>
   <header class="titlebar" data-tauri-drag-region>
     <span class="brand-mark">M</span>
     <span class="titlebar-name">

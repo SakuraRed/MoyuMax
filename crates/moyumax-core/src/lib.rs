@@ -23,6 +23,7 @@ mod resources;
 mod screenshots;
 mod shell;
 mod source;
+mod theme;
 mod updates;
 mod worlds;
 
@@ -41,6 +42,7 @@ pub use resources::*;
 pub use screenshots::*;
 pub use shell::*;
 pub use source::*;
+pub use theme::*;
 pub use updates::*;
 pub use worlds::*;
 

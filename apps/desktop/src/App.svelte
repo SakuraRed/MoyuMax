@@ -12,7 +12,7 @@
   import SettingsCenter from "./components/SettingsCenter.svelte";
   import TaskCenter from "./components/TaskCenter.svelte";
   import { impactRequiresConfirmation, routeCloseRequest } from "./close-flow";
-  import { applyUiPreferences } from "./i18n.svelte";
+  import { applyUiPreferences, refreshBackgroundImage } from "./i18n.svelte";
   import { createRuntime } from "./runtime";
   import type {
     BootstrapState,
@@ -121,7 +121,9 @@
         language: uiPreferences.language === "zh-TW" || uiPreferences.language === "en" ? uiPreferences.language : "zh-CN",
         motion: uiPreferences.motion === "reduce" ? "reduce" : "system",
         contrast: uiPreferences.contrast === "high" ? "high" : "standard",
+        background: await runtime.getUiBackground(),
       });
+      await refreshBackgroundImage(runtime);
       if (bootstrap.requiresOnboarding) {
         phase = "onboarding";
       } else if (startupKind === "wake") {
