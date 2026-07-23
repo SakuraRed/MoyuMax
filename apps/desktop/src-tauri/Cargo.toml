@@ -22,3 +22,6 @@ uuid.workspace = true
 
 [features]
 default = []
+
+[dev-dependencies]
+serde_json.workspace = true
