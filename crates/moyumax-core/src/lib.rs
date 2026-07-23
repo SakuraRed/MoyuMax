@@ -8,6 +8,7 @@ use rusqlite::{Connection, OptionalExtension, TransactionBehavior, params};
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
+mod accounts;
 mod backup;
 mod catalog;
 mod content;
@@ -24,6 +25,7 @@ mod shell;
 mod source;
 mod worlds;
 
+pub use accounts::*;
 pub use backup::*;
 pub use catalog::*;
 pub use content::*;
@@ -121,6 +123,12 @@ pub enum CoreError {
     Recycle(String),
     #[error("无法备份世界存档：{0}")]
     Backup(String),
+    #[error("账户操作失败：{0}")]
+    Account(String),
+    #[error("账户凭据无效或会话已过期：{0}")]
+    AccountCredentials(String),
+    #[error("无法连接认证服务器：{0}")]
+    AccountNetwork(String),
     #[error("任务已暂停，可在恢复全部任务后继续")]
     TaskPaused,
 }
@@ -469,6 +477,28 @@ impl AppService {
                 ALTER TABLE world_backups ADD COLUMN kind TEXT NOT NULL DEFAULT 'full';
                 ALTER TABLE world_backups ADD COLUMN base_backup_id TEXT;
                 PRAGMA user_version = 14;
+                ",
+            )?;
+        }
+        // v15:账户（离线与 Authlib Injector 外置登录）。
+        let version: i64 = connection.query_row("PRAGMA user_version", [], |row| row.get(0))?;
+        if version < 15 {
+            connection.execute_batch(
+                "
+                CREATE TABLE IF NOT EXISTS accounts (
+                    id TEXT PRIMARY KEY NOT NULL,
+                    kind TEXT NOT NULL,
+                    username TEXT NOT NULL,
+                    player_uuid TEXT NOT NULL,
+                    server_url TEXT,
+                    access_token TEXT NOT NULL,
+                    client_token TEXT NOT NULL,
+                    is_default INTEGER NOT NULL DEFAULT 0,
+                    session_state TEXT NOT NULL DEFAULT 'valid',
+                    created_at_unix_seconds INTEGER NOT NULL,
+                    last_validated_at_unix_seconds INTEGER
+                );
+                PRAGMA user_version = 15;
                 ",
             )?;
         }

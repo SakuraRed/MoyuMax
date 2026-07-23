@@ -93,7 +93,10 @@ fn m19_inc_003_rollback_to_incremental_matches_that_point_in_time() {
     fixture.service.rollback_world_backup(&inc1.id).unwrap();
 
     let saves = fixture.instance_root.join(".minecraft/saves/alpha");
-    assert_eq!(fs::read(saves.join("level.dat")).unwrap(), b"level-v2-larger");
+    assert_eq!(
+        fs::read(saves.join("level.dat")).unwrap(),
+        b"level-v2-larger"
+    );
     assert_eq!(fs::read(saves.join("keep.txt")).unwrap(), b"keep");
     assert_eq!(fs::read(saves.join("new.txt")).unwrap(), b"new");
     assert!(!saves.join("old.txt").exists(), "增量前删除的文件不得重现");

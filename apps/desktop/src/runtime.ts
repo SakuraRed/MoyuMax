@@ -366,6 +366,23 @@ export interface WorldBackupSettings {
   keepCount: number;
 }
 
+export type AccountKind = "offline" | "authlib";
+export type AccountSessionState = "valid" | "expired";
+
+export interface AccountSummary {
+  id: string;
+  kind: AccountKind;
+  username: string;
+  playerUuid: string;
+  serverUrl: string | null;
+  isDefault: boolean;
+  sessionState: AccountSessionState;
+  createdAtUnixSeconds: number;
+  lastValidatedAtUnixSeconds: number | null;
+}
+
+export const LITTLESKIN_YGGDRASIL_URL = "https://littleskin.cn/api/yggdrasil";
+
 export type LaunchSessionState =
   | "starting"
   | "running"
@@ -579,6 +596,16 @@ export interface MoyuRuntime {
   getWorldBackupSettings(): Promise<WorldBackupSettings>;
   setWorldBackupIntervalMinutes(minutes: number): Promise<void>;
   setWorldBackupKeepCount(count: number): Promise<void>;
+  listAccounts(): Promise<AccountSummary[]>;
+  addOfflineAccount(username: string): Promise<AccountSummary>;
+  addAuthlibAccount(
+    serverUrl: string,
+    username: string,
+    password: string,
+  ): Promise<AccountSummary>;
+  setDefaultAccount(accountId: string): Promise<void>;
+  removeAccount(accountId: string): Promise<void>;
+  refreshAccountSession(accountId: string): Promise<AccountSummary>;
   retryContentTask(taskId: string): Promise<void>;
   resolveContentTaskRecovery(taskId: string, decision: RecoveryDecision): Promise<void>;
   listInstances(): Promise<ManagedInstance[]>;
@@ -645,6 +672,7 @@ const BROWSER_INSTANCE_WORLDS_KEY = "moyumax.browser.instanceWorlds";
 const BROWSER_WORLD_DETAILS_KEY = "moyumax.browser.worldDetails";
 const BROWSER_SCREENSHOTS_KEY = "moyumax.browser.screenshots";
 const BROWSER_BACKUP_SETTINGS_KEY = "moyumax.browser.backupSettings";
+const BROWSER_ACCOUNTS_KEY = "moyumax.browser.accounts";
 const BROWSER_MODRINTH_OFFLINE_KEY = "moyumax.browser.modrinthOffline";
 const BROWSER_CLOSE_BEHAVIOR_KEY = "moyumax.browser.windowCloseBehavior";
 const BROWSER_SHELL_STATE_KEY = "moyumax.browser.shellState";
@@ -799,6 +827,16 @@ function createTauriRuntime(): MoyuRuntime {
       invoke<void>("set_world_backup_interval_minutes", { minutes }),
     setWorldBackupKeepCount: (count) =>
       invoke<void>("set_world_backup_keep_count", { count }),
+    listAccounts: () => invoke<AccountSummary[]>("list_accounts"),
+    addOfflineAccount: (username) =>
+      invoke<AccountSummary>("add_offline_account", { username }),
+    addAuthlibAccount: (serverUrl, username, password) =>
+      invoke<AccountSummary>("add_authlib_account", { serverUrl, username, password }),
+    setDefaultAccount: (accountId) =>
+      invoke<void>("set_default_account", { accountId }),
+    removeAccount: (accountId) => invoke<void>("remove_account", { accountId }),
+    refreshAccountSession: (accountId) =>
+      invoke<AccountSummary>("refresh_account_session", { accountId }),
     retryContentTask: (taskId) => invoke<void>("retry_content_task", { taskId }),
     resolveContentTaskRecovery: (taskId, decision) =>
       invoke<void>("resolve_content_task_recovery", { taskId, decision }),
@@ -1397,6 +1435,83 @@ function createBrowserRuntime(): MoyuRuntime {
       if (count === 0 || count > 100) throw new Error("备份保留数量必须在 1 到 100 之间");
       const settings = { ...browserBackupSettings(), keepCount: count };
       window.localStorage.setItem(BROWSER_BACKUP_SETTINGS_KEY, JSON.stringify(settings));
+    },
+    async listAccounts() {
+      return browserAccounts();
+    },
+    async addOfflineAccount(username) {
+      if (!/^[A-Za-z0-9_]{3,16}$/.test(username)) {
+        throw new Error("本地玩家名称必须是 3-16 位 ASCII 字母、数字或下划线");
+      }
+      const accounts = browserAccounts();
+      const account: AccountSummary = {
+        id: crypto.randomUUID(),
+        kind: "offline",
+        username,
+        playerUuid: crypto.randomUUID(),
+        serverUrl: null,
+        isDefault: accounts.every((candidate) => !candidate.isDefault),
+        sessionState: "valid",
+        createdAtUnixSeconds: Math.floor(Date.now() / 1000),
+        lastValidatedAtUnixSeconds: null,
+      };
+      accounts.push(account);
+      window.localStorage.setItem(BROWSER_ACCOUNTS_KEY, JSON.stringify(accounts));
+      return account;
+    },
+    async addAuthlibAccount(serverUrl, username, password) {
+      if (password === "wrong") {
+        throw new Error("账户凭据无效或会话已过期：用户名或密码错误");
+      }
+      if (!username.trim() || !password) {
+        throw new Error("用户名和密码不能为空");
+      }
+      const accounts = browserAccounts();
+      const account: AccountSummary = {
+        id: crypto.randomUUID(),
+        kind: "authlib",
+        username: username.split("@")[0] ?? username,
+        playerUuid: crypto.randomUUID(),
+        serverUrl,
+        isDefault: accounts.every((candidate) => !candidate.isDefault),
+        sessionState: "valid",
+        createdAtUnixSeconds: Math.floor(Date.now() / 1000),
+        lastValidatedAtUnixSeconds: Math.floor(Date.now() / 1000),
+      };
+      accounts.push(account);
+      window.localStorage.setItem(BROWSER_ACCOUNTS_KEY, JSON.stringify(accounts));
+      return account;
+    },
+    async setDefaultAccount(accountId) {
+      const accounts = browserAccounts();
+      if (!accounts.some((candidate) => candidate.id === accountId)) {
+        throw new Error("账户不存在");
+      }
+      for (const account of accounts) {
+        account.isDefault = account.id === accountId;
+      }
+      window.localStorage.setItem(BROWSER_ACCOUNTS_KEY, JSON.stringify(accounts));
+    },
+    async removeAccount(accountId) {
+      const accounts = browserAccounts();
+      const index = accounts.findIndex((candidate) => candidate.id === accountId);
+      if (index < 0) throw new Error("账户不存在");
+      const [removed] = accounts.splice(index, 1);
+      if (removed?.isDefault && accounts.length > 0 && accounts[0]) {
+        accounts[0].isDefault = true;
+      }
+      window.localStorage.setItem(BROWSER_ACCOUNTS_KEY, JSON.stringify(accounts));
+    },
+    async refreshAccountSession(accountId) {
+      const accounts = browserAccounts();
+      const account = accounts.find((candidate) => candidate.id === accountId);
+      if (!account) throw new Error("账户不存在");
+      if (account.kind === "authlib" && account.sessionState === "expired") {
+        throw new Error("账户凭据无效或会话已过期：会话已被认证服务器吊销，请重新登录");
+      }
+      account.lastValidatedAtUnixSeconds = Math.floor(Date.now() / 1000);
+      window.localStorage.setItem(BROWSER_ACCOUNTS_KEY, JSON.stringify(accounts));
+      return account;
     },
     async listInstanceScreenshots(instanceId) {
       return browserScreenshots()[instanceId] ?? [];
@@ -2101,6 +2216,11 @@ function browserBackupSettings(): WorldBackupSettings {
   return serialized
     ? (JSON.parse(serialized) as WorldBackupSettings)
     : { intervalMinutes: 30, keepCount: 20 };
+}
+
+function browserAccounts(): AccountSummary[] {
+  const serialized = window.localStorage.getItem(BROWSER_ACCOUNTS_KEY);
+  return serialized ? (JSON.parse(serialized) as AccountSummary[]) : [];
 }
 
 function browserPushRecycleEntry(input: {

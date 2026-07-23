@@ -8,16 +8,17 @@ use std::{
 };
 
 use moyumax_core::{
-    AppService, ArtifactDownloader, BootstrapState, ContentExecutor, ContentInstallPlan,
-    ContentInstallTask, ContentUpdateInfo, CrashReportSummary, DiagnosticExportPreview,
-    DiagnosticExportResult, DownloadInterrupt, ExitImpactSummary, FabricLoaderSummary,
-    InstallExecutor, InstallSelection, InstallTask, InstalledContent, InstanceIsolation,
-    InstanceResource, InstanceResourceKind, InstanceScreenshot, InstanceWorldInfo,
-    JavaArchitecture, JavaDeleteOutcome, JavaDistribution, JavaEnvironmentSummary, LaunchAccount,
-    LaunchExecution, LaunchOptions, LaunchSessionSummary, ManagedInstanceSummary, MetadataClient,
-    ModrinthClient, ModrinthSearchPage, ModrinthSearchQuery, OnboardingSelection, RecoveryDecision,
-    RecycleBinItem, RecyclePurgeResult, ResolvedInstallRequest, ResolvedLoader, ShellState,
-    SourcePolicy, VersionCatalog, WindowCloseBehavior, WorldBackupSummary, run_launch_execution,
+    AccountSummary, AppService, ArtifactDownloader, BootstrapState, ContentExecutor,
+    ContentInstallPlan, ContentInstallTask, ContentUpdateInfo, CrashReportSummary,
+    DiagnosticExportPreview, DiagnosticExportResult, DownloadInterrupt, ExitImpactSummary,
+    FabricLoaderSummary, InstallExecutor, InstallSelection, InstallTask, InstalledContent,
+    InstanceIsolation, InstanceResource, InstanceResourceKind, InstanceScreenshot,
+    InstanceWorldInfo, JavaArchitecture, JavaDeleteOutcome, JavaDistribution,
+    JavaEnvironmentSummary, LaunchExecution, LaunchOptions, LaunchSessionSummary,
+    ManagedInstanceSummary, MetadataClient, ModrinthClient, ModrinthSearchPage,
+    ModrinthSearchQuery, OnboardingSelection, RecoveryDecision, RecycleBinItem, RecyclePurgeResult,
+    ResolvedInstallRequest, ResolvedLoader, ShellState, SourcePolicy, VersionCatalog,
+    WindowCloseBehavior, WorldBackupSummary, YggdrasilClient, run_launch_execution,
 };
 use serde::Serialize;
 use tauri::{Emitter, Manager, State};
@@ -854,6 +855,60 @@ fn restore_recycled_entry(
 }
 
 #[tauri::command]
+fn list_accounts(service: State<'_, AppService>) -> Result<Vec<AccountSummary>, String> {
+    service.list_accounts().map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+fn add_offline_account(
+    service: State<'_, AppService>,
+    username: String,
+) -> Result<AccountSummary, String> {
+    service
+        .add_offline_account(&username)
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+async fn add_authlib_account(
+    service: State<'_, AppService>,
+    server_url: String,
+    username: String,
+    password: String,
+) -> Result<AccountSummary, String> {
+    let client = YggdrasilClient::with_base_url(&server_url).map_err(|error| error.to_string())?;
+    service
+        .add_authlib_account(&client, &server_url, &username, &password)
+        .await
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+fn set_default_account(service: State<'_, AppService>, account_id: String) -> Result<(), String> {
+    service
+        .set_default_account(&account_id)
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+fn remove_account(service: State<'_, AppService>, account_id: String) -> Result<(), String> {
+    service
+        .remove_account(&account_id)
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+async fn refresh_account_session(
+    service: State<'_, AppService>,
+    account_id: String,
+) -> Result<AccountSummary, String> {
+    service
+        .refresh_account_session(&account_id)
+        .await
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
 fn get_world_backup_settings(
     service: State<'_, AppService>,
 ) -> Result<WorldBackupSettings, String> {
@@ -979,7 +1034,9 @@ async fn start_instance(
 ) -> Result<LaunchSessionSummary, String> {
     let service = service.inner().clone();
     let coordinator = coordinator.inner().clone();
-    let account = LaunchAccount::offline("MoyuMaxPlayer").map_err(|error| error.to_string())?;
+    let account = service
+        .account_launch_identity(None)
+        .map_err(|error| error.to_string())?;
     let preparation_service = service.clone();
     let execution = tauri::async_runtime::spawn_blocking(move || {
         preparation_service.create_launch_execution(
@@ -1482,6 +1539,12 @@ pub fn run() {
             get_world_backup_settings,
             set_world_backup_interval_minutes,
             set_world_backup_keep_count,
+            list_accounts,
+            add_offline_account,
+            add_authlib_account,
+            set_default_account,
+            remove_account,
+            refresh_account_session,
             retry_content_task,
             resolve_content_task_recovery,
             list_instances,

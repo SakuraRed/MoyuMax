@@ -3,6 +3,7 @@
 
   import { formatBytes } from "../installation";
   import type {
+    AccountSummary,
     JavaDeleteOutcome,
     JavaEnvironment,
     ManagedInstance,
@@ -10,6 +11,7 @@
     OnboardingSelection,
     ReferencingInstance,
   } from "../runtime";
+  import { LITTLESKIN_YGGDRASIL_URL } from "../runtime";
   import AppShell from "./AppShell.svelte";
   import Icon from "./Icon.svelte";
 
@@ -46,6 +48,14 @@
   let backupInterval = $state(30);
   let backupKeep = $state(20);
   let backupSettingsLoaded = $state(false);
+  let accounts = $state<AccountSummary[]>([]);
+  let addForm = $state<"" | "offline" | "authlib">("");
+  let offlineName = $state("");
+  let authlibServerChoice = $state("littleskin");
+  let authlibUrl = $state("");
+  let authlibUser = $state("");
+  let authlibPass = $state("");
+  let pendingAccountRemove = $state<string | null>(null);
 
   onMount(() => {
     void refresh();
@@ -54,10 +64,11 @@
   async function refresh(): Promise<void> {
     errorMessage = "";
     try {
-      [environments, deletedEnvironments, instances] = await Promise.all([
+      [environments, deletedEnvironments, instances, accounts] = await Promise.all([
         runtime.listJavaEnvironments(),
         runtime.listDeletedJavaEnvironments(),
         runtime.listInstances(),
+        runtime.listAccounts(),
       ]);
       if (!backupSettingsLoaded) {
         const backupSettings = await runtime.getWorldBackupSettings();
@@ -67,6 +78,91 @@
       }
     } catch (error) {
       errorMessage = error instanceof Error ? error.message : String(error);
+    }
+  }
+
+  function accountKindLabel(account: AccountSummary): string {
+    return account.kind === "offline" ? "离线" : "外置";
+  }
+
+  async function submitOffline(): Promise<void> {
+    busy = "add-account";
+    errorMessage = "";
+    notice = "";
+    try {
+      await runtime.addOfflineAccount(offlineName.trim());
+      offlineName = "";
+      addForm = "";
+      accounts = await runtime.listAccounts();
+      notice = "离线账户已创建";
+    } catch (error) {
+      errorMessage = error instanceof Error ? error.message : String(error);
+    } finally {
+      busy = "";
+    }
+  }
+
+  async function submitAuthlib(): Promise<void> {
+    busy = "add-account";
+    errorMessage = "";
+    notice = "";
+    const serverUrl = authlibServerChoice === "littleskin" ? LITTLESKIN_YGGDRASIL_URL : authlibUrl.trim();
+    try {
+      await runtime.addAuthlibAccount(serverUrl, authlibUser.trim(), authlibPass);
+      authlibUser = "";
+      authlibPass = "";
+      authlibUrl = "";
+      addForm = "";
+      accounts = await runtime.listAccounts();
+      notice = "外置账户已登录，令牌仅保存在本地";
+    } catch (error) {
+      errorMessage = error instanceof Error ? error.message : String(error);
+    } finally {
+      busy = "";
+    }
+  }
+
+  async function makeDefault(account: AccountSummary): Promise<void> {
+    errorMessage = "";
+    notice = "";
+    try {
+      await runtime.setDefaultAccount(account.id);
+      accounts = await runtime.listAccounts();
+      notice = `默认账户已切换为「${account.username}」`;
+    } catch (error) {
+      errorMessage = error instanceof Error ? error.message : String(error);
+    }
+  }
+
+  async function refreshSession(account: AccountSummary): Promise<void> {
+    busy = account.id;
+    errorMessage = "";
+    notice = "";
+    try {
+      await runtime.refreshAccountSession(account.id);
+      accounts = await runtime.listAccounts();
+      notice = `「${account.username}」会话已刷新`;
+    } catch (error) {
+      errorMessage = error instanceof Error ? error.message : String(error);
+      accounts = await runtime.listAccounts();
+    } finally {
+      busy = "";
+    }
+  }
+
+  async function removeAccount(account: AccountSummary): Promise<void> {
+    busy = account.id;
+    errorMessage = "";
+    notice = "";
+    try {
+      await runtime.removeAccount(account.id);
+      pendingAccountRemove = null;
+      accounts = await runtime.listAccounts();
+      notice = `已移除账户「${account.username}」`;
+    } catch (error) {
+      errorMessage = error instanceof Error ? error.message : String(error);
+    } finally {
+      busy = "";
     }
   }
 
@@ -245,6 +341,96 @@
     {#if notice}
       <div class="java-notice" role="status">{notice}</div>
     {/if}
+
+    <section class="backup-settings" aria-labelledby="accounts-title">
+      <header>
+        <div>
+          <h2 id="accounts-title">账户</h2>
+          <p>离线账户仅用于本地单人游戏；外置账户经 Authlib Injector 认证且只保存令牌。Microsoft 登录在应用注册完成后提供。</p>
+        </div>
+        <div class="local-content-actions">
+          <button class="button ghost compact" disabled={busy !== ""} onclick={() => { addForm = addForm === "offline" ? "" : "offline"; }}>添加离线账户</button>
+          <button class="button ghost compact" disabled={busy !== ""} onclick={() => { addForm = addForm === "authlib" ? "" : "authlib"; }}>添加外置账户</button>
+        </div>
+      </header>
+      {#if addForm === "offline"}
+        <div class="account-form" role="group" aria-label="添加离线账户">
+          <label>
+            <span>玩家名（3-16 位字母、数字或下划线）</span>
+            <input bind:value={offlineName} type="text" aria-label="离线玩家名" placeholder="Steve_2026" />
+          </label>
+          <div class="local-content-actions">
+            <button class="button primary compact" disabled={busy !== "" || !offlineName.trim()} onclick={() => void submitOffline()}>{busy === "add-account" ? "正在创建" : "创建离线账户"}</button>
+            <button class="button ghost compact" disabled={busy !== ""} onclick={() => { addForm = ""; }}>取消</button>
+          </div>
+        </div>
+      {:else if addForm === "authlib"}
+        <div class="account-form" role="group" aria-label="添加外置账户">
+          <label>
+            <span>认证服务器</span>
+            <select bind:value={authlibServerChoice} aria-label="认证服务器">
+              <option value="littleskin">LittleSkin（littleskin.cn）</option>
+              <option value="custom">Authlib Injector · 自定义地址</option>
+            </select>
+          </label>
+          {#if authlibServerChoice === "custom"}
+            <label>
+              <span>服务器地址（https）</span>
+              <input bind:value={authlibUrl} type="text" aria-label="认证服务器地址" placeholder="https://example.com/api/yggdrasil" />
+            </label>
+          {/if}
+          <label>
+            <span>用户名</span>
+            <input bind:value={authlibUser} type="text" aria-label="外置账户用户名" autocomplete="username" />
+          </label>
+          <label>
+            <span>密码（只用于本次登录，不会保存）</span>
+            <input bind:value={authlibPass} type="password" aria-label="外置账户密码" autocomplete="current-password" />
+          </label>
+          <div class="local-content-actions">
+            <button
+              class="button primary compact"
+              disabled={busy !== "" || !authlibUser.trim() || !authlibPass || (authlibServerChoice === "custom" && !authlibUrl.trim())}
+              onclick={() => void submitAuthlib()}
+            >{busy === "add-account" ? "正在登录" : "登录并添加"}</button>
+            <button class="button ghost compact" disabled={busy !== ""} onclick={() => { addForm = ""; }}>取消</button>
+          </div>
+        </div>
+      {/if}
+      {#if accounts.length === 0}
+        <div class="backup-empty-row">还没有账户。启动游戏时会自动创建一个本地离线账户。</div>
+      {:else}
+        <div class="backup-list">
+          {#each accounts as account}
+            <article class="backup-row">
+              <div>
+                <div class="backup-title-line">
+                  <h3>{account.username}</h3>
+                  <span>{accountKindLabel(account)}</span>
+                  {#if account.isDefault}<span>默认</span>{/if}
+                  {#if account.sessionState === "expired"}<span class="account-expired">会话已过期</span>{/if}
+                </div>
+                <p>{account.kind === "offline" ? "离线模式 · 无法加入正版服务器" : `${account.serverUrl ?? ""} · 令牌仅保存在本地`}</p>
+              </div>
+              <div class="backup-side">
+                {#if !account.isDefault}
+                  <button class="button ghost compact" disabled={busy !== ""} onclick={() => void makeDefault(account)}>设为默认</button>
+                {/if}
+                {#if account.kind === "authlib"}
+                  <button class="button ghost compact" disabled={busy !== ""} onclick={() => void refreshSession(account)}>{busy === account.id ? "正在刷新" : "刷新会话"}</button>
+                {/if}
+                {#if pendingAccountRemove === account.id}
+                  <button class="button danger-subtle compact" disabled={busy !== ""} onclick={() => void removeAccount(account)}>确认移除</button>
+                  <button class="button ghost compact" disabled={busy !== ""} onclick={() => { pendingAccountRemove = null; }}>取消</button>
+                {:else}
+                  <button class="button danger-subtle compact" aria-label={`移除账户 ${account.username}`} disabled={busy !== ""} onclick={() => { pendingAccountRemove = account.id; }}>移除</button>
+                {/if}
+              </div>
+            </article>
+          {/each}
+        </div>
+      {/if}
+    </section>
 
     <section class="backup-settings" aria-labelledby="backup-settings-title">
       <header>

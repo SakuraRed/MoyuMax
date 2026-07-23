@@ -3358,6 +3358,40 @@ summary:focus-visible {
   background: var(--bg-app);
 }
 
+.account-form {
+  display: grid;
+  gap: 10px;
+  margin-bottom: 14px;
+  padding: var(--frame-row-inset-block) var(--frame-row-inset-inline);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+}
+
+.account-form label {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  color: var(--text-2);
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.account-form input,
+.account-form select {
+  width: 100%;
+  height: 34px;
+  padding: 0 var(--field-content-inset-inline);
+  border: 1px solid var(--border-strong);
+  border-radius: 7px;
+  color: var(--text);
+  background: var(--bg-app);
+}
+
+.account-expired {
+  color: var(--warn) !important;
+  background: var(--warn-dim) !important;
+}
+
 .backup-empty-row {
   padding: var(--frame-row-inset-block) var(--frame-row-inset-inline);
   border: 1px solid var(--border);

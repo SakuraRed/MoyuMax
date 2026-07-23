@@ -75,6 +75,36 @@ impl LaunchAccount {
     pub const fn player_uuid(&self) -> Uuid {
         self.player_uuid
     }
+
+    /// 外置（Authlib Injector / Yggdrasil）账户的启动身份。
+    pub fn yggdrasil(
+        player_name: &str,
+        player_uuid: &str,
+        access_token: &str,
+        client_token: &str,
+    ) -> Result<Self> {
+        let player_uuid = Uuid::parse_str(player_uuid).map_err(|_| {
+            CoreError::Account(format!("认证服务器返回的玩家 UUID 无效：{player_uuid}"))
+        })?;
+        if player_name.is_empty()
+            || player_name.len() > 16
+            || player_name.chars().any(char::is_control)
+        {
+            return Err(CoreError::Account("认证服务器返回的玩家名无效".to_owned()));
+        }
+        if access_token.is_empty() {
+            return Err(CoreError::Account(
+                "认证服务器返回的访问令牌为空".to_owned(),
+            ));
+        }
+        Ok(Self {
+            player_name: player_name.to_owned(),
+            player_uuid,
+            access_token: access_token.to_owned(),
+            client_id: client_token.to_owned(),
+            xuid: String::new(),
+        })
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
