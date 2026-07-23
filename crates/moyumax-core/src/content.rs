@@ -843,6 +843,69 @@ impl AppService {
         Ok(())
     }
 
+    /// 下载被暂停中断后，把执行中的内容任务标记为可恢复的暂停状态。
+    pub fn mark_content_task_paused(&self, task_id: &str) -> Result<()> {
+        let mut connection = self.connection()?;
+        let transaction = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let changed = transaction.execute(
+            "
+            UPDATE content_install_tasks
+            SET state = 'paused', updated_at_unix_seconds = ?2
+            WHERE id = ?1 AND state = 'running'
+            ",
+            params![task_id, unix_timestamp()],
+        )?;
+        if changed == 0 {
+            return Err(CoreError::Content(
+                "内容任务不存在或当前状态不能暂停".to_owned(),
+            ));
+        }
+        transaction.execute(
+            "
+            UPDATE content_task_progress
+            SET current_item = '已暂停，可在恢复全部任务后继续', error_summary = NULL
+            WHERE task_id = ?1
+            ",
+            params![task_id],
+        )?;
+        transaction.commit()?;
+        Ok(())
+    }
+
+    /// 恢复全部任务时，把所有暂停的内容任务重新入队，返回任务 ID 供调度器提交。
+    pub fn requeue_paused_content_tasks(&self) -> Result<Vec<String>> {
+        let mut connection = self.connection()?;
+        let transaction = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let mut statement = transaction.prepare(
+            "SELECT id FROM content_install_tasks WHERE state = 'paused' ORDER BY created_at_unix_seconds, id",
+        )?;
+        let task_ids = statement
+            .query_map([], |row| row.get::<_, String>(0))?
+            .collect::<std::result::Result<Vec<_>, _>>()?;
+        drop(statement);
+        if task_ids.is_empty() {
+            return Ok(Vec::new());
+        }
+        transaction.execute(
+            "
+            UPDATE content_task_progress
+            SET current_item = '等待恢复执行', error_summary = NULL
+            WHERE task_id IN (SELECT id FROM content_install_tasks WHERE state = 'paused')
+            ",
+            [],
+        )?;
+        transaction.execute(
+            "
+            UPDATE content_install_tasks
+            SET state = 'queued', current_stage = 'prepare', updated_at_unix_seconds = ?1
+            WHERE state = 'paused'
+            ",
+            params![unix_timestamp()],
+        )?;
+        transaction.commit()?;
+        Ok(task_ids)
+    }
+
     pub fn resolve_content_task_recovery(
         &self,
         task_id: &str,

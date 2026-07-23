@@ -1,23 +1,34 @@
 use std::{
     collections::HashMap,
     path::PathBuf,
-    sync::{Arc, Mutex},
+    sync::{
+        Arc, Mutex,
+        atomic::{AtomicBool, Ordering},
+    },
 };
 
 use moyumax_core::{
     AppService, BootstrapState, ContentExecutor, ContentInstallPlan, ContentInstallTask,
-    CrashReportSummary, DiagnosticExportPreview, DiagnosticExportResult, FabricLoaderSummary,
-    InstallExecutor, InstallSelection, InstallTask, InstalledContent, InstanceIsolation,
-    JavaArchitecture, JavaDistribution, LaunchAccount, LaunchExecution, LaunchOptions,
-    LaunchSessionSummary, ManagedInstanceSummary, MetadataClient, ModrinthClient,
-    ModrinthSearchPage, ModrinthSearchQuery, OnboardingSelection, RecoveryDecision, RecycleBinItem,
-    RecyclePurgeResult, ResolvedInstallRequest, ResolvedLoader, TaskState, VersionCatalog,
-    WorldBackupSummary, run_launch_execution,
+    CrashReportSummary, DiagnosticExportPreview, DiagnosticExportResult, DownloadInterrupt,
+    ExitImpactSummary, FabricLoaderSummary, InstallExecutor, InstallSelection, InstallTask,
+    InstalledContent, InstanceIsolation, JavaArchitecture, JavaDistribution, LaunchAccount,
+    LaunchExecution, LaunchOptions, LaunchSessionSummary, ManagedInstanceSummary, MetadataClient,
+    ModrinthClient, ModrinthSearchPage, ModrinthSearchQuery, OnboardingSelection, RecoveryDecision,
+    RecycleBinItem, RecyclePurgeResult, ResolvedInstallRequest, ResolvedLoader, ShellState,
+    TaskState, VersionCatalog, WindowCloseBehavior, WorldBackupSummary, run_launch_execution,
 };
 use serde::Serialize;
-use tauri::{Manager, State};
+use tauri::{Emitter, Manager, State};
 use tokio::sync::{Semaphore, oneshot};
 use uuid::Uuid;
+
+mod lifecycle;
+mod tray;
+
+use lifecycle::{
+    CLOSE_REQUESTED_EVENT, PendingIntent, ShellCoordinator, WindowStartupKind,
+    confirm_graceful_exit, minimize_to_tray, spawn_idle_destroy_task, spawn_smoke_driver,
+};
 
 #[derive(Debug, Default)]
 struct InstallPreviewStore {
@@ -39,41 +50,132 @@ struct TaskCoordinator {
     install_executor: InstallExecutor,
     content_executor: ContentExecutor,
     task_permits: Arc<Semaphore>,
+    scheduling_enabled: Arc<AtomicBool>,
+    current_interrupt: Arc<Mutex<Option<DownloadInterrupt>>>,
 }
 
 impl TaskCoordinator {
-    fn new() -> Result<Self, String> {
+    fn new(scheduling_enabled: bool) -> Result<Self, String> {
         Ok(Self {
             install_executor: InstallExecutor::new(4).map_err(|error| error.to_string())?,
             content_executor: ContentExecutor::new(4).map_err(|error| error.to_string())?,
             task_permits: Arc::new(Semaphore::new(1)),
+            scheduling_enabled: Arc::new(AtomicBool::new(scheduling_enabled)),
+            current_interrupt: Arc::new(Mutex::new(None)),
         })
     }
 
+    fn scheduling_enabled(&self) -> bool {
+        self.scheduling_enabled.load(Ordering::Acquire)
+    }
+
     fn submit_install(&self, service: AppService, task_id: String) {
+        if !self.scheduling_enabled() {
+            return;
+        }
         let coordinator = self.clone();
         tauri::async_runtime::spawn(async move {
             let Ok(_permit) = coordinator.task_permits.acquire().await else {
                 return;
             };
+            if !coordinator.scheduling_enabled() {
+                return;
+            }
+            let interrupt = DownloadInterrupt::new();
+            if let Ok(mut current) = coordinator.current_interrupt.lock() {
+                *current = Some(interrupt.clone());
+            }
             let _ = coordinator
                 .install_executor
-                .execute_task(&service, &task_id)
+                .execute_task_with_interrupt(&service, &task_id, Some(interrupt))
                 .await;
+            if let Ok(mut current) = coordinator.current_interrupt.lock() {
+                *current = None;
+            }
         });
     }
 
     fn submit_content(&self, service: AppService, task_id: String) {
+        if !self.scheduling_enabled() {
+            return;
+        }
         let coordinator = self.clone();
         tauri::async_runtime::spawn(async move {
             let Ok(_permit) = coordinator.task_permits.acquire().await else {
                 return;
             };
+            if !coordinator.scheduling_enabled() {
+                return;
+            }
+            let interrupt = DownloadInterrupt::new();
+            if let Ok(mut current) = coordinator.current_interrupt.lock() {
+                *current = Some(interrupt.clone());
+            }
             let _ = coordinator
                 .content_executor
-                .execute_task(&service, &task_id)
+                .execute_task_with_interrupt(&service, &task_id, Some(interrupt))
                 .await;
+            if let Ok(mut current) = coordinator.current_interrupt.lock() {
+                *current = None;
+            }
         });
+    }
+
+    /// 暂停全部任务：持久化暂停标志、停止调度、在分段边界中断执行中的下载。
+    fn pause_all(&self, service: &AppService) -> Result<(), String> {
+        service
+            .set_tasks_paused(true)
+            .map_err(|error| error.to_string())?;
+        self.interrupt_running_for_exit();
+        Ok(())
+    }
+
+    /// 恢复全部任务：清除暂停标志，重新入队暂停任务并继续调度排队任务。
+    fn resume_all(&self, service: &AppService) -> Result<(), String> {
+        service
+            .set_tasks_paused(false)
+            .map_err(|error| error.to_string())?;
+        self.scheduling_enabled.store(true, Ordering::Release);
+        let install_ids = service
+            .requeue_paused_install_tasks()
+            .map_err(|error| error.to_string())?;
+        let content_ids = service
+            .requeue_paused_content_tasks()
+            .map_err(|error| error.to_string())?;
+        for task_id in install_ids {
+            self.submit_install(service.clone(), task_id);
+        }
+        for task_id in content_ids {
+            self.submit_content(service.clone(), task_id);
+        }
+        for task in service
+            .list_install_tasks()
+            .map_err(|error| error.to_string())?
+        {
+            if task.state == TaskState::Queued {
+                self.submit_install(service.clone(), task.id);
+            }
+        }
+        for task in service
+            .list_content_install_tasks()
+            .map_err(|error| error.to_string())?
+        {
+            if task.state == TaskState::Queued {
+                self.submit_content(service.clone(), task.id);
+            }
+        }
+        Ok(())
+    }
+
+    /// 停止调度并在分段边界中断执行中的下载。退出路径使用：
+    /// 被中断的任务进入可恢复的暂停状态，不修改持久化暂停标志。
+    fn interrupt_running_for_exit(&self) {
+        self.scheduling_enabled.store(false, Ordering::Release);
+        if let Ok(current) = self.current_interrupt.lock()
+            && let Some(interrupt) = current.as_ref()
+        {
+            interrupt.interrupt();
+        }
     }
 }
 
@@ -162,7 +264,11 @@ struct DiagnosticExportPreviewResponse {
 }
 
 #[tauri::command]
-fn get_bootstrap_state(service: State<'_, AppService>) -> Result<BootstrapState, String> {
+fn get_bootstrap_state(
+    service: State<'_, AppService>,
+    shell: State<'_, Arc<ShellCoordinator>>,
+) -> Result<BootstrapState, String> {
+    shell.note_bootstrap_ipc();
     service.bootstrap_state().map_err(|error| error.to_string())
 }
 
@@ -575,6 +681,146 @@ async fn confirm_diagnostic_export(
     export
 }
 
+#[tauri::command]
+fn get_window_close_behavior(
+    service: State<'_, AppService>,
+) -> Result<WindowCloseBehavior, String> {
+    service
+        .window_close_behavior()
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+fn set_window_close_behavior(
+    service: State<'_, AppService>,
+    behavior: WindowCloseBehavior,
+) -> Result<(), String> {
+    service
+        .set_window_close_behavior(behavior)
+        .map_err(|error| error.to_string())
+}
+
+#[derive(Debug, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct WindowCloseResolution {
+    action: WindowCloseAction,
+    remember: bool,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+enum WindowCloseAction {
+    Minimize,
+    Exit,
+}
+
+#[tauri::command]
+async fn resolve_window_close(
+    app: tauri::AppHandle,
+    service: State<'_, AppService>,
+    shell: State<'_, Arc<ShellCoordinator>>,
+    resolution: WindowCloseResolution,
+) -> Result<(), String> {
+    if resolution.remember {
+        let behavior = match resolution.action {
+            WindowCloseAction::Minimize => WindowCloseBehavior::MinimizeToTray,
+            WindowCloseAction::Exit => WindowCloseBehavior::Exit,
+        };
+        service
+            .set_window_close_behavior(behavior)
+            .map_err(|error| error.to_string())?;
+    }
+    match resolution.action {
+        WindowCloseAction::Minimize => minimize_to_tray(&app, &shell),
+        WindowCloseAction::Exit => {
+            let impact = service
+                .exit_impact_summary()
+                .map_err(|error| error.to_string())?;
+            if impact.requires_confirmation() {
+                return Err("退出前需要确认运行中游戏与活动任务的影响".to_owned());
+            }
+            let service = service.inner().clone();
+            let tasks = app.state::<TaskCoordinator>().inner().clone();
+            let launches = app.state::<LaunchCoordinator>().inner().clone();
+            confirm_graceful_exit(app, service, tasks, launches, Arc::clone(&shell)).await
+        }
+    }
+}
+
+#[tauri::command]
+fn get_exit_impact(service: State<'_, AppService>) -> Result<ExitImpactSummary, String> {
+    service
+        .exit_impact_summary()
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+async fn confirm_exit(
+    app: tauri::AppHandle,
+    service: State<'_, AppService>,
+    tasks: State<'_, TaskCoordinator>,
+    launches: State<'_, LaunchCoordinator>,
+    shell: State<'_, Arc<ShellCoordinator>>,
+) -> Result<(), String> {
+    confirm_graceful_exit(
+        app,
+        service.inner().clone(),
+        tasks.inner().clone(),
+        launches.inner().clone(),
+        Arc::clone(&shell),
+    )
+    .await
+}
+
+#[tauri::command]
+fn force_exit(app: tauri::AppHandle, shell: State<'_, Arc<ShellCoordinator>>) {
+    shell.begin_exit();
+    app.exit(0);
+}
+
+#[tauri::command]
+fn get_shell_state(service: State<'_, AppService>) -> Result<Option<ShellState>, String> {
+    service.shell_state().map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+fn persist_shell_state(service: State<'_, AppService>, state: ShellState) -> Result<(), String> {
+    service
+        .persist_shell_state(&state)
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+fn get_window_startup_kind(shell: State<'_, Arc<ShellCoordinator>>) -> WindowStartupKind {
+    shell.startup_kind()
+}
+
+#[tauri::command]
+fn take_pending_intent(shell: State<'_, Arc<ShellCoordinator>>) -> Option<PendingIntent> {
+    shell.take_pending_intent()
+}
+
+#[tauri::command]
+fn get_tasks_paused(service: State<'_, AppService>) -> Result<bool, String> {
+    service.tasks_paused().map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+fn pause_all_tasks(
+    service: State<'_, AppService>,
+    tasks: State<'_, TaskCoordinator>,
+) -> Result<(), String> {
+    tasks.pause_all(&service)
+}
+
+#[tauri::command]
+fn resume_all_tasks(
+    service: State<'_, AppService>,
+    tasks: State<'_, TaskCoordinator>,
+) -> Result<(), String> {
+    tasks.resume_all(&service)
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
@@ -587,7 +833,10 @@ pub fn run() {
             let service = AppService::open(&database_path, &default_data_directory)?;
             let metadata = MetadataClient::new()?;
             let modrinth = ModrinthClient::new()?;
-            let coordinator = TaskCoordinator::new().map_err(std::io::Error::other)?;
+            let smoke_enabled = std::env::var_os("MOYUMAX_SMOKE").is_some();
+            let shell = Arc::new(ShellCoordinator::new(smoke_enabled, &state_directory));
+            let tasks_paused = service.tasks_paused()?;
+            let coordinator = TaskCoordinator::new(!tasks_paused).map_err(std::io::Error::other)?;
             for task in service.list_install_tasks()? {
                 if task.state == TaskState::Queued {
                     coordinator.submit_install(service.clone(), task.id);
@@ -606,7 +855,29 @@ pub fn run() {
             app.manage(DiagnosticPreviewStore::default());
             app.manage(coordinator);
             app.manage(LaunchCoordinator::default());
+            app.manage(Arc::clone(&shell));
+            tray::setup_tray(app.handle(), Arc::clone(&shell))?;
+            spawn_idle_destroy_task(app.handle().clone(), Arc::clone(&shell));
+            if smoke_enabled {
+                spawn_smoke_driver(app.handle().clone(), shell);
+            }
             Ok(())
+        })
+        .on_window_event(|window, event| {
+            let shell = window.app_handle().state::<Arc<ShellCoordinator>>();
+            match event {
+                tauri::WindowEvent::CloseRequested { api, .. } => {
+                    if shell.is_exiting() || shell.is_minimizing() {
+                        return;
+                    }
+                    api.prevent_close();
+                    let _ = window.emit(CLOSE_REQUESTED_EVENT, ());
+                }
+                tauri::WindowEvent::Destroyed => {
+                    shell.on_window_destroyed();
+                }
+                _ => {}
+            }
         })
         .invoke_handler(tauri::generate_handler![
             get_bootstrap_state,
@@ -637,10 +908,32 @@ pub fn run() {
             list_launch_sessions,
             list_crash_reports,
             preview_diagnostic_export,
-            confirm_diagnostic_export
+            confirm_diagnostic_export,
+            get_window_close_behavior,
+            set_window_close_behavior,
+            resolve_window_close,
+            get_exit_impact,
+            confirm_exit,
+            force_exit,
+            get_shell_state,
+            persist_shell_state,
+            get_window_startup_kind,
+            take_pending_intent,
+            get_tasks_paused,
+            pause_all_tasks,
+            resume_all_tasks
         ])
-        .run(tauri::generate_context!())
-        .expect("MoyuMax desktop runtime failed");
+        .build(tauri::generate_context!())
+        .expect("MoyuMax desktop runtime failed")
+        .run(|app, event| {
+            if let tauri::RunEvent::ExitRequested { api, .. } = event {
+                let shell = app.state::<Arc<ShellCoordinator>>();
+                if !shell.is_exiting() {
+                    // 窗口销毁后进程保持托盘常驻,只有显式退出才结束。
+                    api.prevent_exit();
+                }
+            }
+        });
 }
 
 fn build_install_preview(id: String, request: &ResolvedInstallRequest) -> InstallPreview {
@@ -686,7 +979,7 @@ mod tests {
 
     #[tokio::test]
     async fn install_and_content_tasks_share_one_background_slot() {
-        let coordinator = TaskCoordinator::new().unwrap();
+        let coordinator = TaskCoordinator::new(true).unwrap();
         assert_eq!(coordinator.task_permits.available_permits(), 1);
 
         let permit = coordinator
@@ -699,6 +992,14 @@ mod tests {
 
         drop(permit);
         assert_eq!(coordinator.task_permits.available_permits(), 1);
+    }
+
+    #[test]
+    fn paused_coordinator_keeps_scheduling_disabled() {
+        let coordinator = TaskCoordinator::new(false).unwrap();
+        assert!(!coordinator.scheduling_enabled());
+        coordinator.interrupt_running_for_exit();
+        assert!(!coordinator.scheduling_enabled());
     }
 
     #[tokio::test]

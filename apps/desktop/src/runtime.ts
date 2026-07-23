@@ -1,4 +1,5 @@
 import { invoke } from "@tauri-apps/api/core";
+import { listen } from "@tauri-apps/api/event";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 
 export type Language = "zh-CN" | "zh-TW" | "en";
@@ -363,6 +364,41 @@ export interface DiagnosticExportResult {
   fileCount: number;
 }
 
+export type WindowCloseBehavior = "ask" | "minimizeToTray" | "exit";
+export type WindowCloseAction = "minimize" | "exit";
+
+export interface WindowCloseResolution {
+  action: WindowCloseAction;
+  remember: boolean;
+}
+
+export interface ExitImpactSession {
+  sessionId: string;
+  instanceId: string;
+  instanceName: string;
+}
+
+export interface ExitImpact {
+  runningSessions: ExitImpactSession[];
+  activeInstallTasks: number;
+  activeContentTasks: number;
+  executingInstallTasks: number;
+  executingContentTasks: number;
+  pausedTasks: number;
+}
+
+export type WindowStartupKind = "cold" | "wake";
+
+export type PendingIntent =
+  | { kind: "quickLaunch"; instanceId: string }
+  | { kind: "exitRequested" };
+
+/** 持久化的壳层页面与滚动位置;page 的合法性由 shell-state.ts 校验。 */
+export interface ShellStateSnapshot {
+  page: string;
+  scrollTop: number;
+}
+
 export interface MoyuRuntime {
   getBootstrapState(): Promise<BootstrapState>;
   completeOnboarding(selection: OnboardingSelection): Promise<void>;
@@ -400,6 +436,23 @@ export interface MoyuRuntime {
   minimizeWindow(): Promise<void>;
   toggleMaximizeWindow(): Promise<void>;
   closeWindow(): Promise<void>;
+  getWindowCloseBehavior(): Promise<WindowCloseBehavior>;
+  setWindowCloseBehavior(behavior: WindowCloseBehavior): Promise<void>;
+  resolveWindowClose(resolution: WindowCloseResolution): Promise<void>;
+  getExitImpact(): Promise<ExitImpact>;
+  confirmExit(): Promise<void>;
+  forceExit(): Promise<void>;
+  getShellState(): Promise<ShellStateSnapshot | null>;
+  persistShellState(state: ShellStateSnapshot): Promise<void>;
+  getWindowStartupKind(): Promise<WindowStartupKind>;
+  takePendingIntent(): Promise<PendingIntent | null>;
+  getTasksPaused(): Promise<boolean>;
+  pauseAllTasks(): Promise<void>;
+  resumeAllTasks(): Promise<void>;
+  /** 注册窗口关闭请求回调(标题栏关闭按钮与系统关闭共用),返回取消注册函数。 */
+  onCloseRequested(handler: () => void): () => void;
+  /** 托盘动作产生待处理意图时通知前端取走,返回取消注册函数。 */
+  onPendingIntent(handler: () => void): () => void;
 }
 
 const BROWSER_STORAGE_KEY = "moyumax.browser.onboarding";
@@ -412,9 +465,17 @@ const BROWSER_CRASH_REPORTS_KEY = "moyumax.browser.crashReports";
 const BROWSER_CONTENT_TASKS_KEY = "moyumax.browser.contentTasks";
 const BROWSER_INSTALLED_CONTENT_KEY = "moyumax.browser.installedContent";
 const BROWSER_MODRINTH_OFFLINE_KEY = "moyumax.browser.modrinthOffline";
+const BROWSER_CLOSE_BEHAVIOR_KEY = "moyumax.browser.windowCloseBehavior";
+const BROWSER_SHELL_STATE_KEY = "moyumax.browser.shellState";
+const BROWSER_STARTUP_KIND_KEY = "moyumax.browser.startupKind";
+const BROWSER_PENDING_INTENT_KEY = "moyumax.browser.pendingIntent";
+const BROWSER_TASKS_PAUSED_KEY = "moyumax.browser.tasksPaused";
+const BROWSER_WINDOW_STATE_KEY = "moyumax.browser.windowState";
 const browserPreviews = new Map<string, InstallSelection>();
 const browserContentPreviews = new Map<string, ContentInstallPlan>();
 const browserDiagnosticPreviews = new Map<string, string>();
+const browserCloseHandlers = new Set<() => void>();
+const browserPendingIntentHandlers = new Set<() => void>();
 
 interface BrowserRecycleEntry extends RecycleBinItem {
   instance: ManagedInstance;
@@ -489,8 +550,44 @@ function createTauriRuntime(): MoyuRuntime {
     minimizeWindow: () => currentWindow.minimize(),
     toggleMaximizeWindow: () => currentWindow.toggleMaximize(),
     closeWindow: () => currentWindow.close(),
+    getWindowCloseBehavior: () =>
+      invoke<WindowCloseBehavior>("get_window_close_behavior"),
+    setWindowCloseBehavior: (behavior) =>
+      invoke<void>("set_window_close_behavior", { behavior }),
+    resolveWindowClose: (resolution) =>
+      invoke<void>("resolve_window_close", { resolution }),
+    getExitImpact: () => invoke<ExitImpact>("get_exit_impact"),
+    confirmExit: () => invoke<void>("confirm_exit"),
+    forceExit: () => invoke<void>("force_exit"),
+    getShellState: () => invoke<ShellStateSnapshot | null>("get_shell_state"),
+    persistShellState: (state) =>
+      invoke<void>("persist_shell_state", { state }),
+    getWindowStartupKind: () =>
+      invoke<WindowStartupKind>("get_window_startup_kind"),
+    takePendingIntent: () =>
+      invoke<PendingIntent | null>("take_pending_intent"),
+    getTasksPaused: () => invoke<boolean>("get_tasks_paused"),
+    pauseAllTasks: () => invoke<void>("pause_all_tasks"),
+    resumeAllTasks: () => invoke<void>("resume_all_tasks"),
+    onCloseRequested: (handler) => {
+      let unlisten: (() => void) | undefined;
+      void listen(CLOSE_REQUESTED_EVENT, handler).then((release) => {
+        unlisten = release;
+      });
+      return () => unlisten?.();
+    },
+    onPendingIntent: (handler) => {
+      let unlisten: (() => void) | undefined;
+      void listen(PENDING_INTENT_EVENT, handler).then((release) => {
+        unlisten = release;
+      });
+      return () => unlisten?.();
+    },
   };
 }
+
+const CLOSE_REQUESTED_EVENT = "moyumax://close-requested";
+const PENDING_INTENT_EVENT = "moyumax://pending-intent";
 
 function createBrowserRuntime(): MoyuRuntime {
   const recommended = recommendedBrowserSelection();
@@ -953,7 +1050,178 @@ function createBrowserRuntime(): MoyuRuntime {
     },
     async minimizeWindow() {},
     async toggleMaximizeWindow() {},
-    async closeWindow() {},
+    async closeWindow() {
+      // 浏览器环境没有真实窗口,closeWindow 模拟原生关闭请求事件。
+      for (const handler of browserCloseHandlers) handler();
+    },
+    async getWindowCloseBehavior() {
+      const stored = window.localStorage.getItem(BROWSER_CLOSE_BEHAVIOR_KEY);
+      if (stored === "minimizeToTray" || stored === "exit") return stored;
+      return "ask";
+    },
+    async setWindowCloseBehavior(behavior) {
+      window.localStorage.setItem(BROWSER_CLOSE_BEHAVIOR_KEY, behavior);
+    },
+    async resolveWindowClose(resolution) {
+      if (resolution.remember) {
+        window.localStorage.setItem(
+          BROWSER_CLOSE_BEHAVIOR_KEY,
+          resolution.action === "minimize" ? "minimizeToTray" : "exit",
+        );
+      }
+      if (resolution.action === "minimize") {
+        window.localStorage.setItem(BROWSER_WINDOW_STATE_KEY, "hidden");
+        return;
+      }
+      const impact = browserExitImpact();
+      if (
+        impact.runningSessions.length > 0 ||
+        impact.activeInstallTasks > 0 ||
+        impact.activeContentTasks > 0
+      ) {
+        throw new Error("退出前需要确认运行中游戏与活动任务的影响");
+      }
+      window.localStorage.setItem(BROWSER_WINDOW_STATE_KEY, "exited");
+    },
+    async getExitImpact() {
+      return browserExitImpact();
+    },
+    async confirmExit() {
+      // 与桌面优雅退出对齐:运行中会话安全停止,执行中任务转为可恢复暂停。
+      const sessions = browserLaunchSessions();
+      for (const session of sessions) {
+        if (["starting", "running"].includes(session.state)) {
+          session.state = "stopped";
+          session.endedAtUnixSeconds = Math.floor(Date.now() / 1000);
+          const instance = browserInstances().find(
+            (candidate) => candidate.id === session.instanceId,
+          );
+          if (instance) {
+            session.postExitBackup = createBrowserWorldBackup(
+              instance,
+              session.id,
+              "postExit",
+            );
+          }
+        }
+      }
+      window.localStorage.setItem(
+        BROWSER_LAUNCH_SESSIONS_KEY,
+        JSON.stringify(sessions),
+      );
+      const runningInstallTasks = browserInstallTasks();
+      for (const task of runningInstallTasks) {
+        if (task.state === "running") task.state = "paused";
+      }
+      const runningContentTasks = browserContentTasks();
+      for (const task of runningContentTasks) {
+        if (task.state === "running") task.state = "paused";
+      }
+      window.localStorage.setItem(
+        BROWSER_TASKS_KEY,
+        JSON.stringify(runningInstallTasks),
+      );
+      window.localStorage.setItem(
+        BROWSER_CONTENT_TASKS_KEY,
+        JSON.stringify(runningContentTasks),
+      );
+      window.localStorage.setItem(BROWSER_WINDOW_STATE_KEY, "exited");
+    },
+    async forceExit() {
+      window.localStorage.setItem(BROWSER_WINDOW_STATE_KEY, "exited");
+    },
+    async getShellState() {
+      const serialized = window.localStorage.getItem(BROWSER_SHELL_STATE_KEY);
+      return serialized ? (JSON.parse(serialized) as ShellStateSnapshot) : null;
+    },
+    async persistShellState(state) {
+      window.localStorage.setItem(BROWSER_SHELL_STATE_KEY, JSON.stringify(state));
+    },
+    async getWindowStartupKind() {
+      const stored = window.localStorage.getItem(BROWSER_STARTUP_KIND_KEY);
+      return stored === "wake" ? "wake" : "cold";
+    },
+    async takePendingIntent() {
+      const serialized = window.localStorage.getItem(BROWSER_PENDING_INTENT_KEY);
+      window.localStorage.removeItem(BROWSER_PENDING_INTENT_KEY);
+      return serialized ? (JSON.parse(serialized) as PendingIntent) : null;
+    },
+    async getTasksPaused() {
+      return window.localStorage.getItem(BROWSER_TASKS_PAUSED_KEY) === "true";
+    },
+    async pauseAllTasks() {
+      window.localStorage.setItem(BROWSER_TASKS_PAUSED_KEY, "true");
+      const installTasks = browserInstallTasks();
+      for (const task of installTasks) {
+        if (task.state === "running") task.state = "paused";
+      }
+      window.localStorage.setItem(BROWSER_TASKS_KEY, JSON.stringify(installTasks));
+      const contentTasks = browserContentTasks();
+      for (const task of contentTasks) {
+        if (task.state === "running") task.state = "paused";
+      }
+      window.localStorage.setItem(
+        BROWSER_CONTENT_TASKS_KEY,
+        JSON.stringify(contentTasks),
+      );
+    },
+    async resumeAllTasks() {
+      window.localStorage.setItem(BROWSER_TASKS_PAUSED_KEY, "false");
+      const installTasks = browserInstallTasks();
+      for (const task of installTasks) {
+        if (task.state === "paused") task.state = "queued";
+      }
+      window.localStorage.setItem(BROWSER_TASKS_KEY, JSON.stringify(installTasks));
+      const contentTasks = browserContentTasks();
+      for (const task of contentTasks) {
+        if (task.state === "paused") task.state = "queued";
+      }
+      window.localStorage.setItem(
+        BROWSER_CONTENT_TASKS_KEY,
+        JSON.stringify(contentTasks),
+      );
+    },
+    onCloseRequested(handler) {
+      browserCloseHandlers.add(handler);
+      return () => browserCloseHandlers.delete(handler);
+    },
+    onPendingIntent(handler) {
+      browserPendingIntentHandlers.add(handler);
+      return () => browserPendingIntentHandlers.delete(handler);
+    },
+  };
+}
+
+function browserExitImpact(): ExitImpact {
+  const instances = browserInstances();
+  const runningSessions = browserLaunchSessions()
+    .filter((session) => ["starting", "running"].includes(session.state))
+    .map((session) => ({
+      sessionId: session.id,
+      instanceId: session.instanceId,
+      instanceName:
+        instances.find((instance) => instance.id === session.instanceId)?.name ??
+        session.instanceId,
+    }));
+  const installTasks = browserInstallTasks();
+  const contentTasks = browserContentTasks();
+  const activeStates = ["queued", "running", "committing", "awaitingRecovery"];
+  const executingStates = ["running", "committing"];
+  return {
+    runningSessions,
+    activeInstallTasks: installTasks.filter((task) => activeStates.includes(task.state))
+      .length,
+    activeContentTasks: contentTasks.filter((task) => activeStates.includes(task.state))
+      .length,
+    executingInstallTasks: installTasks.filter((task) =>
+      executingStates.includes(task.state),
+    ).length,
+    executingContentTasks: contentTasks.filter((task) =>
+      executingStates.includes(task.state),
+    ).length,
+    pausedTasks:
+      installTasks.filter((task) => task.state === "paused").length +
+      contentTasks.filter((task) => task.state === "paused").length,
   };
 }
 

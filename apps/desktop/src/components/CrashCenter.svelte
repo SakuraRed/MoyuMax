@@ -124,7 +124,7 @@
   {onClose}
 >
   <main class="content crash-content">
-    <div class="crash-scroll">
+    <div class="crash-scroll" data-scroll-region="main">
       <header class="crash-heading">
         <button class="back-link" onclick={onBack}>返回首页</button>
         <div>

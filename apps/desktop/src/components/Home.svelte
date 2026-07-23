@@ -255,7 +255,7 @@
     </main>
   {:else}
     <main class="content home-content" bind:this={homeRoot}>
-      <div class="home-scroll">
+      <div class="home-scroll" data-scroll-region="main">
         <header class="home-heading">
           <div>
             <h1>继续游戏</h1>

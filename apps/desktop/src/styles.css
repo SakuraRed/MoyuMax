@@ -2646,6 +2646,105 @@ summary:focus-visible {
   border-top: 1px solid var(--border);
 }
 
+.close-dialog {
+  width: min(420px, 100%);
+}
+
+.close-options {
+  display: grid;
+  gap: 8px;
+  margin-top: 16px;
+}
+
+.close-option {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  padding: var(--frame-row-inset-block) var(--frame-row-inset-inline);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface-2);
+  cursor: pointer;
+}
+
+.close-option.selected {
+  border-color: var(--accent, var(--info));
+  background: color-mix(in srgb, var(--info) 10%, var(--surface-2));
+}
+
+.close-option input {
+  margin-top: 3px;
+  flex: none;
+}
+
+.close-option-copy {
+  display: grid;
+  gap: 3px;
+  min-width: 0;
+}
+
+.close-option-copy strong {
+  color: var(--text);
+  font-size: 13px;
+}
+
+.close-option-copy small {
+  color: var(--text-2);
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.close-default-tag {
+  margin-left: 4px;
+  padding: 1px 6px;
+  border-radius: 999px;
+  background: var(--info);
+  color: var(--bg, #fff);
+  font-size: 10.5px;
+  font-style: normal;
+}
+
+.close-remember {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 12px;
+  padding: var(--frame-row-inset-block) var(--frame-row-inset-inline);
+  color: var(--text-2);
+  font-size: 12.5px;
+  cursor: pointer;
+}
+
+.close-busy {
+  margin: 14px 0 0;
+  color: var(--text-2);
+  font-size: 12.5px;
+}
+
+.task-global-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin: 0 0 12px;
+  padding: var(--frame-row-inset-block) var(--frame-row-inset-inline);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface-2);
+  color: var(--text-2);
+  font-size: 12.5px;
+}
+
+.task-global-bar.paused {
+  border-color: var(--warning, var(--info));
+  background: color-mix(in srgb, var(--info) 8%, var(--surface-2));
+}
+
+.task-global-bar span {
+  min-width: 0;
+  line-height: 1.5;
+}
+
 .data-content {
   padding: 0;
   overflow: hidden;

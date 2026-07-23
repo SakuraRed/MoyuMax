@@ -241,7 +241,7 @@
         <span>只在进入安装页面时联网，不影响 MoyuMax 首屏与本地实例。</span>
       </section>
     {:else if view === "configure"}
-      <div class="install-scroll">
+      <div class="install-scroll" data-scroll-region="main">
         <header class="install-heading">
           <button class="button ghost compact" aria-label="返回首页" onclick={onBack}>返回</button>
           <div>
@@ -366,7 +366,7 @@
         <span>正在解析官方游戏文件、兼容加载器与托管 Java 完整构建。</span>
       </section>
     {:else if (view === "confirm" || view === "queueing") && preview}
-      <div class="install-scroll confirm-layout">
+      <div class="install-scroll confirm-layout" data-scroll-region="main">
         <header class="install-heading">
           <button class="button ghost compact" disabled={view === "queueing"} onclick={returnToConfiguration}>返回修改</button>
           <div><h1>确认安装信息</h1><p>以下内容会作为版本化计划快照写入持久化任务队列。</p></div>

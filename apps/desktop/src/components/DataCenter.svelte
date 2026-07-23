@@ -204,7 +204,7 @@
   {onClose}
 >
   <main class="content data-content">
-    <div class="data-scroll">
+    <div class="data-scroll" data-scroll-region="main">
       <header class="data-heading">
         <div>
           <h1>数据与回收站</h1>

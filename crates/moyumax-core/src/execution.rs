@@ -6,7 +6,7 @@ use std::{
     path::{Component, Path, PathBuf},
     sync::{
         Arc,
-        atomic::{AtomicU64, Ordering},
+        atomic::{AtomicBool, AtomicU64, Ordering},
     },
     time::Duration,
 };
@@ -20,7 +20,7 @@ use sha2::{Digest as Sha2Digest, Sha256, Sha512};
 use tokio::{
     fs::{File, OpenOptions},
     io::{AsyncReadExt, AsyncWriteExt},
-    sync::Semaphore,
+    sync::{Notify, Semaphore},
 };
 use zip::ZipArchive;
 
@@ -30,6 +30,44 @@ use crate::{
     CoreError, InstallStage, InstallTask, InstalledContent, JavaEnvironmentStatus, JavaPlanAction,
     ManagedInstanceSummary, ResolvedArtifact, ResolvedLoader, Result, TaskState,
 };
+
+/// 全局暂停全部任务时的下载中断信号。
+///
+/// 中断只在文件分段边界生效：响应流停止写入，已写入的 `.partial`
+/// 保留，恢复后按既有续传逻辑先校验再继续。信号一次性生效，不可复位。
+#[derive(Debug, Clone, Default)]
+pub struct DownloadInterrupt {
+    interrupted: Arc<AtomicBool>,
+    notify: Arc<Notify>,
+}
+
+impl DownloadInterrupt {
+    #[must_use]
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    pub fn interrupt(&self) {
+        self.interrupted.store(true, Ordering::Release);
+        self.notify.notify_waiters();
+    }
+
+    #[must_use]
+    pub fn is_interrupted(&self) -> bool {
+        self.interrupted.load(Ordering::Acquire)
+    }
+
+    /// 等待中断信号。先注册等待再检查标志，避免错过已发出的中断。
+    async fn wait(&self) {
+        let notified = self.notify.notified();
+        tokio::pin!(notified);
+        notified.as_mut().enable();
+        if self.is_interrupted() {
+            return;
+        }
+        notified.await;
+    }
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -78,6 +116,20 @@ impl ArtifactDownloader {
         staging_root: &Path,
         shared_root: &Path,
     ) -> Result<DownloadResult> {
+        self.fetch_with_interrupt(artifact, staging_root, shared_root, None)
+            .await
+    }
+
+    pub async fn fetch_with_interrupt(
+        &self,
+        artifact: &ResolvedArtifact,
+        staging_root: &Path,
+        shared_root: &Path,
+        interrupt: Option<&DownloadInterrupt>,
+    ) -> Result<DownloadResult> {
+        if interrupt.is_some_and(DownloadInterrupt::is_interrupted) {
+            return Err(CoreError::TaskPaused);
+        }
         let _permit = self
             .permits
             .acquire()
@@ -149,7 +201,7 @@ impl ArtifactDownloader {
         } else if status == StatusCode::RANGE_NOT_SATISFIABLE && existing_length > 0 {
             truncate_file(&partial_file).await?;
             return self
-                .fetch_without_resume(artifact, &partial_file, &staged_file)
+                .fetch_without_resume(artifact, &partial_file, &staged_file, interrupt)
                 .await;
         } else {
             return Err(CoreError::Download(format!(
@@ -158,7 +210,7 @@ impl ArtifactDownloader {
             )));
         };
 
-        write_response(response, &partial_file, append).await?;
+        write_response(response, &partial_file, append, interrupt).await?;
         verify_file(&partial_file, artifact).await?;
         replace_file(&partial_file, &staged_file).await?;
         Ok(DownloadResult {
@@ -173,7 +225,11 @@ impl ArtifactDownloader {
         artifact: &ResolvedArtifact,
         partial_file: &Path,
         staged_file: &Path,
+        interrupt: Option<&DownloadInterrupt>,
     ) -> Result<DownloadResult> {
+        if interrupt.is_some_and(DownloadInterrupt::is_interrupted) {
+            return Err(CoreError::TaskPaused);
+        }
         let response = self.client.get(&artifact.url).send().await?;
         if response.status() != StatusCode::OK {
             return Err(CoreError::Download(format!(
@@ -182,7 +238,7 @@ impl ArtifactDownloader {
                 response.status()
             )));
         }
-        write_response(response, partial_file, false).await?;
+        write_response(response, partial_file, false, interrupt).await?;
         verify_file(partial_file, artifact).await?;
         replace_file(partial_file, staged_file).await?;
         Ok(DownloadResult {
@@ -212,6 +268,16 @@ impl ContentExecutor {
         service: &AppService,
         task_id: &str,
     ) -> Result<Vec<InstalledContent>> {
+        self.execute_task_with_interrupt(service, task_id, None)
+            .await
+    }
+
+    pub async fn execute_task_with_interrupt(
+        &self,
+        service: &AppService,
+        task_id: &str,
+        interrupt: Option<DownloadInterrupt>,
+    ) -> Result<Vec<InstalledContent>> {
         let task = service.content_install_task(task_id)?;
         if task.state != TaskState::Queued {
             return Err(CoreError::Content(format!(
@@ -225,9 +291,13 @@ impl ContentExecutor {
             ContentInstallStage::Prepare,
             "正在检查实例与文件冲突",
         )?;
-        let result = self.execute_task_inner(service, &task).await;
+        let result = self.execute_task_inner(service, &task, interrupt).await;
         if let Err(error) = &result {
-            let _ = service.mark_content_task_failed(task_id, &error.to_string());
+            if matches!(error, CoreError::TaskPaused) {
+                let _ = service.mark_content_task_paused(task_id);
+            } else {
+                let _ = service.mark_content_task_failed(task_id, &error.to_string());
+            }
         }
         result
     }
@@ -236,6 +306,7 @@ impl ContentExecutor {
         &self,
         service: &AppService,
         task: &ContentInstallTask,
+        interrupt: Option<DownloadInterrupt>,
     ) -> Result<Vec<InstalledContent>> {
         service.content_task_instance(task)?;
         let artifacts = task
@@ -261,12 +332,15 @@ impl ContentExecutor {
         let shared_directory = PathBuf::from(&task.shared_store_directory);
         let downloads = self
             .download_batch(
-                service,
-                &task.id,
                 artifacts.clone(),
-                &download_directory,
-                &shared_directory,
-                total,
+                ContentDownloadContext {
+                    service,
+                    task_id: &task.id,
+                    staging_directory: &download_directory,
+                    shared_directory: &shared_directory,
+                    total,
+                    interrupt: interrupt.as_ref(),
+                },
             )
             .await?;
         service.set_content_task_phase(
@@ -350,12 +424,8 @@ impl ContentExecutor {
 
     async fn download_batch(
         &self,
-        service: &AppService,
-        task_id: &str,
         artifacts: Vec<ResolvedArtifact>,
-        staging_directory: &Path,
-        shared_directory: &Path,
-        total: u64,
+        context: ContentDownloadContext<'_>,
     ) -> Result<Vec<(ResolvedArtifact, DownloadResult)>> {
         let completed = Arc::new(AtomicU64::new(0));
         let downloader = self.downloader.clone();
@@ -363,13 +433,19 @@ impl ContentExecutor {
             .map(|artifact| {
                 let downloader = downloader.clone();
                 let completed = Arc::clone(&completed);
-                let service = service.clone();
-                let task_id = task_id.to_owned();
-                let staging_directory = staging_directory.to_path_buf();
-                let shared_directory = shared_directory.to_path_buf();
+                let service = context.service.clone();
+                let task_id = context.task_id.to_owned();
+                let staging_directory = context.staging_directory.to_path_buf();
+                let shared_directory = context.shared_directory.to_path_buf();
+                let total = context.total;
                 async move {
                     let result = downloader
-                        .fetch(&artifact, &staging_directory, &shared_directory)
+                        .fetch_with_interrupt(
+                            &artifact,
+                            &staging_directory,
+                            &shared_directory,
+                            context.interrupt,
+                        )
                         .await?;
                     let finished = completed
                         .fetch_add(artifact.size, Ordering::AcqRel)
@@ -387,6 +463,15 @@ impl ContentExecutor {
             .try_collect()
             .await
     }
+}
+
+struct ContentDownloadContext<'a> {
+    service: &'a AppService,
+    task_id: &'a str,
+    staging_directory: &'a Path,
+    shared_directory: &'a Path,
+    total: u64,
+    interrupt: Option<&'a DownloadInterrupt>,
 }
 
 fn content_artifact(entry: &ContentPlanEntry) -> Result<ResolvedArtifact> {
@@ -496,6 +581,16 @@ impl InstallExecutor {
         service: &AppService,
         task_id: &str,
     ) -> Result<ManagedInstanceSummary> {
+        self.execute_task_with_interrupt(service, task_id, None)
+            .await
+    }
+
+    pub async fn execute_task_with_interrupt(
+        &self,
+        service: &AppService,
+        task_id: &str,
+        interrupt: Option<DownloadInterrupt>,
+    ) -> Result<ManagedInstanceSummary> {
         let task = service.install_task(task_id)?;
         if task.state != TaskState::Queued {
             return Err(CoreError::InvalidInstallRequest(format!(
@@ -509,26 +604,32 @@ impl InstallExecutor {
             InstallStage::Prepare,
             "正在准备安装清单",
         )?;
-        let result = self.execute_task_inner(service, &task).await;
+        let result = self.execute_task_inner(service, &task, interrupt).await;
         if let Err(error) = &result {
-            if let JavaPlanAction::Install { environment_id, .. } = &task.plan.java_action {
-                let is_ready = service
-                    .list_managed_java()
-                    .ok()
-                    .and_then(|environments| {
-                        environments
-                            .into_iter()
-                            .find(|environment| environment.id == *environment_id)
-                    })
-                    .is_some_and(|environment| environment.status == JavaEnvironmentStatus::Ready);
-                if !is_ready {
-                    let _ = service.mark_java_environment_status(
-                        environment_id,
-                        JavaEnvironmentStatus::Failed,
-                    );
+            if matches!(error, CoreError::TaskPaused) {
+                let _ = service.mark_install_task_paused(task_id);
+            } else {
+                if let JavaPlanAction::Install { environment_id, .. } = &task.plan.java_action {
+                    let is_ready = service
+                        .list_managed_java()
+                        .ok()
+                        .and_then(|environments| {
+                            environments
+                                .into_iter()
+                                .find(|environment| environment.id == *environment_id)
+                        })
+                        .is_some_and(|environment| {
+                            environment.status == JavaEnvironmentStatus::Ready
+                        });
+                    if !is_ready {
+                        let _ = service.mark_java_environment_status(
+                            environment_id,
+                            JavaEnvironmentStatus::Failed,
+                        );
+                    }
                 }
+                let _ = service.mark_task_failed(task_id, &error.to_string());
             }
-            let _ = service.mark_task_failed(task_id, &error.to_string());
         }
         result
     }
@@ -537,6 +638,7 @@ impl InstallExecutor {
         &self,
         service: &AppService,
         task: &InstallTask,
+        interrupt: Option<DownloadInterrupt>,
     ) -> Result<ManagedInstanceSummary> {
         let staging_directory = PathBuf::from(&task.staging_directory);
         let download_staging = staging_directory.join("downloads");
@@ -577,6 +679,7 @@ impl InstallExecutor {
                     completed_before: 0,
                     total: estimated_total,
                 },
+                interrupt.as_ref(),
             )
             .await?;
         let completed_base = downloads.iter().fold(0_u64, |total, (artifact, _)| {
@@ -610,6 +713,7 @@ impl InstallExecutor {
                     completed_before: completed_base,
                     total: actual_total,
                 },
+                interrupt.as_ref(),
             )
             .await?;
         downloads.extend(asset_downloads);
@@ -670,6 +774,7 @@ impl InstallExecutor {
         &self,
         artifacts: Vec<ResolvedArtifact>,
         context: DownloadBatchContext,
+        interrupt: Option<&DownloadInterrupt>,
     ) -> Result<Vec<(ResolvedArtifact, DownloadResult)>> {
         let completed = Arc::new(AtomicU64::new(context.completed_before));
         let downloader = self.downloader.clone();
@@ -684,7 +789,7 @@ impl InstallExecutor {
                 let total = context.total;
                 async move {
                     let result = downloader
-                        .fetch(&artifact, &staging_root, &shared_root)
+                        .fetch_with_interrupt(&artifact, &staging_root, &shared_root, interrupt)
                         .await?;
                     let finished = completed
                         .fetch_add(artifact.size, Ordering::AcqRel)
@@ -1488,6 +1593,7 @@ async fn write_response(
     response: reqwest::Response,
     partial_file: &Path,
     append: bool,
+    interrupt: Option<&DownloadInterrupt>,
 ) -> Result<()> {
     let mut output = OpenOptions::new()
         .create(true)
@@ -1497,7 +1603,22 @@ async fn write_response(
         .open(partial_file)
         .await?;
     let mut stream = response.bytes_stream();
-    while let Some(chunk) = stream.next().await {
+    loop {
+        let chunk = match interrupt {
+            Some(signal) => {
+                tokio::select! {
+                    chunk = stream.next() => chunk,
+                    () = signal.wait() => {
+                        // 暂停中断:停止写入,已写入的 .partial 保留供恢复校验。
+                        output.flush().await?;
+                        output.sync_data().await?;
+                        return Err(CoreError::TaskPaused);
+                    }
+                }
+            }
+            None => stream.next().await,
+        };
+        let Some(chunk) = chunk else { break };
         output.write_all(&chunk?).await?;
     }
     output.flush().await?;

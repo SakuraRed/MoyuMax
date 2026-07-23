@@ -16,6 +16,7 @@ mod execution;
 mod install;
 mod launch;
 mod recycle;
+mod shell;
 
 pub use backup::*;
 pub use catalog::*;
@@ -25,6 +26,7 @@ pub use execution::*;
 pub use install::*;
 pub use launch::*;
 pub use recycle::*;
+pub use shell::*;
 
 const SETTING_ONBOARDING_COMPLETE: &str = "onboarding_complete";
 const SETTING_ONBOARDING_SELECTION: &str = "onboarding_selection";
@@ -107,6 +109,8 @@ pub enum CoreError {
     Recycle(String),
     #[error("无法备份世界存档：{0}")]
     Backup(String),
+    #[error("任务已暂停，可在恢复全部任务后继续")]
+    TaskPaused,
 }
 
 pub type Result<T> = std::result::Result<T, CoreError>;
@@ -396,7 +400,7 @@ fn validate_data_directory(value: &str) -> Result<()> {
     Ok(())
 }
 
-fn read_setting(connection: &Connection, key: &str) -> Result<Option<String>> {
+pub(crate) fn read_setting(connection: &Connection, key: &str) -> Result<Option<String>> {
     connection
         .query_row(
             "SELECT value FROM app_settings WHERE key = ?1",
@@ -407,7 +411,7 @@ fn read_setting(connection: &Connection, key: &str) -> Result<Option<String>> {
         .map_err(CoreError::from)
 }
 
-fn write_setting(connection: &Connection, key: &str, value: &str) -> Result<()> {
+pub(crate) fn write_setting(connection: &Connection, key: &str, value: &str) -> Result<()> {
     connection.execute(
         "
         INSERT INTO app_settings (key, value) VALUES (?1, ?2)

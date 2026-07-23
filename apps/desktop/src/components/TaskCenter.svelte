@@ -17,9 +17,11 @@
     settings: OnboardingSelection;
     tasks: InstallTask[];
     contentTasks: ContentInstallTask[];
+    tasksPaused: boolean;
     onBack: () => void;
     onOpenResources: () => void;
     onTasksChanged: () => Promise<void>;
+    onToggleTasksPaused: () => Promise<void>;
     onMinimize: () => Promise<void>;
     onToggleMaximize: () => Promise<void>;
     onClose: () => Promise<void>;
@@ -30,15 +32,18 @@
     settings,
     tasks,
     contentTasks,
+    tasksPaused,
     onBack,
     onOpenResources,
     onTasksChanged,
+    onToggleTasksPaused,
     onMinimize,
     onToggleMaximize,
     onClose,
   }: Props = $props();
 
   let changingTask = $state("");
+  let pauseChanging = $state(false);
   let errorMessage = $state("");
   const contentStages: ContentInstallStage[] = [
     "prepare",
@@ -103,6 +108,16 @@
     }
   }
 
+  async function togglePaused(): Promise<void> {
+    pauseChanging = true;
+    errorMessage = "";
+    try {
+      await onToggleTasksPaused();
+    } finally {
+      pauseChanging = false;
+    }
+  }
+
   function stateLabel(state: TaskState): string {
     const labels: Record<TaskState, string> = {
       queued: "已排队",
@@ -156,6 +171,19 @@
     {#if errorMessage}
       <div class="error-block" role="alert"><strong>无法更新任务</strong><span>{errorMessage}</span></div>
     {/if}
+
+    <div class="task-global-bar" class:paused={tasksPaused}>
+      <span>
+        {#if tasksPaused}
+          全部任务已暂停，下载与安装已停止调度；恢复后从中断处继续。
+        {:else}
+          任务正在按统一队列调度；暂停全部会保留已下载内容。
+        {/if}
+      </span>
+      <button class="button ghost compact" disabled={pauseChanging} onclick={() => void togglePaused()}>
+        {tasksPaused ? "恢复全部任务" : "暂停全部任务"}
+      </button>
+    </div>
 
     {#if tasks.length === 0 && contentTasks.length === 0}
       <section class="task-empty"><Icon name="task" size={28} /><h2>没有任务</h2><p>安装、迁移、备份和修复会统一出现在这里。</p></section>
