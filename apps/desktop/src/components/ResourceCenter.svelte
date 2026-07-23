@@ -1,6 +1,7 @@
 <script lang="ts">
   import { onMount } from "svelte";
 
+  import { t } from "../i18n.svelte";
   import type {
     ContentInstallPreview,
     ContentUpdateInfo,
@@ -165,7 +166,7 @@
   }
 
   function kindLabel(kind: InstanceResourceKind): string {
-    return kind === "resourcepack" ? "资源包" : kind === "shader" ? "光影包" : "数据包";
+    return kind === "resourcepack" ? t("resources.kind.resourcepack") : kind === "shader" ? t("resources.kind.shader") : t("resources.kind.datapack");
   }
 
   async function importResource(kind: InstanceResourceKind, worldName?: string): Promise<void> {
@@ -187,7 +188,7 @@
 
   function openDatapackImport(): void {
     if (worlds.length === 0) {
-      resourceError = "这个实例还没有世界，数据包需要先进入一个世界存档";
+      resourceError = t("resources.files.noWorld");
       return;
     }
     resourceError = "";
@@ -317,12 +318,12 @@
 </script>
 
 <AppShell
-  pageTitle="资源"
+  pageTitle={t("nav.resources")}
   dataDirectory={settings.dataDirectory}
   activeNavigation="resources"
   navigationTargets={["home", "tasks"]}
   onNavigate={(target) => target === "home" ? onBack() : target === "tasks" ? onOpenTasks() : undefined}
-  connectionStatus={searchError ? "远程内容服务不可用 · 本地索引可用" : "Modrinth 按需联网 · 本地内容离线可用"}
+  connectionStatus={searchError ? t("resources.connection.offline") : t("resources.connection.online")}
   {onMinimize}
   {onToggleMaximize}
   {onClose}
@@ -330,48 +331,48 @@
   <main class="content resource-content">
     <header class="resource-heading">
       <div>
-        <h1>实例内容</h1>
-        <p>本地列表始终离线可用。只有主动搜索或解析安装计划时才访问 Modrinth。</p>
+        <h1>{t("resources.heading.title")}</h1>
+        <p>{t("resources.heading.description")}</p>
       </div>
-      <button class="button ghost compact" onclick={onBack}>返回首页</button>
+      <button class="button ghost compact" onclick={onBack}>{t("settings.back")}</button>
     </header>
 
     {#if eligibleInstances.length === 0}
       <section class="resource-empty">
         <Icon name="compass" size={28} />
-        <h2>还没有可管理内容的实例</h2>
-        <p>先安装一个 Fabric、Quilt、Forge 或 NeoForge 游戏实例，再从 Modrinth 添加兼容模组。</p>
+        <h2>{t("resources.empty.title")}</h2>
+        <p>{t("resources.empty.description")}</p>
       </section>
     {:else}
       <label class="resource-instance-field">
-        <span>目标实例</span>
+        <span>{t("resources.instanceLabel")}</span>
         <select value={selectedInstanceId} onchange={(event) => void selectInstance(event)}>
           {#each eligibleInstances as instance}
-            <option value={instance.id}>{instance.name} · Minecraft {instance.gameVersion} · {loaderName(instance.loaderKind)} {instance.loaderVersion ?? ""}</option>
+            <option value={instance.id}>{t("resources.instanceOption").replace("{name}", instance.name).replace("{version}", instance.gameVersion).replace("{loader}", loaderName(instance.loaderKind)).replace("{loaderVersion}", instance.loaderVersion ?? "")}</option>
           {/each}
         </select>
       </label>
 
       <section class="local-content-section" aria-labelledby="local-content-title">
         <header>
-          <div><h2 id="local-content-title">本地已安装内容</h2><p>自动更新默认关闭，不会在后台改动实例。</p></div>
+          <div><h2 id="local-content-title">{t("resources.local.title")}</h2><p>{t("resources.local.description")}</p></div>
           <div class="local-content-actions">
-            <button class="button ghost compact" disabled={localLoading || checkingUpdates} onclick={() => void checkUpdates()}>{checkingUpdates ? "正在检查" : "检查更新"}</button>
-            <button class="button ghost compact" disabled={localLoading} onclick={() => void loadInstalled()}>刷新本地列表</button>
+            <button class="button ghost compact" disabled={localLoading || checkingUpdates} onclick={() => void checkUpdates()}>{checkingUpdates ? t("resources.local.checking") : t("resources.local.checkUpdates")}</button>
+            <button class="button ghost compact" disabled={localLoading} onclick={() => void loadInstalled()}>{t("resources.local.refresh")}</button>
           </div>
         </header>
         {#if localError}
-          <div class="error-block" role="alert"><strong>无法读取本地内容索引</strong><span>{localError}</span></div>
+          <div class="error-block" role="alert"><strong>{t("resources.local.errorTitle")}</strong><span>{localError}</span></div>
         {:else if localLoading}
-          <div class="content-loading" aria-live="polite"><span>正在读取本地索引</span></div>
+          <div class="content-loading" aria-live="polite"><span>{t("resources.local.loading")}</span></div>
         {:else if installed.length === 0}
-          <div class="local-content-empty">这个实例还没有由 MoyuMax 索引的模组。</div>
+          <div class="local-content-empty">{t("resources.local.empty")}</div>
         {:else}
           <div class="installed-content-list">
             {#each installed as entry}
               <article class="installed-content-row">
                 <div><strong>{entry.projectTitle}</strong><small>{entry.versionNumber} · {entry.fileName}</small></div>
-                <span>{entry.autoUpdateEnabled ? "自动更新开启" : "自动更新关闭"}</span>
+                <span>{entry.autoUpdateEnabled ? t("resources.local.autoUpdateOn") : t("resources.local.autoUpdateOff")}</span>
               </article>
             {/each}
           </div>
@@ -380,30 +381,30 @@
           <input
             type="checkbox"
             checked={autoUpdate}
-            aria-label="按实例自动更新策略"
+            aria-label={t("resources.autoUpdate.title")}
             onchange={(event) => void toggleAutoUpdate((event.currentTarget as HTMLInputElement).checked)}
           />
-          <span><strong>按实例自动更新策略</strong><small>默认关闭。开启后提供“全部更新”入口；更新仍需你明确触发，不会在后台修改实例。</small></span>
+          <span><strong>{t("resources.autoUpdate.title")}</strong><small>{t("resources.autoUpdate.description")}</small></span>
         </label>
         {#if updateError}
-          <div class="error-block" role="alert"><strong>更新检查或提交失败</strong><span>{updateError}</span></div>
+          <div class="error-block" role="alert"><strong>{t("resources.updates.errorTitle")}</strong><span>{updateError}</span></div>
         {/if}
         {#if updates !== null}
-          <div class="content-update-panel" aria-label="可用更新清单">
+          <div class="content-update-panel" aria-label={t("resources.updates.panelAria")}>
             {#if updates.length === 0}
-              <div class="local-content-empty">已安装内容均为最新兼容版本。</div>
+              <div class="local-content-empty">{t("resources.updates.none")}</div>
             {:else}
               <div class="content-update-heading">
-                <span>{updates.length} 项可用更新，更新前会自动创建恢复点</span>
+                <span>{t("resources.updates.count").replace("{count}", String(updates.length))}</span>
                 {#if autoUpdate && updates.length > 1}
-                  <button class="button primary compact" disabled={updateSubmitting} onclick={() => void planUpdates((updates ?? []).map((update) => update.projectId))}>{updateSubmitting ? "正在提交" : "全部更新"}</button>
+                  <button class="button primary compact" disabled={updateSubmitting} onclick={() => void planUpdates((updates ?? []).map((update) => update.projectId))}>{updateSubmitting ? t("resources.submitting") : t("resources.updates.updateAll")}</button>
                 {/if}
               </div>
               <div class="installed-content-list">
                 {#each updates as update}
                   <article class="installed-content-row">
                     <div><strong>{update.projectTitle}</strong><small>{update.currentVersionNumber} → {update.latestVersionNumber}</small></div>
-                    <button class="button compact" disabled={updateSubmitting} onclick={() => void planUpdates([update.projectId])}>更新</button>
+                    <button class="button compact" disabled={updateSubmitting} onclick={() => void planUpdates([update.projectId])}>{t("resources.updates.updateOne")}</button>
                   </article>
                 {/each}
               </div>
@@ -412,28 +413,28 @@
         {/if}
         {#if updateQueued}
           <div class="content-queued" role="status">
-            <div><strong>内容更新任务已进入统一队列</strong><span>替换旧文件前会先创建恢复点，任何失败都会回滚到更新前状态。</span></div>
-            <button class="button primary" onclick={onOpenTasks}>查看任务中心</button>
+            <div><strong>{t("resources.updates.queuedTitle")}</strong><span>{t("resources.updates.queuedBody")}</span></div>
+            <button class="button primary" onclick={onOpenTasks}>{t("resources.viewTasks")}</button>
           </div>
         {/if}
       </section>
 
       <section class="local-content-section" aria-labelledby="instance-resource-title">
         <header>
-          <div><h2 id="instance-resource-title">资源内容</h2><p>资源包、光影与数据包和实例隔离存放；游戏内仍需在选项中确认选用。</p></div>
+          <div><h2 id="instance-resource-title">{t("resources.files.title")}</h2><p>{t("resources.files.description")}</p></div>
           <div class="local-content-actions">
-            <button class="button ghost compact" disabled={importing} onclick={() => void importResource("resourcepack")}>导入资源包</button>
-            <button class="button ghost compact" disabled={importing} onclick={() => void importResource("shader")}>导入光影</button>
-            <button class="button ghost compact" disabled={importing} onclick={openDatapackImport}>导入数据包</button>
+            <button class="button ghost compact" disabled={importing} onclick={() => void importResource("resourcepack")}>{t("resources.files.importResourcepack")}</button>
+            <button class="button ghost compact" disabled={importing} onclick={() => void importResource("shader")}>{t("resources.files.importShader")}</button>
+            <button class="button ghost compact" disabled={importing} onclick={openDatapackImport}>{t("resources.files.importDatapack")}</button>
           </div>
         </header>
         {#if resourceError}
-          <div class="error-block" role="alert"><strong>资源操作失败</strong><span>{resourceError}</span></div>
+          <div class="error-block" role="alert"><strong>{t("resources.files.errorTitle")}</strong><span>{resourceError}</span></div>
         {/if}
         {#if datapackImportOpen}
-          <div class="datapack-import-form" role="group" aria-label="选择数据包目标世界">
+          <div class="datapack-import-form" role="group" aria-label={t("resources.datapack.groupAria")}>
             <label>
-              <span>目标世界</span>
+              <span>{t("resources.datapack.worldLabel")}</span>
               <select value={selectedWorld} onchange={(event) => { selectedWorld = (event.currentTarget as HTMLSelectElement).value; }}>
                 {#each worlds as world}
                   <option value={world}>{world}</option>
@@ -441,36 +442,36 @@
               </select>
             </label>
             <div class="local-content-actions">
-              <button class="button primary compact" disabled={importing || !selectedWorld} onclick={() => void importResource("datapack", selectedWorld)}>{importing ? "正在导入" : "选择文件并导入"}</button>
-              <button class="button ghost compact" disabled={importing} onclick={() => { datapackImportOpen = false; }}>取消</button>
+              <button class="button primary compact" disabled={importing || !selectedWorld} onclick={() => void importResource("datapack", selectedWorld)}>{importing ? t("resources.datapack.importing") : t("resources.datapack.pickAndImport")}</button>
+              <button class="button ghost compact" disabled={importing} onclick={() => { datapackImportOpen = false; }}>{t("common.cancel")}</button>
             </div>
           </div>
         {/if}
         {#if resources.length === 0}
-          <div class="local-content-empty">还没有导入资源包、光影或数据包。删除与回收站能力随后续里程碑提供。</div>
+          <div class="local-content-empty">{t("resources.files.empty")}</div>
         {:else}
           <div class="installed-content-list">
             {#each resources as resource}
               <article class="installed-content-row">
                 <div>
                   <strong>{resource.displayName}</strong>
-                  <small>{kindLabel(resource.kind)}{resource.worldName ? ` · 世界 ${resource.worldName}` : ""} · {resource.fileName}</small>
+                  <small>{kindLabel(resource.kind)}{resource.worldName ? t("resources.files.worldSuffix").replace("{world}", resource.worldName) : ""} · {resource.fileName}</small>
                 </div>
                 <div class="resource-row-actions">
                   <label class="resource-enable-toggle">
                     <input
                       type="checkbox"
                       checked={resource.enabled}
-                      aria-label={`${resource.displayName} 启用开关`}
+                      aria-label={t("resources.files.toggleAria").replace("{name}", resource.displayName)}
                       onchange={(event) => void toggleResource(resource, (event.currentTarget as HTMLInputElement).checked)}
                     />
-                    <span>{resource.enabled ? "已启用" : "已停用"}</span>
+                    <span>{resource.enabled ? t("resources.files.enabled") : t("resources.files.disabled")}</span>
                   </label>
                   {#if pendingResourceDelete === resource.id}
-                    <button class="button danger-subtle compact" onclick={() => void deleteResource(resource)}>确认删除</button>
-                    <button class="button ghost compact" onclick={() => { pendingResourceDelete = null; }}>取消</button>
+                    <button class="button danger-subtle compact" onclick={() => void deleteResource(resource)}>{t("common.confirmDelete")}</button>
+                    <button class="button ghost compact" onclick={() => { pendingResourceDelete = null; }}>{t("common.cancel")}</button>
                   {:else}
-                    <button class="button danger-subtle compact" aria-label={`删除 ${resource.displayName}`} onclick={() => { pendingResourceDelete = resource.id; }}>删除</button>
+                    <button class="button danger-subtle compact" aria-label={t("resources.files.deleteAria").replace("{name}", resource.displayName)} onclick={() => { pendingResourceDelete = resource.id; }}>{t("common.delete")}</button>
                   {/if}
                 </div>
               </article>
@@ -480,36 +481,36 @@
       </section>
 
       <section class="remote-content-section" aria-labelledby="remote-content-title">
-        <header><h2 id="remote-content-title">从 Modrinth 添加</h2><p>结果已限定当前实例的 Minecraft 版本、加载器和客户端兼容性。</p></header>
+        <header><h2 id="remote-content-title">{t("resources.remote.title")}</h2><p>{t("resources.remote.description")}</p></header>
         <form class="content-search" onsubmit={(event) => void search(event)}>
           <label>
-            <span class="sr-live">搜索 Modrinth 模组</span>
+            <span class="sr-live">{t("resources.remote.searchLabel")}</span>
             <Icon name="search" size={15} />
-            <input bind:value={query} type="search" aria-label="搜索 Modrinth 模组" placeholder="输入模组名称" />
+            <input bind:value={query} type="search" aria-label={t("resources.remote.searchLabel")} placeholder={t("resources.remote.searchPlaceholder")} />
           </label>
-          <button class="button primary" disabled={searching || !query.trim()}>{searching ? "正在搜索" : "搜索兼容模组"}</button>
+          <button class="button primary" disabled={searching || !query.trim()}>{searching ? t("resources.remote.searching") : t("resources.remote.searchSubmit")}</button>
         </form>
 
         {#if searchError}
           <div class="error-block content-search-error" role="alert">
-            <strong>远程搜索不可用，本地内容不受影响</strong>
+            <strong>{t("resources.remote.errorTitle")}</strong>
             <span>{searchError}</span>
           </div>
         {/if}
 
         {#if searchPage && searchPage.hits.length === 0}
-          <div class="content-search-empty">没有找到与当前实例兼容的客户端模组。</div>
+          <div class="content-search-empty">{t("resources.remote.noResults")}</div>
         {:else if searchPage}
-          <div class="content-result-list" aria-label="Modrinth 搜索结果">
+          <div class="content-result-list" aria-label={t("resources.remote.resultAria")}>
             {#each searchPage.hits as project}
               <article class="content-result-card">
                 <div>
                   <strong>{project.title}</strong>
                   <p>{project.description}</p>
-                  <small>Modrinth 项目 {project.projectId} · {project.downloads.toLocaleString()} 次下载</small>
+                  <small>{t("resources.remote.projectLine").replace("{id}", project.projectId).replace("{downloads}", project.downloads.toLocaleString())}</small>
                 </div>
                 <button class="button" disabled={Boolean(previewingProject)} onclick={() => void createPreview(project)}>
-                  {previewingProject === project.projectId ? "正在解析依赖" : "查看安装计划"}
+                  {previewingProject === project.projectId ? t("resources.remote.parsing") : t("resources.remote.viewPlan")}
                 </button>
               </article>
             {/each}
@@ -519,18 +520,18 @@
 
       {#if preview}
         <section class="content-preview" aria-labelledby="content-preview-title">
-          <header><h2 id="content-preview-title">确认依赖与文件</h2><p>只有目标模组、必需依赖以及你明确选择的可选依赖会进入事务。</p></header>
+          <header><h2 id="content-preview-title">{t("resources.preview.title")}</h2><p>{t("resources.preview.description")}</p></header>
           <div class="content-plan-list">
             {#each preview.plan.entries as entry}
               <article class="content-plan-row">
                 <div><strong>{entry.projectTitle}</strong><small>{entry.versionNumber} · {entry.file.filename} · {bytes(entry.file.size)}</small></div>
-                <span>{entry.projectId === preview.plan.rootProjectId ? "目标模组" : selectedOptionalProjects.includes(entry.projectId) ? "已选可选依赖" : "必需依赖"}</span>
+                <span>{entry.projectId === preview.plan.rootProjectId ? t("resources.preview.role.target") : selectedOptionalProjects.includes(entry.projectId) ? t("resources.preview.role.optional") : t("resources.preview.role.required")}</span>
               </article>
             {/each}
           </div>
           {#if preview.plan.optionalDependencies.length > 0}
             <fieldset class="optional-content-list">
-              <legend>可选依赖，默认不安装</legend>
+              <legend>{t("resources.preview.optionalLegend")}</legend>
               {#each preview.plan.optionalDependencies as dependency}
                 {#if dependency.projectId}
                   <label>
@@ -539,28 +540,28 @@
                       checked={selectedOptionalProjects.includes(dependency.projectId)}
                       onchange={(event) => toggleOptional(dependency.projectId!, (event.currentTarget as HTMLInputElement).checked)}
                     />
-                    <span><strong>{dependency.title}</strong><small>由 {dependency.requiredByProjectId} 声明，可不安装</small></span>
+                    <span><strong>{dependency.title}</strong><small>{t("resources.preview.optionalDeclaredBy").replace("{id}", dependency.requiredByProjectId)}</small></span>
                   </label>
                 {/if}
               {/each}
             </fieldset>
           {/if}
           {#if preview.plan.incompatibleDependencies.length > 0}
-            <div class="warning-panel"><strong>发现不兼容声明</strong><span>提交时会与本地索引和本次计划再次核对；存在实际冲突时不会安装。</span></div>
+            <div class="warning-panel"><strong>{t("resources.preview.incompatibleTitle")}</strong><span>{t("resources.preview.incompatibleBody")}</span></div>
           {/if}
           <div class="content-preview-actions">
             {#if optionalSelectionDirty}
-              <button class="button" disabled={Boolean(previewingProject)} onclick={() => void applyOptionalSelection()}>应用可选依赖选择</button>
+              <button class="button" disabled={Boolean(previewingProject)} onclick={() => void applyOptionalSelection()}>{t("resources.preview.applyOptional")}</button>
             {/if}
-            <button class="button primary" disabled={submitting || optionalSelectionDirty} onclick={() => void confirm()}>{submitting ? "正在提交" : "确认并加入任务"}</button>
+            <button class="button primary" disabled={submitting || optionalSelectionDirty} onclick={() => void confirm()}>{submitting ? t("resources.submitting") : t("resources.preview.confirm")}</button>
           </div>
         </section>
       {/if}
 
       {#if queued}
         <div class="content-queued" role="status">
-          <div><strong>内容安装任务已进入统一队列</strong><span>下载、校验、文件发布和索引写入将在同一持久化任务中完成。</span></div>
-          <button class="button primary" onclick={onOpenTasks}>查看任务中心</button>
+          <div><strong>{t("resources.queuedTitle")}</strong><span>{t("resources.queuedBody")}</span></div>
+          <button class="button primary" onclick={onOpenTasks}>{t("resources.viewTasks")}</button>
         </div>
       {/if}
     {/if}

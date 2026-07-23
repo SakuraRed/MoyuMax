@@ -7,7 +7,9 @@
     installStageLabel,
     recommendedFabricLoader,
     recommendedVersion,
+    taskProgressAriaLabel,
   } from "../installation";
+  import { t, uiLanguage } from "../i18n.svelte";
   import type {
     FabricLoaderSummary,
     GameVersionSummary,
@@ -88,7 +90,7 @@
     try {
       catalog = await runtime.getGameVersionCatalog();
       const recommended = recommendedVersion(catalog.versions);
-      if (!recommended) throw new Error("官方版本目录没有可安装版本");
+      if (!recommended) throw new Error(t("install.error.noVersions"));
       selectedVersion = recommended;
       await loadLoaders(recommended, true);
       view = "configure";
@@ -120,7 +122,7 @@
 
   async function loadFabric(version: GameVersionSummary, selectRecommended: boolean): Promise<void> {
     const requestSequence = ++loaderRequestSequence;
-    loaderMessage = "正在查询兼容的 Fabric Loader…";
+    loaderMessage = t("install.loader.querying");
     try {
       const compatibleLoaders = await runtime.getFabricLoaders(version.id);
       if (requestSequence !== loaderRequestSequence || selectedVersion?.id !== version.id) return;
@@ -129,12 +131,12 @@
       if (recommended && selectRecommended) {
         loader = { kind: "fabric", version: recommended.version };
       }
-      loaderMessage = fabricLoaders.length === 0 ? "该版本没有可用的 Fabric Loader" : "";
+      loaderMessage = fabricLoaders.length === 0 ? t("install.loader.noneAvailable") : "";
       updateGeneratedName();
     } catch (error) {
       if (requestSequence !== loaderRequestSequence || selectedVersion?.id !== version.id) return;
       fabricLoaders = [];
-      loaderMessage = `Fabric 元数据暂不可用，仍可安装原版：${error instanceof Error ? error.message : String(error)}`;
+      loaderMessage = t("install.loader.metadataUnavailable").replace("{error}", error instanceof Error ? error.message : String(error));
       updateGeneratedName();
     }
   }
@@ -287,11 +289,11 @@
   }
 
   function taskStateLabel(current: InstallTask): string {
-    if (current.state === "completed") return "已完成";
-    if (current.state === "failed") return "需要处理";
-    if (current.state === "committing") return "正在提交";
-    if (current.state === "running") return "正在安装";
-    return "等待调度";
+    if (current.state === "completed") return t("install.taskState.completed");
+    if (current.state === "failed") return t("install.taskState.failed");
+    if (current.state === "committing") return t("install.taskState.committing");
+    if (current.state === "running") return t("install.taskState.running");
+    return t("install.taskState.waiting");
   }
 
   function returnToConfiguration(): void {
@@ -302,18 +304,18 @@
   function releaseDescription(version: GameVersionSummary): string {
     const date = new Date(version.releaseTime);
     const releaseDate = Number.isNaN(date.valueOf())
-      ? "发布日期未知"
-      : new Intl.DateTimeFormat("zh-CN", { dateStyle: "medium" }).format(date);
-    return `${releaseDate} 发布${version.recommended ? " · 当前官方稳定版" : ""}`;
+      ? t("install.version.unknownDate")
+      : new Intl.DateTimeFormat(uiLanguage(), { dateStyle: "medium" }).format(date);
+    return t("install.version.releaseLine").replace("{date}", releaseDate) + (version.recommended ? t("install.version.stableSuffix") : "");
   }
 </script>
 
 <AppShell
-  pageTitle={view === "confirm" || view === "queueing" ? "确认安装" : view === "queued" ? "安装任务" : "新建实例"}
+  pageTitle={view === "confirm" || view === "queueing" ? t("install.pageTitle.confirm") : view === "queued" ? t("install.pageTitle.queued") : t("install.pageTitle.configure")}
   dataDirectory={settings.dataDirectory}
   activeNavigation={view === "queued" ? "tasks" : "instances"}
-  connectionStatus={catalog?.source === "cache" ? "离线模式 · 使用版本目录缓存" : "官方元数据 · 按需连接"}
-  taskStatus={task ? `安装任务：${taskStateLabel(task)}` : "无活动任务"}
+  connectionStatus={catalog?.source === "cache" ? t("install.connection.cache") : t("install.connection.online")}
+  taskStatus={task ? t("install.taskStatus.active").replace("{state}", taskStateLabel(task)) : t("shell.status.noTasks")}
   {onMinimize}
   {onToggleMaximize}
   {onClose}
@@ -323,31 +325,31 @@
       <section class="install-loading" aria-live="polite">
         <div class="loading-line wide"></div>
         <div class="loading-line"></div>
-        <strong>正在读取官方版本目录…</strong>
-        <span>只在进入安装页面时联网，不影响 MoyuMax 首屏与本地实例。</span>
+        <strong>{t("install.loading.title")}</strong>
+        <span>{t("install.loading.description")}</span>
       </section>
     {:else if view === "configure"}
       <div class="install-scroll" data-scroll-region="main">
         <header class="install-heading">
-          <button class="button ghost compact" aria-label="返回首页" onclick={onBack}>返回</button>
+          <button class="button ghost compact" aria-label={t("settings.back")} onclick={onBack}>{t("install.back")}</button>
           <div>
-            <h1>安装第一个游戏</h1>
-            <p>推荐项已经自动选择；不需要自行安装 Java 或修改环境变量。</p>
+            <h1>{t("home.empty.installFirst")}</h1>
+            <p>{t("install.heading.description")}</p>
           </div>
         </header>
 
         {#if catalog?.source === "cache"}
           <div class="info-banner" role="status">
             <Icon name="info" size={16} />
-            <span>官方版本服务当前不可用，正在使用最近一次成功缓存。创建任务前仍会验证所选版本详情。</span>
+            <span>{t("install.cacheBanner")}</span>
           </div>
         {/if}
         {#if errorMessage}
           <div class="error-block" role="alert">
-            <strong>无法准备安装信息</strong>
-            <span>尚未创建任务，也没有修改实例或共享文件。</span>
+            <strong>{t("install.error.title")}</strong>
+            <span>{t("install.error.body")}</span>
             <span>{errorMessage}</span>
-            <button class="button ghost compact" onclick={() => void loadCatalog()}>重新加载</button>
+            <button class="button ghost compact" onclick={() => void loadCatalog()}>{t("install.error.retry")}</button>
           </div>
         {/if}
 
@@ -355,8 +357,8 @@
           <section class="install-section" aria-labelledby="game-version-heading">
             <div class="section-number">1</div>
             <div class="section-content">
-              <h2 id="game-version-heading">Minecraft 版本</h2>
-              <div class="install-choice-list" role="radiogroup" aria-label="Minecraft 版本">
+              <h2 id="game-version-heading">{t("install.version.heading")}</h2>
+              <div class="install-choice-list" role="radiogroup" aria-label={t("install.version.heading")}>
                 {#each visibleVersions as version, index}
                   <button
                     class:selected={selectedVersion.id === version.id}
@@ -368,14 +370,14 @@
                   >
                     <span class="radio-mark"></span>
                     <span class="choice-copy">
-                      <strong>{version.id}{#if version.recommended}<em>推荐稳定版</em>{/if}</strong>
+                      <strong>{version.id}{#if version.recommended}<em>{t("install.version.recommended")}</em>{/if}</strong>
                       <small>{releaseDescription(version)}</small>
                     </span>
                   </button>
                 {/each}
               </div>
               <button class="inline-link version-toggle" onclick={() => showOlderVersions = !showOlderVersions}>
-                {showOlderVersions ? "收起旧版本" : "展开更多稳定版"}
+                {showOlderVersions ? t("install.version.showLess") : t("install.version.showMore")}
               </button>
             </div>
           </section>
@@ -383,66 +385,66 @@
           <section class="install-section" aria-labelledby="loader-heading">
             <div class="section-number">2</div>
             <div class="section-content">
-              <h2 id="loader-heading">加载器（可选）</h2>
-              <div class="loader-grid" role="radiogroup" aria-label="加载器">
+              <h2 id="loader-heading">{t("install.loader.heading")}</h2>
+              <div class="loader-grid" role="radiogroup" aria-label={t("install.loader.groupAria")}>
                 <button class:selected={loader.kind === "vanilla"} class="loader-card" role="radio" aria-checked={loader.kind === "vanilla"} onclick={selectVanilla}>
-                  <span class="radio-mark"></span><strong>不安装</strong><small>原版</small>
+                  <span class="radio-mark"></span><strong>{t("install.loader.none")}</strong><small>{t("home.loader.vanilla")}</small>
                 </button>
                 <button class:selected={loader.kind === "forge"} class="loader-card" role="radio" aria-checked={loader.kind === "forge"} disabled={forgeVersions.length === 0} onclick={selectForge}>
-                  <span class="radio-mark"></span><strong>Forge</strong><small>{recommendedFabricLoader(forgeVersions)?.version ?? "不可用"} · 推荐</small>
+                  <span class="radio-mark"></span><strong>Forge</strong><small>{recommendedFabricLoader(forgeVersions)?.version ?? t("install.loader.unavailable")}{t("install.loader.recommendedSuffix")}</small>
                 </button>
                 <button class:selected={loader.kind === "neoforge"} class="loader-card" role="radio" aria-checked={loader.kind === "neoforge"} disabled={neoforgeVersions.length === 0} onclick={selectNeoForge}>
-                  <span class="radio-mark"></span><strong>NeoForge</strong><small>{recommendedFabricLoader(neoforgeVersions)?.version ?? "不可用"} · 推荐</small>
+                  <span class="radio-mark"></span><strong>NeoForge</strong><small>{recommendedFabricLoader(neoforgeVersions)?.version ?? t("install.loader.unavailable")}{t("install.loader.recommendedSuffix")}</small>
                 </button>
                 <button class:selected={loader.kind === "fabric"} class="loader-card" role="radio" aria-checked={loader.kind === "fabric"} disabled={fabricLoaders.length === 0} onclick={selectFabric}>
-                  <span class="radio-mark"></span><strong>Fabric</strong><small>{recommendedFabricLoader(fabricLoaders)?.version ?? "不可用"} · 推荐</small>
+                  <span class="radio-mark"></span><strong>Fabric</strong><small>{recommendedFabricLoader(fabricLoaders)?.version ?? t("install.loader.unavailable")}{t("install.loader.recommendedSuffix")}</small>
                 </button>
                 <button class:selected={loader.kind === "quilt"} class="loader-card" role="radio" aria-checked={loader.kind === "quilt"} disabled={quiltLoaders.length === 0} onclick={selectQuilt}>
-                  <span class="radio-mark"></span><strong>Quilt</strong><small>{recommendedFabricLoader(quiltLoaders)?.version ?? "不可用"} · 推荐</small>
+                  <span class="radio-mark"></span><strong>Quilt</strong><small>{recommendedFabricLoader(quiltLoaders)?.version ?? t("install.loader.unavailable")}{t("install.loader.recommendedSuffix")}</small>
                 </button>
               </div>
               {#if loader.kind === "fabric"}
                 <label class="loader-version-field">
-                  Fabric Loader 版本
+                  {t("install.loader.fabricField")}
                   <select value={loader.version} onchange={(event) => selectFabricVersion(event.currentTarget.value)}>
                     {#each fabricLoaders as candidate}
-                      <option value={candidate.version}>{candidate.version}{candidate.recommended ? "（推荐）" : ""}</option>
+                      <option value={candidate.version}>{candidate.version}{candidate.recommended ? t("install.loader.recommendedTag") : ""}</option>
                     {/each}
                   </select>
-                  <small>列表仅包含 Fabric 元数据服务为 Minecraft {selectedVersion.id} 返回的兼容版本。</small>
+                  <small>{t("install.loader.fabricHint").replace("{version}", selectedVersion.id)}</small>
                 </label>
               {/if}
               {#if loader.kind === "quilt"}
                 <label class="loader-version-field">
-                  Quilt Loader 版本
+                  {t("install.loader.quiltField")}
                   <select value={loader.version} onchange={(event) => selectQuiltVersion(event.currentTarget.value)}>
                     {#each quiltLoaders as candidate}
-                      <option value={candidate.version}>{candidate.version}{candidate.recommended ? "（推荐）" : ""}</option>
+                      <option value={candidate.version}>{candidate.version}{candidate.recommended ? t("install.loader.recommendedTag") : ""}</option>
                     {/each}
                   </select>
-                  <small>列表仅包含 Quilt 元数据服务为 Minecraft {selectedVersion.id} 返回的兼容版本。</small>
+                  <small>{t("install.loader.quiltHint").replace("{version}", selectedVersion.id)}</small>
                 </label>
               {/if}
               {#if loader.kind === "forge"}
                 <label class="loader-version-field">
-                  Forge 版本
+                  {t("install.loader.forgeField")}
                   <select value={loader.version} onchange={(event) => selectForgeVersion(event.currentTarget.value)}>
                     {#each forgeVersions as candidate}
-                      <option value={candidate.version}>{candidate.version}{candidate.recommended ? "（推荐）" : ""}</option>
+                      <option value={candidate.version}>{candidate.version}{candidate.recommended ? t("install.loader.recommendedTag") : ""}</option>
                     {/each}
                   </select>
-                  <small>列表仅包含与 Minecraft {selectedVersion.id} 兼容的 Forge 构建。</small>
+                  <small>{t("install.loader.forgeHint").replace("{version}", selectedVersion.id)}</small>
                 </label>
               {/if}
               {#if loader.kind === "neoforge"}
                 <label class="loader-version-field">
-                  NeoForge 版本
+                  {t("install.loader.neoforgeField")}
                   <select value={loader.version} onchange={(event) => selectNeoForgeVersion(event.currentTarget.value)}>
                     {#each neoforgeVersions as candidate}
-                      <option value={candidate.version}>{candidate.version}{candidate.recommended ? "（推荐）" : ""}</option>
+                      <option value={candidate.version}>{candidate.version}{candidate.recommended ? t("install.loader.recommendedTag") : ""}</option>
                     {/each}
                   </select>
-                  <small>列表仅包含与 Minecraft {selectedVersion.id} 兼容的 NeoForge 构建。</small>
+                  <small>{t("install.loader.neoforgeHint").replace("{version}", selectedVersion.id)}</small>
                 </label>
               {/if}
               {#if loaderMessage}<p class="hint">{loaderMessage}</p>{/if}
@@ -452,10 +454,10 @@
           <section class="install-section" aria-labelledby="instance-name-heading">
             <div class="section-number">3</div>
             <div class="section-content">
-              <h2 id="instance-name-heading">名称与位置</h2>
+              <h2 id="instance-name-heading">{t("install.name.heading")}</h2>
               <div class="install-form-card">
                 <label>
-                  实例名称
+                  {t("install.name.label")}
                   <input
                     value={instanceName}
                     maxlength="120"
@@ -464,12 +466,12 @@
                       instanceName = event.currentTarget.value;
                     }}
                   />
-                  <small>已根据版本与加载器自动填写，可以修改。</small>
+                  <small>{t("install.name.hint")}</small>
                 </label>
                 <div class="managed-location">
-                  <span>托管位置</span>
-                  <code>{settings.dataDirectory}\instances\&lt;实例 ID&gt;</code>
-                  <small>实例可变内容完全隔离；可校验重建的基础文件由全局存储共享。</small>
+                  <span>{t("install.name.locationLabel")}</span>
+                  <code>{settings.dataDirectory}\instances\&lt;{t("install.name.instanceId")}&gt;</code>
+                  <small>{t("install.name.locationHint")}</small>
                 </div>
               </div>
             </div>
@@ -477,9 +479,9 @@
 
           <footer class="install-actions">
             <button class="button primary large" disabled={instanceName.trim() === ""} onclick={() => void createPreview()}>
-              查看安装信息 <Icon name="arrow-right" size={14} />
+              {t("install.action.preview")} <Icon name="arrow-right" size={14} />
             </button>
-            <p>将解析准确空间和 Azul Zulu 完整构建；确认前不会创建任务或写入实例。</p>
+            <p>{t("install.action.previewHint")}</p>
           </footer>
         {/if}
       </div>
@@ -487,27 +489,27 @@
       <section class="install-loading" aria-live="polite">
         <div class="loading-line wide"></div>
         <div class="loading-line"></div>
-        <strong>正在生成可校验安装计划…</strong>
-        <span>正在解析官方游戏文件、兼容加载器与托管 Java 完整构建。</span>
+        <strong>{t("install.previewing.title")}</strong>
+        <span>{t("install.previewing.description")}</span>
       </section>
     {:else if (view === "confirm" || view === "queueing") && preview}
       <div class="install-scroll confirm-layout" data-scroll-region="main">
         <header class="install-heading">
-          <button class="button ghost compact" disabled={view === "queueing"} onclick={returnToConfiguration}>返回修改</button>
-          <div><h1>确认安装信息</h1><p>以下内容会作为版本化计划快照写入持久化任务队列。</p></div>
+          <button class="button ghost compact" disabled={view === "queueing"} onclick={returnToConfiguration}>{t("install.confirm.backEdit")}</button>
+          <div><h1>{t("install.confirm.heading")}</h1><p>{t("install.confirm.description")}</p></div>
         </header>
         {#if errorMessage}
-          <div class="error-block" role="alert"><strong>任务尚未创建</strong><span>{errorMessage}</span></div>
+          <div class="error-block" role="alert"><strong>{t("install.confirm.errorTitle")}</strong><span>{errorMessage}</span></div>
         {/if}
         <dl class="install-summary">
-          <div><dt>Minecraft 版本</dt><dd>{preview.gameVersion}</dd><span>官方元数据</span></div>
-          <div><dt>加载器</dt><dd>{preview.loaderName}{preview.loaderVersion ? ` ${preview.loaderVersion}` : ""}</dd><span>兼容项</span></div>
-          <div><dt>Java</dt><dd>Azul Zulu {preview.javaVersion} · {preview.javaArchitecture}</dd><span>托管，不影响系统 Java</span></div>
-          <div><dt>实例隔离</dt><dd>完全隔离（推荐）</dd><span>共享可重建基础文件</span></div>
-          <div><dt>预计下载</dt><dd>{formatBytes(preview.estimatedDownloadBytes)}</dd><span>以解析清单为准</span></div>
+          <div><dt>{t("install.confirm.versionLabel")}</dt><dd>{preview.gameVersion}</dd><span>{t("install.confirm.versionNote")}</span></div>
+          <div><dt>{t("install.confirm.loaderLabel")}</dt><dd>{preview.loaderName}{preview.loaderVersion ? ` ${preview.loaderVersion}` : ""}</dd><span>{t("install.confirm.loaderNote")}</span></div>
+          <div><dt>Java</dt><dd>Azul Zulu {preview.javaVersion} · {preview.javaArchitecture}</dd><span>{t("install.confirm.javaNote")}</span></div>
+          <div><dt>{t("install.confirm.isolationLabel")}</dt><dd>{t("install.confirm.isolationValue")}</dd><span>{t("install.confirm.isolationNote")}</span></div>
+          <div><dt>{t("install.confirm.downloadLabel")}</dt><dd>{formatBytes(preview.estimatedDownloadBytes)}</dd><span>{t("install.confirm.downloadNote")}</span></div>
         </dl>
         <div class="stage-preview">
-          <h2>任务阶段</h2>
+          <h2>{t("install.confirm.stagesTitle")}</h2>
           <ol>
             {#each ["prepare", "downloadGameFiles", "verifyFiles", "installGameEnvironment", "applyLoader", "commitChanges", "createRollbackPoint"] as stage}
               <li>{installStageLabel(stage as import("../runtime").InstallStage)}</li>
@@ -516,16 +518,16 @@
         </div>
         <footer class="install-actions confirm-actions">
           <button class="button primary large" data-autofocus="true" disabled={view === "queueing"} onclick={() => void confirmInstall()}>
-            {view === "queueing" ? "正在创建任务…" : "开始安装"}
+            {view === "queueing" ? t("install.confirm.creating") : t("install.confirm.start")}
           </button>
-          <p>任务会先写入独立暂存区；校验与提交完成前不会出现可启动实例。</p>
+          <p>{t("install.confirm.stagingHint")}</p>
         </footer>
       </div>
     {:else if view === "queued" && task}
       <section class="queued-result" aria-live="polite">
         <span class="done-mark"><Icon name={task.state === "completed" ? "check" : "task"} size={18} /></span>
-        <h1>{task.state === "completed" ? "游戏安装完成" : task.state === "failed" ? "安装任务未完成" : task.state === "queued" ? "安装任务已进入队列" : "正在安装游戏"}</h1>
-        <p>{task.state === "completed" ? "实例已经通过校验并原子提交，现在可以从首页进入实例。" : task.state === "failed" ? "没有发布半完成实例；可在任务中心查看原因并重试。" : "计划已持久化，以下进度来自真实下载与校验状态。"}</p>
+        <h1>{task.state === "completed" ? t("install.queued.titleCompleted") : task.state === "failed" ? t("install.queued.titleFailed") : task.state === "queued" ? t("install.queued.titleQueued") : t("install.queued.titleRunning")}</h1>
+        <p>{task.state === "completed" ? t("install.queued.bodyCompleted") : task.state === "failed" ? t("install.queued.bodyFailed") : t("install.queued.bodyDefault")}</p>
         <div class="queued-task-card">
           <div><strong>{task.plan.instanceName}</strong><span>{taskStateLabel(task)}</span></div>
           <ol>
@@ -534,16 +536,16 @@
             {/each}
           </ol>
           {#if task.state === "running" || task.state === "committing"}
-            <div class="queued-progress" aria-label={`已完成 ${task.progress.completedBytes} 字节${task.progress.totalBytes === null ? "，总量未知" : `，共 ${task.progress.totalBytes} 字节`}`}>
+            <div class="queued-progress" aria-label={taskProgressAriaLabel(task.progress)}>
               <div class="progress-track"><span style:width={task.progress.totalBytes && task.progress.totalBytes > 0 ? `${Math.min(100, task.progress.completedBytes / task.progress.totalBytes * 100)}%` : "24%"}></span></div>
-              <small>{task.progress.currentItem ?? "正在处理"}</small>
+              <small>{task.progress.currentItem ?? t("tasks.progress.processing")}</small>
             </div>
           {:else if task.state === "failed"}
-            <div class="error-block task-error" role="alert"><strong>可恢复失败</strong><span>{task.progress.errorSummary ?? "请从任务中心重试。"}</span></div>
+            <div class="error-block task-error" role="alert"><strong>{t("install.queued.failedTitle")}</strong><span>{task.progress.errorSummary ?? t("install.queued.failedHint")}</span></div>
           {/if}
-          <small>暂存区：<code>{task.stagingDirectory}</code></small>
+          <small>{t("install.queued.staging")}<code>{task.stagingDirectory}</code></small>
         </div>
-        <button class="button primary" data-autofocus="true" onclick={onBack}>返回首页</button>
+        <button class="button primary" data-autofocus="true" onclick={onBack}>{t("settings.back")}</button>
       </section>
     {/if}
   </main>

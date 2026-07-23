@@ -1,3 +1,4 @@
+import { t } from "./i18n.svelte";
 import type {
   FabricLoaderSummary,
   GameVersionSummary,
@@ -29,7 +30,7 @@ export function defaultInstanceName(
 }
 
 export function formatBytes(bytes: number): string {
-  if (!Number.isFinite(bytes) || bytes < 0) return "未知";
+  if (!Number.isFinite(bytes) || bytes < 0) return t("common.unknown");
   const units = ["B", "KiB", "MiB", "GiB", "TiB"];
   let value = bytes;
   let unit = 0;
@@ -42,14 +43,31 @@ export function formatBytes(bytes: number): string {
 }
 
 export function installStageLabel(stage: InstallStage): string {
-  const labels: Record<InstallStage, string> = {
-    prepare: "准备安装",
-    downloadGameFiles: "下载游戏文件",
-    verifyFiles: "验证文件",
-    installGameEnvironment: "安装游戏环境",
-    applyLoader: "应用加载器",
-    commitChanges: "提交更改",
-    createRollbackPoint: "创建回滚点",
+  const keys: Record<InstallStage, string> = {
+    prepare: "install.stage.prepare",
+    downloadGameFiles: "install.stage.downloadGameFiles",
+    verifyFiles: "install.stage.verifyFiles",
+    installGameEnvironment: "install.stage.installGameEnvironment",
+    applyLoader: "install.stage.applyLoader",
+    commitChanges: "install.stage.commitChanges",
+    createRollbackPoint: "install.stage.createRollbackPoint",
   };
-  return labels[stage];
+  return t(keys[stage]);
+}
+
+/** 任务进度的无障碍摘要:已完成字节数加总量(未知时不伪造)。 */
+export function taskProgressAriaLabel(progress: {
+  completedBytes: number;
+  totalBytes: number | null;
+}): string {
+  const completed = t("tasks.progress.completed").replace(
+    "{completed}",
+    String(progress.completedBytes),
+  );
+  return (
+    completed +
+    (progress.totalBytes === null
+      ? t("tasks.progress.totalUnknown")
+      : t("tasks.progress.totalKnown").replace("{total}", String(progress.totalBytes)))
+  );
 }

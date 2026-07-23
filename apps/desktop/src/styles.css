@@ -2065,7 +2065,12 @@ summary:focus-visible {
 .local-content-actions {
   display: flex;
   flex: none;
+  flex-wrap: wrap;
   gap: 8px;
+}
+
+.local-content-section > header {
+  flex-wrap: wrap;
 }
 
 .auto-update-toggle {

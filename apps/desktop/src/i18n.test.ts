@@ -12,8 +12,19 @@ describe("i18n 字典", () => {
   });
 
   it("所有语言的值都非空；仅登记的分隔键允许边界空白", () => {
-    // 这些键的值刻意携带前导/尾随空格作为行内分隔符，组件模板不再另加空格。
-    const separatorKeys = new Set(["home.instance.latestSession", "home.instance.exitCode"]);
+    // 这些键的值刻意携带前导/尾随空白作为行内分隔符，组件模板不再另加空格。
+    const separatorKeys = new Set([
+      "home.instance.latestSession",
+      "home.instance.exitCode",
+      "resources.files.worldSuffix",
+      "data.worlds.lastPlayed",
+      "crash.evidence.truncatedSuffix",
+      "install.version.stableSuffix",
+      "install.loader.recommendedSuffix",
+      "install.queued.staging",
+      "tasks.progress.totalKnown",
+      "tasks.progress.totalUnknown",
+    ]);
     for (const [key, value] of Object.entries(zhCN)) {
       expect(value.length, `zh-CN ${key} 为空`).toBeGreaterThan(0);
       if (!separatorKeys.has(key)) {

@@ -2,6 +2,7 @@
  * 关闭窗口决策:首次询问、记住行为与退出影响检查的纯逻辑。
  */
 
+import { t } from "./i18n.svelte";
 import type { ExitImpact, WindowCloseBehavior } from "./runtime";
 
 export type { WindowCloseBehavior };
@@ -42,20 +43,20 @@ export function describeExitImpact(impact: ExitImpact): CloseDialogImpactLine[] 
   const lines: CloseDialogImpactLine[] = [];
   for (const session of impact.runningSessions) {
     lines.push({
-      text: `「${session.instanceName}」正在运行，退出将安全终止游戏；存档会在终止前自动完成一次退出备份。`,
+      text: t("close.impact.line.running").replace("{name}", session.instanceName),
       danger: true,
     });
   }
   const activeTasks = impact.activeInstallTasks + impact.activeContentTasks;
   if (activeTasks > 0) {
     lines.push({
-      text: `${activeTasks} 个任务正在进行或排队，退出后可在下次启动时继续或恢复。`,
+      text: t("close.impact.line.active").replace("{count}", String(activeTasks)),
       danger: false,
     });
   }
   if (impact.pausedTasks > 0) {
     lines.push({
-      text: `${impact.pausedTasks} 个任务已暂停，下次启动后可从任务中心恢复。`,
+      text: t("close.impact.line.paused").replace("{count}", String(impact.pausedTasks)),
       danger: false,
     });
   }

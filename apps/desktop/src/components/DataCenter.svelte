@@ -1,6 +1,7 @@
 <script lang="ts">
   import { onMount, tick } from "svelte";
 
+  import { t, uiLanguage } from "../i18n.svelte";
   import type {
     BackupState,
     BackupTrigger,
@@ -122,7 +123,7 @@
     errorMessage = "";
     try {
       await runtime.copyScreenshotToClipboard(worldInstanceId, fileName);
-      message = `已把「${fileName}」复制到剪贴板`;
+      message = t("data.msg.copied").replace("{name}", fileName);
     } catch (error) {
       errorMessage = error instanceof Error ? error.message : String(error);
     }
@@ -146,7 +147,7 @@
       await runtime.deleteInstanceScreenshot(worldInstanceId, fileName);
       selectedScreenshot = null;
       pendingDelete = null;
-      message = `已把「${fileName}」移入回收站，30 天内可恢复`;
+      message = t("data.msg.screenshotDeleted").replace("{name}", fileName);
       screenshots = await runtime.listInstanceScreenshots(worldInstanceId);
       items = await runtime.listRecycleBinItems();
     } catch (error) {
@@ -163,7 +164,7 @@
     try {
       await runtime.deleteInstanceWorld(worldInstanceId, world.name);
       pendingDelete = null;
-      message = `已把世界「${world.name}」移入回收站，30 天内可恢复`;
+      message = t("data.msg.worldDeleted").replace("{name}", world.name);
       worlds = await runtime.listInstanceWorldDetails(worldInstanceId);
       items = await runtime.listRecycleBinItems();
     } catch (error) {
@@ -181,7 +182,7 @@
       const source = await runtime.pickWorldZip();
       if (!source) return;
       const imported = await runtime.importInstanceWorld(worldInstanceId, source);
-      message = `已导入世界「${imported.name}」`;
+      message = t("data.msg.worldImported").replace("{name}", imported.name);
       worlds = await runtime.listInstanceWorldDetails(worldInstanceId);
     } catch (error) {
       errorMessage = error instanceof Error ? error.message : String(error);
@@ -198,7 +199,7 @@
       const destination = await runtime.pickWorldExportPath(world.name);
       if (!destination) return;
       const bytes = await runtime.exportInstanceWorld(worldInstanceId, world.name, destination);
-      message = `已导出世界「${world.name}」（${formatBytes(bytes)}）`;
+      message = t("data.msg.worldExported").replace("{name}", world.name).replace("{size}", formatBytes(bytes));
     } catch (error) {
       errorMessage = error instanceof Error ? error.message : String(error);
     } finally {
@@ -229,7 +230,7 @@
       await runtime.rollbackWorldBackup(backup.id);
       rollbackCandidate = null;
       backups = await runtime.listWorldBackups();
-      message = "已回滚到所选备份，回滚前的进度保存在恢复点备份中";
+      message = t("data.msg.rollbackDone");
     } catch (error) {
       errorMessage = error instanceof Error ? error.message : String(error);
     } finally {
@@ -252,7 +253,7 @@
         await runtime.restoreRecycledEntry(item.id);
       }
       items = items.filter((candidate) => candidate.id !== item.id);
-      message = `已将「${item.displayName}」恢复到原位置`;
+      message = t("data.msg.restored").replace("{name}", item.displayName);
       await onInstancesChanged();
       if (worldInstanceId) {
         worlds = await runtime.listInstanceWorldDetails(worldInstanceId);
@@ -288,7 +289,7 @@
       const result = await runtime.purgeRecycleBinItem(item.id);
       items = items.filter((candidate) => candidate.id !== item.id);
       purgeCandidate = null;
-      message = `已永久删除 ${result.removedSubjects} 个实例，释放 ${formatBytes(result.releasedBytes)}`;
+      message = t("data.msg.purged").replace("{count}", String(result.removedSubjects)).replace("{size}", formatBytes(result.releasedBytes));
       await onInstancesChanged();
     } catch (error) {
       errorMessage = error instanceof Error ? error.message : String(error);
@@ -340,7 +341,7 @@
   function expiryLabel(item: RecycleBinItem): string {
     const remainingSeconds = item.expiresAtUnixSeconds - Math.floor(Date.now() / 1000);
     const days = Math.max(0, Math.ceil(remainingSeconds / (24 * 60 * 60)));
-    return days === 0 ? "保留期已到" : `${days} 天后到期`;
+    return days === 0 ? t("data.recycle.expired") : t("data.recycle.expiryDays").replace("{days}", String(days));
   }
 
   function deletedLabel(item: RecycleBinItem): string {
@@ -348,7 +349,7 @@
   }
 
   function timestampLabel(unixSeconds: number): string {
-    return new Intl.DateTimeFormat("zh-CN", {
+    return new Intl.DateTimeFormat(uiLanguage(), {
       year: "numeric",
       month: "2-digit",
       day: "2-digit",
@@ -360,51 +361,51 @@
   function backupTriggerLabel(trigger: BackupTrigger): string {
     switch (trigger) {
       case "preLaunch":
-        return "启动前";
+        return t("data.backups.trigger.preLaunch");
       case "postExit":
-        return "退出后";
+        return t("data.backups.trigger.postExit");
       case "manual":
-        return "手动";
+        return t("data.backups.trigger.manual");
       case "scheduled":
-        return "定时";
+        return t("data.backups.trigger.scheduled");
     }
   }
 
   function backupStateLabel(state: BackupState): string {
     switch (state) {
       case "ready":
-        return "已完成";
+        return t("data.backups.state.ready");
       case "skipped":
-        return "无世界，已跳过";
+        return t("data.backups.state.skipped");
       case "failed":
-        return "失败";
+        return t("data.backups.state.failed");
       case "staging":
-        return "写入中";
+        return t("data.backups.state.staging");
     }
   }
 
   function recycleKindLabel(kind: RecycleItemKind): string {
     switch (kind) {
       case "instance":
-        return "实例";
+        return t("data.recycle.kind.instance");
       case "screenshot":
-        return "截图";
+        return t("data.recycle.kind.screenshot");
       case "resource":
-        return "资源内容";
+        return t("data.recycle.kind.resource");
       case "world":
-        return "世界";
+        return t("data.recycle.kind.world");
     }
   }
 </script>
 
 <AppShell
-  pageTitle="数据"
+  pageTitle={t("nav.data")}
   dataDirectory={settings.dataDirectory}
   activeNavigation="data"
   navigationTargets={["home", "resources", "tasks"]}
   onNavigate={(target) => target === "home" ? onBack() : target === "resources" ? onOpenResources() : target === "tasks" ? onOpenTasks() : undefined}
-  connectionStatus="完全本地管理 · 不自动清理"
-  taskStatus={changingItem ? "正在更新回收站" : `${backups.length} 个备份 · ${items.length} 个回收站项目`}
+  connectionStatus={t("data.connectionStatus")}
+  taskStatus={changingItem ? t("data.taskStatus.updating") : t("data.taskStatus.summary").replace("{backups}", String(backups.length)).replace("{items}", String(items.length))}
   {onMinimize}
   {onToggleMaximize}
   {onClose}
@@ -413,61 +414,61 @@
     <div class="data-scroll" data-scroll-region="main">
       <header class="data-heading">
         <div>
-          <h1>数据与回收站</h1>
-          <p>误删实例可在本地恢复。MoyuMax 不会未经同意自动清理回收站。</p>
+          <h1>{t("data.heading.title")}</h1>
+          <p>{t("data.heading.description")}</p>
         </div>
-        <button class="button" disabled={loading || changingItem !== null} onclick={() => void loadItems()}>刷新</button>
+        <button class="button" disabled={loading || changingItem !== null} onclick={() => void loadItems()}>{t("data.refresh")}</button>
       </header>
 
-      <section class="data-overview" aria-label="本地数据摘要">
-        <div><span>备份快照</span><strong>{backups.length}</strong></div>
-        <div><span>备份占用</span><strong>{formatBytes(backupBytes)}</strong></div>
-        <div><span>回收项目</span><strong>{items.length}</strong></div>
-        <div><span>回收占用</span><strong>{formatBytes(totalBytes)}</strong></div>
+      <section class="data-overview" aria-label={t("data.overview.aria")}>
+        <div><span>{t("data.overview.backupCount")}</span><strong>{backups.length}</strong></div>
+        <div><span>{t("data.overview.backupSize")}</span><strong>{formatBytes(backupBytes)}</strong></div>
+        <div><span>{t("data.overview.recycleCount")}</span><strong>{items.length}</strong></div>
+        <div><span>{t("data.overview.recycleSize")}</span><strong>{formatBytes(totalBytes)}</strong></div>
       </section>
 
       {#if loading}
         <section class="data-loading" aria-live="polite">
           <div class="loading-line wide"></div>
           <div class="loading-line"></div>
-          <span>正在读取本地回收站…</span>
+          <span>{t("data.loading")}</span>
         </section>
       {:else}
         <section class="backup-section" aria-labelledby="worlds-title">
           <header>
             <div>
-              <h2 id="worlds-title">世界存档</h2>
-              <p>按实例浏览世界并导入导出；回滚到备份前会先创建恢复点备份。</p>
+              <h2 id="worlds-title">{t("data.worlds.title")}</h2>
+              <p>{t("data.worlds.description")}</p>
             </div>
             <div class="world-toolbar">
-              <label class="sr-live" for="world-instance-select">选择实例</label>
+              <label class="sr-live" for="world-instance-select">{t("data.worlds.selectInstance")}</label>
               <select id="world-instance-select" value={worldInstanceId} onchange={(event) => void selectWorldInstance(event)}>
                 {#each worldInstances.filter((instance) => instance.state === "ready") as instance}
                   <option value={instance.id}>{instance.name}</option>
                 {/each}
               </select>
-              <button class="button ghost compact" disabled={worldBusy || !worldInstanceId} onclick={() => void importWorld()}>{worldBusy ? "处理中" : "导入世界"}</button>
+              <button class="button ghost compact" disabled={worldBusy || !worldInstanceId} onclick={() => void importWorld()}>{worldBusy ? t("data.worlds.busy") : t("data.worlds.import")}</button>
             </div>
           </header>
           {#if !worldInstanceId}
-            <div class="backup-empty-row">还没有可管理世界的实例。</div>
+            <div class="backup-empty-row">{t("data.worlds.noInstance")}</div>
           {:else if worlds.length === 0}
-            <div class="backup-empty-row">这个实例还没有世界存档。</div>
+            <div class="backup-empty-row">{t("data.worlds.empty")}</div>
           {:else}
             <div class="backup-list">
               {#each worlds as world}
                 <article class="backup-row">
                   <div>
-                    <div class="backup-title-line"><h3>{world.name}</h3><span>世界</span></div>
-                    <p>{formatBytes(world.sizeBytes)}{world.lastPlayedUnixSeconds ? ` · 最近游玩 ${timestampLabel(world.lastPlayedUnixSeconds)}` : ""}</p>
+                    <div class="backup-title-line"><h3>{world.name}</h3><span>{t("data.worlds.badge")}</span></div>
+                    <p>{formatBytes(world.sizeBytes)}{world.lastPlayedUnixSeconds ? t("data.worlds.lastPlayed").replace("{time}", timestampLabel(world.lastPlayedUnixSeconds)) : ""}</p>
                   </div>
                   <div class="backup-side">
-                    <button class="button ghost compact" disabled={worldBusy} onclick={() => void exportWorld(world)}>导出</button>
+                    <button class="button ghost compact" disabled={worldBusy} onclick={() => void exportWorld(world)}>{t("data.worlds.export")}</button>
                     {#if pendingDelete === `world-${world.name}`}
-                      <button class="button danger-subtle compact" disabled={worldBusy} onclick={() => void deleteWorld(world)}>确认删除</button>
-                      <button class="button ghost compact" disabled={worldBusy} onclick={() => { pendingDelete = null; }}>取消</button>
+                      <button class="button danger-subtle compact" disabled={worldBusy} onclick={() => void deleteWorld(world)}>{t("common.confirmDelete")}</button>
+                      <button class="button ghost compact" disabled={worldBusy} onclick={() => { pendingDelete = null; }}>{t("common.cancel")}</button>
                     {:else}
-                      <button class="button danger-subtle compact" disabled={worldBusy} onclick={() => { pendingDelete = `world-${world.name}`; }}>删除</button>
+                      <button class="button danger-subtle compact" disabled={worldBusy} onclick={() => { pendingDelete = `world-${world.name}`; }}>{t("common.delete")}</button>
                     {/if}
                   </div>
                 </article>
@@ -479,18 +480,18 @@
         <section class="backup-section" aria-labelledby="screenshots-title">
           <header>
             <div>
-              <h2 id="screenshots-title">截图</h2>
-              <p>截图与实例隔离存放；删除会进入回收站，30 天内可恢复。</p>
+              <h2 id="screenshots-title">{t("data.screenshots.title")}</h2>
+              <p>{t("data.screenshots.description")}</p>
             </div>
-            <div class="screenshot-filters" role="group" aria-label="截图筛选">
-              <button class="filter-chip" class:active={screenshotFilter === "all"} onclick={() => { screenshotFilter = "all"; }}>全部 {screenshots.length}</button>
-              <button class="filter-chip" class:active={screenshotFilter === "week"} onclick={() => { screenshotFilter = "week"; }}>本周</button>
+            <div class="screenshot-filters" role="group" aria-label={t("data.screenshots.filterAria")}>
+              <button class="filter-chip" class:active={screenshotFilter === "all"} onclick={() => { screenshotFilter = "all"; }}>{t("data.screenshots.filterAll").replace("{count}", String(screenshots.length))}</button>
+              <button class="filter-chip" class:active={screenshotFilter === "week"} onclick={() => { screenshotFilter = "week"; }}>{t("data.screenshots.filterWeek")}</button>
             </div>
           </header>
           {#if !worldInstanceId}
-            <div class="backup-empty-row">还没有可管理截图的实例。</div>
+            <div class="backup-empty-row">{t("data.screenshots.noInstance")}</div>
           {:else if filteredScreenshots.length === 0}
-            <div class="backup-empty-row">{screenshotFilter === "week" ? "本周没有新截图。" : "这个实例还没有截图。"}</div>
+            <div class="backup-empty-row">{screenshotFilter === "week" ? t("data.screenshots.emptyWeek") : t("data.screenshots.empty")}</div>
           {:else}
             <div class="screenshot-grid">
               {#each filteredScreenshots as screenshot}
@@ -498,7 +499,7 @@
                   class="screenshot-card"
                   class:selected={selectedScreenshot === screenshot.fileName}
                   aria-pressed={selectedScreenshot === screenshot.fileName}
-                  aria-label={`截图 ${screenshot.fileName}`}
+                  aria-label={t("data.screenshots.cardAria").replace("{name}", screenshot.fileName)}
                   onclick={() => {
                     selectedScreenshot = selectedScreenshot === screenshot.fileName ? null : screenshot.fileName;
                     pendingDelete = null;
@@ -512,15 +513,15 @@
             </div>
             {#if selectedScreenshot}
               <div class="screenshot-actions">
-                <span>已选 {selectedScreenshot}</span>
+                <span>{t("data.screenshots.selected").replace("{name}", selectedScreenshot)}</span>
                 <div class="local-content-actions">
-                  <button class="button ghost compact" onclick={() => void copyScreenshot(selectedScreenshot!)}>复制</button>
-                  <button class="button ghost compact" onclick={() => void openScreenshot(selectedScreenshot!)}>打开本地位置</button>
+                  <button class="button ghost compact" onclick={() => void copyScreenshot(selectedScreenshot!)}>{t("data.screenshots.copy")}</button>
+                  <button class="button ghost compact" onclick={() => void openScreenshot(selectedScreenshot!)}>{t("data.screenshots.openLocation")}</button>
                   {#if pendingDelete === "screenshot"}
-                    <button class="button danger-subtle compact" disabled={worldBusy} onclick={() => void deleteScreenshot(selectedScreenshot!)}>确认删除</button>
-                    <button class="button ghost compact" disabled={worldBusy} onclick={() => { pendingDelete = null; }}>取消</button>
+                    <button class="button danger-subtle compact" disabled={worldBusy} onclick={() => void deleteScreenshot(selectedScreenshot!)}>{t("common.confirmDelete")}</button>
+                    <button class="button ghost compact" disabled={worldBusy} onclick={() => { pendingDelete = null; }}>{t("common.cancel")}</button>
                   {:else}
-                    <button class="button danger-subtle compact" disabled={worldBusy} onclick={() => { pendingDelete = "screenshot"; }}>删除</button>
+                    <button class="button danger-subtle compact" disabled={worldBusy} onclick={() => { pendingDelete = "screenshot"; }}>{t("common.delete")}</button>
                   {/if}
                 </div>
               </div>
@@ -531,12 +532,12 @@
         <section class="backup-section" aria-labelledby="world-backups-title">
           <header>
             <div>
-              <h2 id="world-backups-title">世界备份</h2>
-              <p>游戏启动前和退出后自动备份，默认保留每个实例最近 20 个成功快照。</p>
+              <h2 id="world-backups-title">{t("data.backups.title")}</h2>
+              <p>{t("data.backups.description")}</p>
             </div>
           </header>
           {#if backups.length === 0}
-            <div class="backup-empty-row">还没有备份记录。包含世界的实例启动后会在这里出现。</div>
+            <div class="backup-empty-row">{t("data.backups.empty")}</div>
           {:else}
             <div class="backup-list">
               {#each backups as backup}
@@ -545,9 +546,9 @@
                     <div class="backup-title-line">
                       <h3>{backup.instanceName}</h3>
                       <span>{backupTriggerLabel(backup.trigger)}</span>
-                      <span>{backup.kind === "incremental" ? "增量" : "完整"}</span>
+                      <span>{backup.kind === "incremental" ? t("data.backups.kind.incremental") : t("data.backups.kind.full")}</span>
                     </div>
-                    <p>{timestampLabel(backup.createdAtUnixSeconds)} · {backup.worldCount} 个世界 · {formatBytes(backup.archiveBytes || backup.sourceBytes)}</p>
+                    <p>{t("data.backups.line").replace("{time}", timestampLabel(backup.createdAtUnixSeconds)).replace("{count}", String(backup.worldCount)).replace("{size}", formatBytes(backup.archiveBytes || backup.sourceBytes))}</p>
                     {#if backup.errorSummary}<small>{backup.errorSummary}</small>{/if}
                   </div>
                   <div class="backup-side">
@@ -555,10 +556,10 @@
                     {#if backup.state === "ready"}
                       <button
                         class="button ghost compact"
-                        aria-label={`回滚实例“${backup.instanceName}”到此备份`}
+                        aria-label={t("data.backups.rollbackAria").replace("{name}", backup.instanceName)}
                         disabled={changingItem !== null}
                         onclick={() => void askRollback(backup)}
-                      >回滚</button>
+                      >{t("data.backups.rollback")}</button>
                     {/if}
                   </div>
                 </article>
@@ -570,18 +571,18 @@
         <section class="recycle-section" aria-labelledby="recycle-bin-title">
           <header>
             <div>
-              <h2 id="recycle-bin-title">回收站</h2>
-              <p>实例默认保留 30 天，MoyuMax 不会未经同意自动清理。</p>
+              <h2 id="recycle-bin-title">{t("data.recycle.title")}</h2>
+              <p>{t("data.recycle.description")}</p>
             </div>
           </header>
           {#if items.length === 0}
             <div class="data-empty compact-empty">
               <Icon name="database" size={26} />
-              <h2>回收站为空</h2>
-              <p>删除实例不会同时删除托管 Java。</p>
+              <h2>{t("data.recycle.emptyTitle")}</h2>
+              <p>{t("data.recycle.emptyDescription")}</p>
             </div>
           {:else}
-            <div class="recycle-list" aria-label="回收站项目">
+            <div class="recycle-list" aria-label={t("data.recycle.listAria")}>
               {#each items as item}
                 <article class:failed={item.state === "failed"} class="recycle-card">
                   <div class="recycle-copy">
@@ -591,26 +592,26 @@
                     </div>
                     <p>{formatBytes(item.sizeBytes)} · {expiryLabel(item)}</p>
                     <dl class="recycle-meta">
-                      <div><dt>删除时间</dt><dd>{deletedLabel(item)}</dd></div>
-                      <div><dt>原位置</dt><dd><code>{item.originalPath}</code></dd></div>
+                      <div><dt>{t("data.recycle.deletedAt")}</dt><dd>{deletedLabel(item)}</dd></div>
+                      <div><dt>{t("data.recycle.originalPath")}</dt><dd><code>{item.originalPath}</code></dd></div>
                     </dl>
                     {#if item.state === "failed"}
-                      <small class="recycle-error">上次文件操作未能自动收敛，请保留两侧内容并查看诊断。</small>
+                      <small class="recycle-error">{t("data.recycle.convergeError")}</small>
                     {/if}
                   </div>
                   <div class="recycle-actions">
                     <button
                       class="button primary"
-                      aria-label={`恢复“${item.displayName}”`}
+                      aria-label={t("data.recycle.restoreAria").replace("{name}", item.displayName)}
                       disabled={item.state !== "ready" || changingItem !== null}
                       onclick={() => void restore(item)}
-                    >{changingItem === item.id ? "正在恢复" : "恢复"}</button>
+                    >{changingItem === item.id ? t("data.recycle.restoring") : t("data.recycle.restore")}</button>
                     <button
                       class="button danger-subtle"
-                      aria-label={`永久删除“${item.displayName}”`}
+                      aria-label={t("data.recycle.purgeAria").replace("{name}", item.displayName)}
                       disabled={item.state !== "ready" || changingItem !== null}
                       onclick={() => void askPurge(item)}
-                    >永久删除</button>
+                    >{t("data.recycle.purge")}</button>
                   </div>
                 </article>
               {/each}
@@ -640,17 +641,17 @@
         onkeydown={handleRollbackDialogKeydown}
       >
         <header>
-          <h2 id="rollback-confirm-title">回滚“{rollbackCandidate.instanceName}”的世界？</h2>
-          <p>全部世界将恢复到 {timestampLabel(rollbackCandidate.createdAtUnixSeconds)} 的备份状态，共 {rollbackCandidate.worldCount} 个世界。</p>
+          <h2 id="rollback-confirm-title">{t("data.rollback.title").replace("{name}", rollbackCandidate.instanceName)}</h2>
+          <p>{t("data.rollback.description").replace("{time}", timestampLabel(rollbackCandidate.createdAtUnixSeconds)).replace("{count}", String(rollbackCandidate.worldCount))}</p>
         </header>
         <div class="confirmation-impact">
-          <strong>当前进度会先保存为恢复点备份</strong>
-          <span>回滚完成后如需撤销，可以在备份时间线中回滚到该恢复点。</span>
+          <strong>{t("data.rollback.impactTitle")}</strong>
+          <span>{t("data.rollback.impactBody")}</span>
         </div>
         <div class="confirmation-actions">
-          <button class="button" data-dialog-autofocus disabled={changingItem === rollbackCandidate.id} onclick={cancelRollback}>取消</button>
+          <button class="button" data-dialog-autofocus disabled={changingItem === rollbackCandidate.id} onclick={cancelRollback}>{t("common.cancel")}</button>
           <button class="button primary" disabled={changingItem === rollbackCandidate.id} onclick={() => void confirmRollback()}>
-            {changingItem === rollbackCandidate.id ? "正在回滚" : "创建恢复点并回滚"}
+            {changingItem === rollbackCandidate.id ? t("data.rollback.rolling") : t("data.rollback.confirm")}
           </button>
         </div>
       </div>
@@ -669,17 +670,17 @@
         onkeydown={handlePurgeDialogKeydown}
       >
         <header>
-          <h2 id="purge-confirm-title">永久删除“{purgeCandidate.displayName}”？</h2>
-          <p>将永久删除 1 个实例，共 {formatBytes(purgeCandidate.sizeBytes)}。</p>
+          <h2 id="purge-confirm-title">{t("data.purge.title").replace("{name}", purgeCandidate.displayName)}</h2>
+          <p>{t("data.purge.description").replace("{count}", "1").replace("{size}", formatBytes(purgeCandidate.sizeBytes))}</p>
         </header>
         <div class="confirmation-impact danger-impact">
-          <strong>此操作无法恢复</strong>
-          <span>实例目录、存档和实例级索引会被删除。托管 Java 与共享基础文件仍会保留。</span>
+          <strong>{t("data.purge.impactTitle")}</strong>
+          <span>{t("data.purge.impactBody")}</span>
         </div>
         <div class="confirmation-actions">
-          <button class="button" data-dialog-autofocus disabled={changingItem === purgeCandidate.id} onclick={cancelPurge}>取消</button>
+          <button class="button" data-dialog-autofocus disabled={changingItem === purgeCandidate.id} onclick={cancelPurge}>{t("common.cancel")}</button>
           <button class="button danger" disabled={changingItem === purgeCandidate.id} onclick={() => void purge()}>
-            {changingItem === purgeCandidate.id ? "正在删除" : "永久删除"}
+            {changingItem === purgeCandidate.id ? t("data.purge.purging") : t("data.recycle.purge")}
           </button>
         </div>
       </div>

@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { t } from "../i18n.svelte";
   import type {
     CrashEvidenceKind,
     CrashReport,
@@ -46,16 +47,16 @@
   let statusMessage = $state("");
 
   function evidenceLabel(kind: CrashEvidenceKind): string {
-    const labels: Record<CrashEvidenceKind, string> = {
-      gameOutput: "游戏最后输出",
-      gameLog: "游戏日志",
-      gameCrashReport: "Minecraft 崩溃报告",
-      nativeCrash: "原生崩溃文本",
-      launcherLog: "MoyuMax 会话日志",
-      launchScript: "脱敏启动脚本",
-      environment: "环境摘要",
+    const keys: Record<CrashEvidenceKind, string> = {
+      gameOutput: "crash.evidence.kind.gameOutput",
+      gameLog: "crash.evidence.kind.gameLog",
+      gameCrashReport: "crash.evidence.kind.gameCrashReport",
+      nativeCrash: "crash.evidence.kind.nativeCrash",
+      launcherLog: "crash.evidence.kind.launcherLog",
+      launchScript: "crash.evidence.kind.launchScript",
+      environment: "crash.evidence.kind.environment",
     };
-    return labels[kind];
+    return t(keys[kind]);
   }
 
   function formatBytes(bytes: number): string {
@@ -71,7 +72,7 @@
     exportResult = null;
     try {
       preview = await runtime.previewDiagnosticExport(report.id);
-      statusMessage = "已生成本地导出清单，尚未写出 ZIP。";
+      statusMessage = t("crash.msg.previewReady");
     } catch (error) {
       errorMessage = error instanceof Error ? error.message : String(error);
     } finally {
@@ -87,7 +88,7 @@
     try {
       exportResult = await runtime.confirmDiagnosticExport(preview.id);
       preview = null;
-      statusMessage = "诊断包已保存在本地";
+      statusMessage = t("crash.export.resultTitle");
     } catch (error) {
       errorMessage = error instanceof Error ? error.message : String(error);
     } finally {
@@ -102,7 +103,7 @@
     statusMessage = "";
     try {
       await runtime.startInstance(instance.id);
-      statusMessage = `正在重新启动「${instance.name}」`;
+      statusMessage = t("crash.msg.restarting").replace("{name}", instance.name);
     } catch (error) {
       errorMessage = error instanceof Error ? error.message : String(error);
     } finally {
@@ -112,13 +113,13 @@
 </script>
 
 <AppShell
-  pageTitle="崩溃诊断"
+  pageTitle={t("crash.title")}
   dataDirectory={settings.dataDirectory}
   activeNavigation="home"
   navigationTargets={["home", "resources", "tasks"]}
   onNavigate={(target) => target === "home" ? onBack() : target === "resources" ? onOpenResources() : target === "tasks" ? onOpenTasks() : undefined}
-  connectionStatus="完全本地诊断 · 未上传任何内容"
-  taskStatus="诊断报告已持久化"
+  connectionStatus={t("crash.connectionStatus")}
+  taskStatus={t("crash.taskStatus")}
   {onMinimize}
   {onToggleMaximize}
   {onClose}
@@ -126,17 +127,17 @@
   <main class="content crash-content">
     <div class="crash-scroll" data-scroll-region="main">
       <header class="crash-heading">
-        <button class="back-link" onclick={onBack}>返回首页</button>
+        <button class="back-link" onclick={onBack}>{t("settings.back")}</button>
         <div>
-          <h1>崩溃诊断</h1>
-          <p>{instance ? `实例「${instance.name}」异常退出` : "本地游戏会话异常退出"}。以下结论只来自本机证据。</p>
+          <h1>{t("crash.title")}</h1>
+          <p>{instance ? t("crash.heading.instanceExit").replace("{name}", instance.name) : t("crash.heading.localExit")}{t("crash.heading.evidenceNote")}</p>
         </div>
       </header>
 
       <section class="crash-summary-panel" aria-labelledby="crash-summary-title">
         <div class="crash-summary-icon" aria-hidden="true"><Icon name="info" size={20} /></div>
         <div>
-          <span class="crash-kicker">可能原因</span>
+          <span class="crash-kicker">{t("crash.kicker")}</span>
           <h2 id="crash-summary-title">{report.title}</h2>
           <p>{report.summary}</p>
         </div>
@@ -145,8 +146,8 @@
       <div class="crash-grid">
         <section class="crash-panel" aria-labelledby="crash-actions-title">
           <header>
-            <h2 id="crash-actions-title">建议操作</h2>
-            <p>这些建议不会自动修改实例。</p>
+            <h2 id="crash-actions-title">{t("crash.actions.title")}</h2>
+            <p>{t("crash.actions.description")}</p>
           </header>
           <ol class="crash-recommendations">
             {#each report.recommendations as recommendation}
@@ -155,16 +156,16 @@
           </ol>
           <div class="crash-action-row">
             <button class="button" disabled={!instance || retrying} onclick={() => void retryInstance()}>
-              {retrying ? "正在重新启动" : "再次启动实例"}
+              {retrying ? t("crash.actions.retrying") : t("crash.actions.retry")}
             </button>
-            <span>未经授权，MoyuMax 不会修改配置、删除文件或安装模组。</span>
+            <span>{t("crash.actions.noTouch")}</span>
           </div>
         </section>
 
         <section class="crash-panel" aria-labelledby="crash-evidence-title">
           <header>
-            <h2 id="crash-evidence-title">已收集证据</h2>
-            <p>这里只展示包内名称，不展示原始本地路径。</p>
+            <h2 id="crash-evidence-title">{t("crash.evidence.title")}</h2>
+            <p>{t("crash.evidence.description")}</p>
           </header>
           <div class="crash-evidence-list">
             {#each report.evidence as evidence}
@@ -173,7 +174,7 @@
                   <strong>{evidenceLabel(evidence.kind)}</strong>
                   <code>{evidence.bundleName}</code>
                 </div>
-                <span>{formatBytes(evidence.includedBytes)}{evidence.truncated ? " · 已截取末尾" : ""}</span>
+                <span>{formatBytes(evidence.includedBytes)}{evidence.truncated ? t("crash.evidence.truncatedSuffix") : ""}</span>
               </div>
             {/each}
           </div>
@@ -183,23 +184,23 @@
       <section class="diagnostic-export-panel" aria-labelledby="diagnostic-export-title">
         <header>
           <div>
-            <h2 id="diagnostic-export-title">导出脱敏诊断包</h2>
-            <p>先预览文件清单和脱敏范围，再由你确认写入本地 ZIP。MoyuMax 不会自动上传。</p>
+            <h2 id="diagnostic-export-title">{t("crash.export.title")}</h2>
+            <p>{t("crash.export.description")}</p>
           </div>
           {#if !preview && !exportResult}
             <button class="button primary" disabled={previewing} onclick={() => void loadPreview()}>
-              {previewing ? "正在生成清单" : "预览诊断包"}
+              {previewing ? t("crash.export.previewing") : t("crash.export.preview")}
             </button>
           {/if}
         </header>
 
         {#if preview}
           <div class="diagnostic-preview">
-            <h2>导出前隐私检查</h2>
-            <p>预计包含 {preview.files.length} 个文件，共 {formatBytes(preview.totalBytes)}；单项文本最多保留 {formatBytes(preview.maximumEvidenceBytes)}。</p>
+            <h2>{t("crash.export.privacyTitle")}</h2>
+            <p>{t("crash.export.summary").replace("{count}", String(preview.files.length)).replace("{size}", formatBytes(preview.totalBytes)).replace("{max}", formatBytes(preview.maximumEvidenceBytes))}</p>
             <div class="diagnostic-preview-grid">
               <div>
-                <h3>文件清单</h3>
+                <h3>{t("crash.export.filesTitle")}</h3>
                 <ul class="diagnostic-file-list">
                   {#each preview.files as file}
                     <li><code>{file.bundleName}</code><span>{formatBytes(file.includedBytes)}</span></li>
@@ -207,7 +208,7 @@
                 </ul>
               </div>
               <div>
-                <h3>脱敏摘要</h3>
+                <h3>{t("crash.export.redactionsTitle")}</h3>
                 <ul class="diagnostic-redaction-list">
                   {#each preview.redactions as redaction}
                     <li>{redaction}</li>
@@ -216,9 +217,9 @@
               </div>
             </div>
             <div class="diagnostic-confirm-row">
-              <button class="button" disabled={exporting} onclick={() => preview = null}>取消</button>
+              <button class="button" disabled={exporting} onclick={() => preview = null}>{t("common.cancel")}</button>
               <button class="button primary" disabled={exporting} onclick={() => void exportBundle()}>
-                {exporting ? "正在写入本地 ZIP" : "确认并导出到本地"}
+                {exporting ? t("crash.export.writing") : t("crash.export.confirm")}
               </button>
             </div>
           </div>
@@ -226,9 +227,9 @@
           <div class="diagnostic-export-result" role="status">
             <Icon name="check" size={18} />
             <div>
-              <strong>诊断包已保存在本地</strong>
+              <strong>{t("crash.export.resultTitle")}</strong>
               <code>{exportResult.archivePath}</code>
-              <span>{exportResult.fileCount} 个文件 · {formatBytes(exportResult.archiveBytes)} · 未上传</span>
+              <span>{t("crash.export.resultLine").replace("{count}", String(exportResult.fileCount)).replace("{size}", formatBytes(exportResult.archiveBytes))}</span>
             </div>
           </div>
         {/if}

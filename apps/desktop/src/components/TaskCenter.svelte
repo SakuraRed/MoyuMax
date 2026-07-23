@@ -1,7 +1,8 @@
 <script lang="ts">
   import { onMount } from "svelte";
 
-  import { installStageLabel } from "../installation";
+  import { installStageLabel, taskProgressAriaLabel } from "../installation";
+  import { t } from "../i18n.svelte";
   import type {
     ContentInstallStage,
     ContentInstallTask,
@@ -107,7 +108,7 @@
     errorMessage = "";
     const value = speedLimitMib.trim() === "" ? 0 : Number(speedLimitMib);
     if (!Number.isFinite(value) || value < 0) {
-      errorMessage = "限速必须是不小于 0 的数字";
+      errorMessage = t("tasks.limit.invalid");
       return;
     }
     try {
@@ -192,28 +193,28 @@
   }
 
   function stateLabel(state: TaskState): string {
-    const labels: Record<TaskState, string> = {
-      queued: "已排队",
-      running: "正在运行",
-      committing: "正在提交",
-      paused: "已暂停",
-      awaitingRecovery: "等待恢复确认",
-      failed: "失败",
-      completed: "已完成",
-      cancelled: "已取消",
+    const keys: Record<TaskState, string> = {
+      queued: "tasks.state.queued",
+      running: "tasks.state.running",
+      committing: "tasks.state.committing",
+      paused: "tasks.state.paused",
+      awaitingRecovery: "tasks.state.awaitingRecovery",
+      failed: "tasks.state.failed",
+      completed: "tasks.state.completed",
+      cancelled: "tasks.state.cancelled",
     };
-    return labels[state];
+    return t(keys[state]);
   }
 
   function contentStageLabel(stage: ContentInstallStage): string {
-    const labels: Record<ContentInstallStage, string> = {
-      prepare: "准备",
-      downloadFiles: "下载文件",
-      verifyFiles: "校验文件",
-      commitFiles: "提交文件",
-      indexContent: "写入索引",
+    const keys: Record<ContentInstallStage, string> = {
+      prepare: "tasks.contentStage.prepare",
+      downloadFiles: "tasks.contentStage.downloadFiles",
+      verifyFiles: "tasks.contentStage.verifyFiles",
+      commitFiles: "tasks.contentStage.commitFiles",
+      indexContent: "tasks.contentStage.indexContent",
     };
-    return labels[stage];
+    return t(keys[stage]);
   }
 
   function rootContentTitle(task: ContentInstallTask): string {
@@ -225,93 +226,93 @@
   function sourceDetailLine(task: InstallTask | ContentInstallTask): string | null {
     const detail = task.progress.sourceDetail;
     if (!detail) return null;
-    const parts = [`来源:${detail.finalLabel}`];
+    const parts = [t("tasks.source.prefix").replace("{label}", detail.finalLabel)];
     const failed = detail.attempts.find(
       (attempt) => typeof attempt.outcome !== "string",
     );
-    if (failed) parts.push(`已从 ${failed.label} 回退`);
-    if (detail.segmented) parts.push(`${detail.segmentCount} 个分段并行`);
+    if (failed) parts.push(t("tasks.source.fallback").replace("{label}", failed.label));
+    if (detail.segmented) parts.push(t("tasks.source.segmented").replace("{count}", String(detail.segmentCount)));
     if (detail.effectiveConnections && detail.effectiveConnections > 0) {
-      parts.push(`有效连接 ${detail.effectiveConnections}`);
+      parts.push(t("tasks.source.connections").replace("{count}", String(detail.effectiveConnections)));
     }
-    if (detail.degradedReason) parts.push(`已降级单连接:${detail.degradedReason}`);
+    if (detail.degradedReason) parts.push(t("tasks.source.degraded").replace("{reason}", detail.degradedReason));
     return parts.join(" · ");
   }
 </script>
 
 <AppShell
-  pageTitle="任务中心"
+  pageTitle={t("tasks.title")}
   dataDirectory={settings.dataDirectory}
   activeNavigation="tasks"
   navigationTargets={["home", "resources"]}
   onNavigate={(target) => target === "home" ? onBack() : target === "resources" ? onOpenResources() : undefined}
-  connectionStatus="本地任务队列"
-  taskStatus={`${[...tasks, ...contentTasks].filter((task) => !["completed", "cancelled"].includes(task.state)).length} 个未完成任务`}
+  connectionStatus={t("tasks.connectionStatus")}
+  taskStatus={t("home.taskStatus.pending").replace("{count}", String([...tasks, ...contentTasks].filter((task) => !["completed", "cancelled"].includes(task.state)).length))}
   {onMinimize}
   {onToggleMaximize}
   {onClose}
 >
   <main class="content task-center-content">
     <header class="task-center-heading">
-      <button class="button ghost compact" onclick={onBack}>返回首页</button>
-      <div><h1>任务中心</h1><p>所有长任务使用同一持久化队列；未知总量时不会伪造百分比。</p></div>
+      <button class="button ghost compact" onclick={onBack}>{t("settings.back")}</button>
+      <div><h1>{t("tasks.title")}</h1><p>{t("tasks.heading.description")}</p></div>
     </header>
 
     {#if errorMessage}
-      <div class="error-block" role="alert"><strong>无法更新任务</strong><span>{errorMessage}</span></div>
+      <div class="error-block" role="alert"><strong>{t("tasks.errorTitle")}</strong><span>{errorMessage}</span></div>
     {/if}
 
     <div class="task-global-bar" class:paused={tasksPaused}>
       <span>
         {#if tasksPaused}
-          全部任务已暂停，下载与安装已停止调度；恢复后从中断处继续。
+          {t("tasks.global.paused")}
         {:else}
-          任务正在按统一队列调度；暂停全部会保留已下载内容。
+          {t("tasks.global.running")}
         {/if}
       </span>
       <button class="button ghost compact" disabled={pauseChanging} onclick={() => void togglePaused()}>
-        {tasksPaused ? "恢复全部任务" : "暂停全部任务"}
+        {tasksPaused ? t("tasks.global.resumeAll") : t("tasks.global.pauseAll")}
       </button>
     </div>
 
-    <div class="task-limit-bar" role="group" aria-label="全局下载限速">
+    <div class="task-limit-bar" role="group" aria-label={t("tasks.limit.groupAria")}>
       <span>
         {#if speedLimitBytes > 0}
-          当前限速:{Math.round(speedLimitBytes / 1024 / 1024)} MiB/s(全部分段连接共享)
+          {t("tasks.limit.current").replace("{speed}", String(Math.round(speedLimitBytes / 1024 / 1024)))}
         {:else}
-          当前不限速;分段下载也遵守此上限。
+          {t("tasks.limit.unlimited")}
         {/if}
       </span>
       <label class="task-limit-field">
-        限速(MiB/s,留空不限)
+        {t("tasks.limit.fieldLabel")}
         <input
           value={speedLimitMib}
           inputmode="decimal"
-          placeholder="不限"
+          placeholder={t("tasks.limit.placeholder")}
           oninput={(event) => (speedLimitMib = event.currentTarget.value)}
         />
       </label>
-      <button class="button ghost compact" onclick={() => void applySpeedLimit()}>应用</button>
+      <button class="button ghost compact" onclick={() => void applySpeedLimit()}>{t("tasks.limit.apply")}</button>
     </div>
 
     {#if tasks.length === 0 && contentTasks.length === 0}
-      <section class="task-empty"><Icon name="task" size={28} /><h2>没有任务</h2><p>安装、迁移、备份和修复会统一出现在这里。</p></section>
+      <section class="task-empty"><Icon name="task" size={28} /><h2>{t("tasks.empty.title")}</h2><p>{t("tasks.empty.description")}</p></section>
     {:else}
       <div class="task-list">
         {#each tasks as task}
           <article class:recovery={task.state === "awaitingRecovery"} class="task-card">
             <header>
-              <div><strong>{task.plan.instanceName}</strong><small>安装 Minecraft 实例</small></div>
+              <div><strong>{task.plan.instanceName}</strong><small>{t("tasks.install.kindLabel")}</small></div>
               <span class="task-state">{stateLabel(task.state)}</span>
             </header>
             {#if task.state === "awaitingRecovery"}
               <div class="recovery-copy">
                 <Icon name="info" size={16} />
-                <div><strong>上次运行在安装提交前中断</strong><p>继续只会把任务放回队列，不会立即联网。放弃只清理此任务的专用暂存区，不删除共享文件、Java 或已提交实例。</p></div>
+                <div><strong>{t("tasks.recovery.installTitle")}</strong><p>{t("tasks.recovery.installBody")}</p></div>
               </div>
               <div class="task-buttons">
-                <button class="button primary" disabled={changingTask === task.id} onclick={() => void resolveRecovery(task.id, "resume")}>继续任务</button>
-                <button class="button ghost" disabled={changingTask === task.id} onclick={() => void resolveRecovery(task.id, "discard")}>放弃并清理临时文件</button>
+                <button class="button primary" disabled={changingTask === task.id} onclick={() => void resolveRecovery(task.id, "resume")}>{t("tasks.recovery.resume")}</button>
+                <button class="button ghost" disabled={changingTask === task.id} onclick={() => void resolveRecovery(task.id, "discard")}>{t("tasks.recovery.discard")}</button>
               </div>
             {:else}
               <ol class="task-stage-list">
@@ -320,56 +321,56 @@
                 {/each}
               </ol>
               {#if task.state === "queued"}
-                <p class="task-boundary">计划与暂存区已建立，正在等待统一任务调度器分配执行槽。</p>
+                <p class="task-boundary">{t("tasks.queued.installBoundary")}</p>
               {:else if task.state === "running" || task.state === "committing"}
-                <div class="task-progress" aria-label={`已完成 ${task.progress.completedBytes} 字节${task.progress.totalBytes === null ? "，总量未知" : `，共 ${task.progress.totalBytes} 字节`}`}>
+                <div class="task-progress" aria-label={taskProgressAriaLabel(task.progress)}>
                   <div class="progress-track">
                     <span style:width={task.progress.totalBytes && task.progress.totalBytes > 0 ? `${Math.min(100, task.progress.completedBytes / task.progress.totalBytes * 100)}%` : "24%"}></span>
                   </div>
-                  <p>{task.progress.currentItem ?? "正在处理"}</p>
+                  <p>{task.progress.currentItem ?? t("tasks.progress.processing")}</p>
                 </div>
               {:else if task.state === "failed"}
                 <div class="error-block task-error" role="alert">
-                  <strong>安装任务未完成</strong>
-                  <span>尚未发布可启动实例；已校验共享文件不会被删除。</span>
-                  <span>{task.progress.errorSummary ?? "请查看详情后重试。"}</span>
-                  <button class="button primary compact" disabled={changingTask === task.id} onclick={() => void retryTask(task.id)}>重试未完成内容</button>
+                  <strong>{t("tasks.failed.installTitle")}</strong>
+                  <span>{t("tasks.failed.installBody")}</span>
+                  <span>{task.progress.errorSummary ?? t("tasks.failed.retryHint")}</span>
+                  <button class="button primary compact" disabled={changingTask === task.id} onclick={() => void retryTask(task.id)}>{t("tasks.failed.retry")}</button>
                 </div>
               {/if}
               <div class="task-actions">
                 {#if task.state === "running" || task.state === "queued"}
-                  <button class="button ghost compact" disabled={changingTask === task.id} onclick={() => void pauseOne(task.id, "install")}>暂停</button>
+                  <button class="button ghost compact" disabled={changingTask === task.id} onclick={() => void pauseOne(task.id, "install")}>{t("tasks.action.pause")}</button>
                 {/if}
                 {#if task.state === "paused"}
-                  <button class="button primary compact" disabled={changingTask === task.id} onclick={() => void resumeOne(task.id, "install")}>恢复</button>
+                  <button class="button primary compact" disabled={changingTask === task.id} onclick={() => void resumeOne(task.id, "install")}>{t("tasks.action.resume")}</button>
                 {/if}
                 {#if task.state === "queued"}
-                  <button class="button ghost compact" aria-label="提高优先级" disabled={changingTask === task.id} onclick={() => void movePriority(task, "install", 1)}>上移</button>
-                  <button class="button ghost compact" aria-label="降低优先级" disabled={changingTask === task.id} onclick={() => void movePriority(task, "install", -1)}>下移</button>
-                  <span class="task-priority">优先级 {task.priority}</span>
+                  <button class="button ghost compact" aria-label={t("tasks.action.moveUpAria")} disabled={changingTask === task.id} onclick={() => void movePriority(task, "install", 1)}>{t("tasks.action.moveUp")}</button>
+                  <button class="button ghost compact" aria-label={t("tasks.action.moveDownAria")} disabled={changingTask === task.id} onclick={() => void movePriority(task, "install", -1)}>{t("tasks.action.moveDown")}</button>
+                  <span class="task-priority">{t("tasks.priority").replace("{value}", String(task.priority))}</span>
                 {/if}
               </div>
             {/if}
             {#if sourceDetailLine(task)}
               <p class="task-source">{sourceDetailLine(task)}</p>
             {/if}
-            <details><summary>任务路径</summary><code>{task.stagingDirectory}</code></details>
+            <details><summary>{t("tasks.paths")}</summary><code>{task.stagingDirectory}</code></details>
           </article>
         {/each}
         {#each contentTasks as task}
           <article class:recovery={task.state === "awaitingRecovery"} class="task-card content-task-card">
             <header>
-              <div><strong>{rootContentTitle(task)}</strong><small>安装 Modrinth 内容</small></div>
+              <div><strong>{rootContentTitle(task)}</strong><small>{t("tasks.content.kindLabel")}</small></div>
               <span class="task-state">{stateLabel(task.state)}</span>
             </header>
             {#if task.state === "awaitingRecovery"}
               <div class="recovery-copy">
                 <Icon name="info" size={16} />
-                <div><strong>上次运行在内容提交前中断</strong><p>继续会重新进入统一队列并复用已校验缓存。放弃只清理该任务的暂存区，不删除已安装模组或共享缓存。</p></div>
+                <div><strong>{t("tasks.recovery.contentTitle")}</strong><p>{t("tasks.recovery.contentBody")}</p></div>
               </div>
               <div class="task-buttons">
-                <button class="button primary" disabled={changingTask === task.id} onclick={() => void resolveContentRecovery(task.id, "resume")}>继续任务</button>
-                <button class="button ghost" disabled={changingTask === task.id} onclick={() => void resolveContentRecovery(task.id, "discard")}>放弃并清理临时文件</button>
+                <button class="button primary" disabled={changingTask === task.id} onclick={() => void resolveContentRecovery(task.id, "resume")}>{t("tasks.recovery.resume")}</button>
+                <button class="button ghost" disabled={changingTask === task.id} onclick={() => void resolveContentRecovery(task.id, "discard")}>{t("tasks.recovery.discard")}</button>
               </div>
             {:else}
               <ol class="task-stage-list content-stage-list">
@@ -378,40 +379,40 @@
                 {/each}
               </ol>
               {#if task.state === "queued"}
-                <p class="task-boundary">模组与依赖计划已持久化，正在等待与游戏安装任务共享的执行槽。</p>
+                <p class="task-boundary">{t("tasks.queued.contentBoundary")}</p>
               {:else if task.state === "running" || task.state === "committing"}
-                <div class="task-progress" aria-label={`已完成 ${task.progress.completedBytes} 字节${task.progress.totalBytes === null ? "，总量未知" : `，共 ${task.progress.totalBytes} 字节`}`}>
+                <div class="task-progress" aria-label={taskProgressAriaLabel(task.progress)}>
                   <div class="progress-track">
                     <span style:width={task.progress.totalBytes && task.progress.totalBytes > 0 ? `${Math.min(100, task.progress.completedBytes / task.progress.totalBytes * 100)}%` : "0%"}></span>
                   </div>
-                  <p>{task.progress.currentItem ?? "正在处理内容"}</p>
+                  <p>{task.progress.currentItem ?? t("tasks.progress.processingContent")}</p>
                 </div>
               {:else if task.state === "failed"}
                 <div class="error-block task-error" role="alert">
-                  <strong>内容安装任务未完成</strong>
-                  <span>本次新增文件已经补偿撤销；已有模组和世界存档保持原样。</span>
-                  <span>{task.progress.errorSummary ?? "请查看详情后重试。"}</span>
-                  <button class="button primary compact" disabled={changingTask === task.id} onclick={() => void retryContentTask(task.id)}>重试未完成内容</button>
+                  <strong>{t("tasks.failed.contentTitle")}</strong>
+                  <span>{t("tasks.failed.contentBody")}</span>
+                  <span>{task.progress.errorSummary ?? t("tasks.failed.retryHint")}</span>
+                  <button class="button primary compact" disabled={changingTask === task.id} onclick={() => void retryContentTask(task.id)}>{t("tasks.failed.retry")}</button>
                 </div>
               {/if}
               <div class="task-actions">
                 {#if task.state === "running" || task.state === "queued"}
-                  <button class="button ghost compact" disabled={changingTask === task.id} onclick={() => void pauseOne(task.id, "content")}>暂停</button>
+                  <button class="button ghost compact" disabled={changingTask === task.id} onclick={() => void pauseOne(task.id, "content")}>{t("tasks.action.pause")}</button>
                 {/if}
                 {#if task.state === "paused"}
-                  <button class="button primary compact" disabled={changingTask === task.id} onclick={() => void resumeOne(task.id, "content")}>恢复</button>
+                  <button class="button primary compact" disabled={changingTask === task.id} onclick={() => void resumeOne(task.id, "content")}>{t("tasks.action.resume")}</button>
                 {/if}
                 {#if task.state === "queued"}
-                  <button class="button ghost compact" aria-label="提高优先级" disabled={changingTask === task.id} onclick={() => void movePriority(task, "content", 1)}>上移</button>
-                  <button class="button ghost compact" aria-label="降低优先级" disabled={changingTask === task.id} onclick={() => void movePriority(task, "content", -1)}>下移</button>
-                  <span class="task-priority">优先级 {task.priority}</span>
+                  <button class="button ghost compact" aria-label={t("tasks.action.moveUpAria")} disabled={changingTask === task.id} onclick={() => void movePriority(task, "content", 1)}>{t("tasks.action.moveUp")}</button>
+                  <button class="button ghost compact" aria-label={t("tasks.action.moveDownAria")} disabled={changingTask === task.id} onclick={() => void movePriority(task, "content", -1)}>{t("tasks.action.moveDown")}</button>
+                  <span class="task-priority">{t("tasks.priority").replace("{value}", String(task.priority))}</span>
                 {/if}
               </div>
             {/if}
             {#if sourceDetailLine(task)}
               <p class="task-source">{sourceDetailLine(task)}</p>
             {/if}
-            <details><summary>任务路径</summary><code>{task.stagingDirectory}</code></details>
+            <details><summary>{t("tasks.paths")}</summary><code>{task.stagingDirectory}</code></details>
           </article>
         {/each}
       </div>
