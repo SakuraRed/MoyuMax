@@ -93,6 +93,39 @@ export type TaskState =
 
 export type RecoveryDecision = "resume" | "discard";
 
+export type SourceChannel = "mirror" | "official" | "custom";
+
+export type SourcePolicy =
+  | { kind: "mirrorFirst" }
+  | { kind: "officialFirst" }
+  | { kind: "custom"; minecraftBase: string | null; modrinthBase: string | null };
+
+export type SourceAttemptOutcome = "success" | { failed: { error: string } };
+
+export interface SourceAttempt {
+  url: string;
+  label: string;
+  channel: SourceChannel;
+  outcome: SourceAttemptOutcome;
+}
+
+export interface TaskSourceDetail {
+  finalLabel: string;
+  channel: SourceChannel;
+  attempts: SourceAttempt[];
+  segmented: boolean;
+  segmentCount: number;
+  degradedReason: string | null;
+}
+
+export interface TaskProgress {
+  completedBytes: number;
+  totalBytes: number | null;
+  currentItem: string | null;
+  errorSummary: string | null;
+  sourceDetail?: TaskSourceDetail | null;
+}
+
 export interface InstallTask {
   id: string;
   state: TaskState;
@@ -109,12 +142,7 @@ export interface InstallTask {
   targetDirectory: string;
   createdAtUnixSeconds: number;
   updatedAtUnixSeconds: number;
-  progress: {
-    completedBytes: number;
-    totalBytes: number | null;
-    currentItem: string | null;
-    errorSummary: string | null;
-  };
+  progress: TaskProgress;
 }
 
 export interface ManagedInstance {
@@ -239,7 +267,7 @@ export interface ContentInstallTask {
   sharedStoreDirectory: string;
   createdAtUnixSeconds: number;
   updatedAtUnixSeconds: number;
-  progress: InstallTask["progress"];
+  progress: TaskProgress;
 }
 
 export interface InstalledContent {
@@ -449,6 +477,8 @@ export interface MoyuRuntime {
   getTasksPaused(): Promise<boolean>;
   pauseAllTasks(): Promise<void>;
   resumeAllTasks(): Promise<void>;
+  getDownloadSourcePolicy(): Promise<SourcePolicy>;
+  setDownloadSourcePolicy(policy: SourcePolicy): Promise<void>;
   /** 注册窗口关闭请求回调(标题栏关闭按钮与系统关闭共用),返回取消注册函数。 */
   onCloseRequested(handler: () => void): () => void;
   /** 托盘动作产生待处理意图时通知前端取走,返回取消注册函数。 */
@@ -471,6 +501,7 @@ const BROWSER_STARTUP_KIND_KEY = "moyumax.browser.startupKind";
 const BROWSER_PENDING_INTENT_KEY = "moyumax.browser.pendingIntent";
 const BROWSER_TASKS_PAUSED_KEY = "moyumax.browser.tasksPaused";
 const BROWSER_WINDOW_STATE_KEY = "moyumax.browser.windowState";
+const BROWSER_SOURCE_POLICY_KEY = "moyumax.browser.sourcePolicy";
 const browserPreviews = new Map<string, InstallSelection>();
 const browserContentPreviews = new Map<string, ContentInstallPlan>();
 const browserDiagnosticPreviews = new Map<string, string>();
@@ -569,6 +600,10 @@ function createTauriRuntime(): MoyuRuntime {
     getTasksPaused: () => invoke<boolean>("get_tasks_paused"),
     pauseAllTasks: () => invoke<void>("pause_all_tasks"),
     resumeAllTasks: () => invoke<void>("resume_all_tasks"),
+    getDownloadSourcePolicy: () =>
+      invoke<SourcePolicy>("get_download_source_policy"),
+    setDownloadSourcePolicy: (policy) =>
+      invoke<void>("set_download_source_policy", { policy }),
     onCloseRequested: (handler) => {
       let unlisten: (() => void) | undefined;
       void listen(CLOSE_REQUESTED_EVENT, handler).then((release) => {
@@ -1180,6 +1215,15 @@ function createBrowserRuntime(): MoyuRuntime {
         BROWSER_CONTENT_TASKS_KEY,
         JSON.stringify(contentTasks),
       );
+    },
+    async getDownloadSourcePolicy() {
+      const serialized = window.localStorage.getItem(BROWSER_SOURCE_POLICY_KEY);
+      return serialized
+        ? (JSON.parse(serialized) as SourcePolicy)
+        : { kind: "mirrorFirst" };
+    },
+    async setDownloadSourcePolicy(policy) {
+      window.localStorage.setItem(BROWSER_SOURCE_POLICY_KEY, JSON.stringify(policy));
     },
     onCloseRequested(handler) {
       browserCloseHandlers.add(handler);

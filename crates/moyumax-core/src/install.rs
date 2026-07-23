@@ -6,7 +6,8 @@ use serde_json::Value;
 use uuid::Uuid;
 
 use crate::{
-    AppService, CoreError, GameVersionSummary, OnboardingSelection, Result, unix_timestamp,
+    AppService, CoreError, FetchReport, GameVersionSummary, OnboardingSelection, Result,
+    SourceAttempt, SourceChannel, unix_timestamp,
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -348,6 +349,47 @@ pub struct TaskProgress {
     pub total_bytes: Option<u64>,
     pub current_item: Option<String>,
     pub error_summary: Option<String>,
+    #[serde(default)]
+    pub source_detail: Option<TaskSourceDetail>,
+}
+
+/// 任务最近一次下载的来源详情:真实来源、尝试历史与分段状态。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TaskSourceDetail {
+    pub final_label: String,
+    pub channel: SourceChannel,
+    pub attempts: Vec<SourceAttempt>,
+    pub segmented: bool,
+    pub segment_count: u32,
+    pub degraded_reason: Option<String>,
+}
+
+impl TaskSourceDetail {
+    /// 汇总一批工件的下载报告,作为任务级来源事实。
+    #[must_use]
+    pub fn summarize(reports: &[&FetchReport]) -> Option<Self> {
+        let last = reports.iter().rev().find(|report| !report.reused_local)?;
+        let attempts: Vec<SourceAttempt> = reports
+            .iter()
+            .flat_map(|report| report.attempts.iter().cloned())
+            .collect();
+        let degraded_reason = reports
+            .iter()
+            .find_map(|report| report.degraded_reason.clone());
+        Some(Self {
+            final_label: last.final_label.clone(),
+            channel: last.channel,
+            attempts,
+            segmented: reports.iter().any(|report| report.segmented),
+            segment_count: reports
+                .iter()
+                .map(|report| report.segment_count)
+                .max()
+                .unwrap_or(0),
+            degraded_reason,
+        })
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -400,7 +442,7 @@ impl AppService {
                    task.staging_directory, task.target_directory,
                    task.created_at_unix_seconds, task.updated_at_unix_seconds,
                    COALESCE(progress.completed_bytes, 0), progress.total_bytes,
-                   progress.current_item, progress.error_summary
+                   progress.current_item, progress.error_summary, progress.source_detail
             FROM install_tasks
             AS task
             LEFT JOIN task_progress AS progress ON progress.task_id = task.id
@@ -421,6 +463,7 @@ impl AppService {
                 row.get::<_, Option<i64>>(9)?,
                 row.get::<_, Option<String>>(10)?,
                 row.get::<_, Option<String>>(11)?,
+                row.get::<_, Option<String>>(12)?,
             ))
         })?;
 
@@ -438,6 +481,7 @@ impl AppService {
                 total_bytes,
                 current_item,
                 error_summary,
+                source_detail,
             ) = row?;
             Ok(InstallTask {
                 id,
@@ -458,6 +502,9 @@ impl AppService {
                         .transpose()?,
                     current_item,
                     error_summary,
+                    source_detail: source_detail
+                        .map(|json| serde_json::from_str(&json))
+                        .transpose()?,
                 },
             })
         })
@@ -860,6 +907,19 @@ impl AppService {
         Ok(())
     }
 
+    pub(crate) fn set_task_source_detail(
+        &self,
+        task_id: &str,
+        detail: &TaskSourceDetail,
+    ) -> Result<()> {
+        let serialized = serde_json::to_string(detail)?;
+        self.connection()?.execute(
+            "UPDATE task_progress SET source_detail = ?2 WHERE task_id = ?1",
+            params![task_id, serialized],
+        )?;
+        Ok(())
+    }
+
     pub(crate) fn mark_task_failed(&self, task_id: &str, error: &str) -> Result<()> {
         let summary: String = error.chars().take(4_000).collect();
         let mut connection = self.connection()?;
@@ -1041,6 +1101,7 @@ impl AppService {
                 total_bytes: Some(progress_total),
                 current_item: Some("等待执行".to_owned()),
                 error_summary: None,
+                source_detail: None,
             },
         };
         transaction.execute(

@@ -633,7 +633,8 @@ impl AppService {
                    task.staging_directory, task.target_directory,
                    task.shared_store_directory, task.created_at_unix_seconds,
                    task.updated_at_unix_seconds, COALESCE(progress.completed_bytes, 0),
-                   progress.total_bytes, progress.current_item, progress.error_summary
+                   progress.total_bytes, progress.current_item, progress.error_summary,
+                   progress.source_detail
             FROM content_install_tasks AS task
             LEFT JOIN content_task_progress AS progress ON progress.task_id = task.id
             ORDER BY task.created_at_unix_seconds, task.id
@@ -654,6 +655,7 @@ impl AppService {
                 row.get::<_, Option<i64>>(10)?,
                 row.get::<_, Option<String>>(11)?,
                 row.get::<_, Option<String>>(12)?,
+                row.get::<_, Option<String>>(13)?,
             ))
         })?;
         rows.map(|row| {
@@ -671,6 +673,7 @@ impl AppService {
                 total_bytes,
                 current_item,
                 error_summary,
+                source_detail,
             ) = row?;
             Ok(ContentInstallTask {
                 id,
@@ -695,6 +698,9 @@ impl AppService {
                         .transpose()?,
                     current_item,
                     error_summary,
+                    source_detail: source_detail
+                        .map(|json| serde_json::from_str(&json))
+                        .transpose()?,
                 },
             })
         })
@@ -1071,6 +1077,19 @@ impl AppService {
         Ok(())
     }
 
+    pub(crate) fn set_content_task_source_detail(
+        &self,
+        task_id: &str,
+        detail: &crate::TaskSourceDetail,
+    ) -> Result<()> {
+        let serialized = serde_json::to_string(detail)?;
+        self.connection()?.execute(
+            "UPDATE content_task_progress SET source_detail = ?2 WHERE task_id = ?1",
+            params![task_id, serialized],
+        )?;
+        Ok(())
+    }
+
     pub(crate) fn mark_content_task_failed(&self, task_id: &str, error: &str) -> Result<()> {
         let summary = error.chars().take(4_000).collect::<String>();
         let mut connection = self.connection()?;
@@ -1222,6 +1241,7 @@ impl AppService {
                 total_bytes: Some(total_bytes),
                 current_item: Some("等待执行".to_owned()),
                 error_summary: None,
+                source_detail: None,
             },
         };
         let mut connection = self.connection()?;

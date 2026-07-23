@@ -17,6 +17,7 @@ mod install;
 mod launch;
 mod recycle;
 mod shell;
+mod source;
 
 pub use backup::*;
 pub use catalog::*;
@@ -27,6 +28,7 @@ pub use install::*;
 pub use launch::*;
 pub use recycle::*;
 pub use shell::*;
+pub use source::*;
 
 const SETTING_ONBOARDING_COMPLETE: &str = "onboarding_complete";
 const SETTING_ONBOARDING_SELECTION: &str = "onboarding_selection";
@@ -347,9 +349,19 @@ impl AppService {
                 ON world_backups(instance_id, created_at_unix_seconds DESC, id DESC);
             CREATE INDEX IF NOT EXISTS idx_world_backups_state_created
                 ON world_backups(state, created_at_unix_seconds);
-            PRAGMA user_version = 8;
             ",
         )?;
+        // v9:任务进度记录真实来源、尝试历史与分段状态。
+        let version: i64 = connection.query_row("PRAGMA user_version", [], |row| row.get(0))?;
+        if version < 9 {
+            connection.execute_batch(
+                "
+                ALTER TABLE task_progress ADD COLUMN source_detail TEXT;
+                ALTER TABLE content_task_progress ADD COLUMN source_detail TEXT;
+                PRAGMA user_version = 9;
+                ",
+            )?;
+        }
         Ok(())
     }
 

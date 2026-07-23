@@ -349,6 +349,7 @@ mod tests {
             total_bytes: total,
             current_item: None,
             error_summary: None,
+            source_detail: None,
         }
     }
 

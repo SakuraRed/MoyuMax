@@ -148,6 +148,19 @@
       (entry) => entry.projectId === task.plan.rootProjectId,
     )?.projectTitle ?? task.plan.rootProjectId;
   }
+
+  function sourceDetailLine(task: InstallTask | ContentInstallTask): string | null {
+    const detail = task.progress.sourceDetail;
+    if (!detail) return null;
+    const parts = [`来源:${detail.finalLabel}`];
+    const failed = detail.attempts.find(
+      (attempt) => typeof attempt.outcome !== "string",
+    );
+    if (failed) parts.push(`已从 ${failed.label} 回退`);
+    if (detail.segmented) parts.push(`${detail.segmentCount} 个分段并行`);
+    if (detail.degradedReason) parts.push(`已降级单连接:${detail.degradedReason}`);
+    return parts.join(" · ");
+  }
 </script>
 
 <AppShell
@@ -228,6 +241,9 @@
                 </div>
               {/if}
             {/if}
+            {#if sourceDetailLine(task)}
+              <p class="task-source">{sourceDetailLine(task)}</p>
+            {/if}
             <details><summary>任务路径</summary><code>{task.stagingDirectory}</code></details>
           </article>
         {/each}
@@ -269,6 +285,9 @@
                   <button class="button primary compact" disabled={changingTask === task.id} onclick={() => void retryContentTask(task.id)}>重试未完成内容</button>
                 </div>
               {/if}
+            {/if}
+            {#if sourceDetailLine(task)}
+              <p class="task-source">{sourceDetailLine(task)}</p>
             {/if}
             <details><summary>任务路径</summary><code>{task.stagingDirectory}</code></details>
           </article>

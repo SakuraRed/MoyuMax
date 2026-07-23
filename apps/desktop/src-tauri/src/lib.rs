@@ -15,7 +15,8 @@ use moyumax_core::{
     LaunchExecution, LaunchOptions, LaunchSessionSummary, ManagedInstanceSummary, MetadataClient,
     ModrinthClient, ModrinthSearchPage, ModrinthSearchQuery, OnboardingSelection, RecoveryDecision,
     RecycleBinItem, RecyclePurgeResult, ResolvedInstallRequest, ResolvedLoader, ShellState,
-    TaskState, VersionCatalog, WindowCloseBehavior, WorldBackupSummary, run_launch_execution,
+    SourcePolicy, TaskState, VersionCatalog, WindowCloseBehavior, WorldBackupSummary,
+    run_launch_execution,
 };
 use serde::Serialize;
 use tauri::{Emitter, Manager, State};
@@ -801,6 +802,23 @@ fn take_pending_intent(shell: State<'_, Arc<ShellCoordinator>>) -> Option<Pendin
 }
 
 #[tauri::command]
+fn get_download_source_policy(service: State<'_, AppService>) -> Result<SourcePolicy, String> {
+    service
+        .download_source_policy()
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+fn set_download_source_policy(
+    service: State<'_, AppService>,
+    policy: SourcePolicy,
+) -> Result<(), String> {
+    service
+        .set_download_source_policy(&policy)
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
 fn get_tasks_paused(service: State<'_, AppService>) -> Result<bool, String> {
     service.tasks_paused().map_err(|error| error.to_string())
 }
@@ -919,6 +937,8 @@ pub fn run() {
             persist_shell_state,
             get_window_startup_kind,
             take_pending_intent,
+            get_download_source_policy,
+            set_download_source_policy,
             get_tasks_paused,
             pause_all_tasks,
             resume_all_tasks

@@ -27,8 +27,10 @@ use zip::ZipArchive;
 use crate::{
     AppService, ArtifactKind, CONTENT_COMMIT_JOURNAL_NAME, ContentCommitJournal,
     ContentCommitJournalEntry, ContentInstallStage, ContentInstallTask, ContentPlanEntry,
-    CoreError, InstallStage, InstallTask, InstalledContent, JavaEnvironmentStatus, JavaPlanAction,
-    ManagedInstanceSummary, ResolvedArtifact, ResolvedLoader, Result, TaskState,
+    CoreError, DownloadCandidate, InstallStage, InstallTask, InstalledContent,
+    JavaEnvironmentStatus, JavaPlanAction, ManagedInstanceSummary, ResolvedArtifact,
+    ResolvedLoader, Result, SourceCandidates, SourceChannel, SourcePolicy, TaskState,
+    candidates_for,
 };
 
 /// 全局暂停全部任务时的下载中断信号。
@@ -87,10 +89,134 @@ pub struct DownloadResult {
     pub bytes: u64,
 }
 
+/// 一次下载尝试记录：来源、URL 与结果，用于任务详情审计。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SourceAttempt {
+    pub url: String,
+    pub label: String,
+    pub channel: SourceChannel,
+    pub outcome: SourceAttemptOutcome,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum SourceAttemptOutcome {
+    Success,
+    Failed { error: String },
+}
+
+/// 候选感知的下载报告：真实来源、尝试记录与分段状态。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FetchReport {
+    pub result: DownloadResult,
+    pub final_label: String,
+    pub channel: SourceChannel,
+    pub attempts: Vec<SourceAttempt>,
+    pub segmented: bool,
+    pub segment_count: u32,
+    pub degraded_reason: Option<String>,
+    pub reused_local: bool,
+}
+
+/// 持久化在任务暂存区的分段清单，重启后据此复用有效分段。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct SegmentManifest {
+    url: String,
+    total: u64,
+    etag: Option<String>,
+    last_modified: Option<String>,
+    segments: Vec<SegmentState>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct SegmentState {
+    index: u32,
+    start: u64,
+    end: u64,
+    completed: u64,
+    done: bool,
+}
+
+/// 单文件进入分段下载的阈值与单文件分段数上限。
+const SEGMENT_MIN_SIZE_BYTES: u64 = 8 * 1024 * 1024;
+const SEGMENT_TARGET_BYTES: u64 = 16 * 1024 * 1024;
+const SEGMENT_MAX_COUNT: u32 = 8;
+
+fn segment_plan(total: u64, target_bytes: u64) -> Vec<(u64, u64)> {
+    let count = total
+        .div_ceil(target_bytes)
+        .clamp(2, u64::from(SEGMENT_MAX_COUNT));
+    let base = total.div_ceil(count);
+    let mut plan = Vec::new();
+    let mut start = 0_u64;
+    while start < total {
+        let end = (start + base).min(total);
+        plan.push((start, end));
+        start = end;
+    }
+    plan
+}
+
+fn segment_file(segments_dir: &Path, index: u32) -> PathBuf {
+    segments_dir.join(format!("seg-{index:06}.part"))
+}
+
+fn manifest_path(segments_dir: &Path) -> PathBuf {
+    segments_dir.join("manifest.json")
+}
+
+fn load_manifest(segments_dir: &Path) -> Option<SegmentManifest> {
+    let payload = fs::read_to_string(manifest_path(segments_dir)).ok()?;
+    serde_json::from_str(&payload).ok()
+}
+
+fn save_manifest(segments_dir: &Path, manifest: &SegmentManifest) -> Result<()> {
+    fs::create_dir_all(segments_dir)?;
+    let target = manifest_path(segments_dir);
+    let temporary = segments_dir.join("manifest.json.tmp");
+    fs::write(&temporary, serde_json::to_string(manifest)?)?;
+    fs::rename(temporary, target)?;
+    Ok(())
+}
+
+/// 校验本地清单与分段文件一致性；不一致的分段重置为未下载。
+fn reconcile_manifest(segments_dir: &Path, manifest: &mut SegmentManifest) -> Result<()> {
+    for segment in &mut manifest.segments {
+        let path = segment_file(segments_dir, segment.index);
+        let length = path.metadata().map(|meta| meta.len()).unwrap_or(0);
+        let span = segment.end - segment.start;
+        if segment.done && length != span {
+            // 完成标记与文件长度不一致,按损坏处理并重新下载该分段。
+            segment.done = false;
+            segment.completed = 0;
+            let _ = fs::remove_file(&path);
+        } else if !segment.done {
+            if length > span {
+                let _ = fs::remove_file(&path);
+                segment.completed = 0;
+            } else {
+                segment.completed = length;
+            }
+        }
+    }
+    Ok(())
+}
+
+#[derive(Debug)]
+enum SegmentedFetch {
+    Completed { segment_count: u32 },
+    Degrade { reason: String },
+}
+
 #[derive(Debug, Clone)]
 pub struct ArtifactDownloader {
     client: Client,
     permits: Arc<Semaphore>,
+    segment_target_bytes: u64,
 }
 
 impl ArtifactDownloader {
@@ -107,7 +233,15 @@ impl ArtifactDownloader {
         Ok(Self {
             client,
             permits: Arc::new(Semaphore::new(max_concurrent_downloads)),
+            segment_target_bytes: SEGMENT_TARGET_BYTES,
         })
+    }
+
+    /// 覆盖单文件分段目标大小(下限 1 MiB)。供受控基准使用,生产保持默认值。
+    #[must_use]
+    pub fn with_segment_target_bytes(mut self, bytes: u64) -> Self {
+        self.segment_target_bytes = bytes.max(1024 * 1024);
+        self
     }
 
     pub async fn fetch(
@@ -127,6 +261,316 @@ impl ArtifactDownloader {
         shared_root: &Path,
         interrupt: Option<&DownloadInterrupt>,
     ) -> Result<DownloadResult> {
+        let staged_file = safe_join(staging_root, &artifact.relative_path)?;
+        let shared_file = safe_join(shared_root, &artifact.relative_path)?;
+        if let Some(reused) = self
+            .reuse_check(artifact, &staged_file, &shared_file)
+            .await?
+        {
+            return Ok(reused);
+        }
+        self.download_single(artifact, &artifact.url, &staged_file, interrupt)
+            .await
+    }
+
+    async fn reuse_check(
+        &self,
+        artifact: &ResolvedArtifact,
+        staged_file: &Path,
+        shared_file: &Path,
+    ) -> Result<Option<DownloadResult>> {
+        if file_matches(shared_file, artifact).await? {
+            return Ok(Some(DownloadResult {
+                staged_file: shared_file.to_path_buf(),
+                disposition: DownloadDisposition::ReusedShared,
+                bytes: artifact.size,
+            }));
+        }
+        if file_matches(staged_file, artifact).await? {
+            return Ok(Some(DownloadResult {
+                staged_file: staged_file.to_path_buf(),
+                disposition: DownloadDisposition::ReusedStaged,
+                bytes: artifact.size,
+            }));
+        }
+        Ok(None)
+    }
+
+    /// 按来源策略为工件生成候选并逐个尝试,记录每次尝试与真实来源。
+    pub async fn fetch_with_policy(
+        &self,
+        artifact: &ResolvedArtifact,
+        staging_root: &Path,
+        shared_root: &Path,
+        policy: &SourcePolicy,
+        interrupt: Option<&DownloadInterrupt>,
+    ) -> Result<FetchReport> {
+        let candidates = match candidates_for(&artifact.url, policy) {
+            SourceCandidates::Ready(candidates) => candidates,
+            SourceCandidates::CurseForgeOfficialUnavailable { mirror } => {
+                return Err(CoreError::Download(format!(
+                    "CurseForge 官方源不可用,不会发起官方直连;请切换内置镜像优先,或使用 MCI Mirror 路径:{}",
+                    mirror.url
+                )));
+            }
+            SourceCandidates::CustomUnsupported { reason } => {
+                return Err(CoreError::Download(reason));
+            }
+        };
+        if candidates.is_empty() {
+            return Err(CoreError::Download("没有可用的下载来源".to_owned()));
+        }
+        self.fetch_with_candidates(artifact, staging_root, shared_root, &candidates, interrupt)
+            .await
+    }
+
+    /// 按给定顺序尝试候选来源。自定义源绝不回退,其余渠道按策略顺序回退并记录。
+    pub async fn fetch_with_candidates(
+        &self,
+        artifact: &ResolvedArtifact,
+        staging_root: &Path,
+        shared_root: &Path,
+        candidates: &[DownloadCandidate],
+        interrupt: Option<&DownloadInterrupt>,
+    ) -> Result<FetchReport> {
+        let mut attempts: Vec<SourceAttempt> = Vec::new();
+        let mut last_error: Option<CoreError> = None;
+        for candidate in candidates {
+            match self
+                .fetch_from_candidate(artifact, staging_root, shared_root, candidate, interrupt)
+                .await
+            {
+                Ok(mut report) => {
+                    attempts.push(SourceAttempt {
+                        url: candidate.url.clone(),
+                        label: candidate.label.clone(),
+                        channel: candidate.channel,
+                        outcome: SourceAttemptOutcome::Success,
+                    });
+                    report.attempts = attempts;
+                    return Ok(report);
+                }
+                Err(CoreError::TaskPaused) => return Err(CoreError::TaskPaused),
+                Err(error) => {
+                    // 自定义源绝不切换;内置镜像与官方源之间允许按策略回退并记录。
+                    attempts.push(SourceAttempt {
+                        url: candidate.url.clone(),
+                        label: candidate.label.clone(),
+                        channel: candidate.channel,
+                        outcome: SourceAttemptOutcome::Failed {
+                            error: error.to_string(),
+                        },
+                    });
+                    last_error = Some(error);
+                    if candidate.channel == SourceChannel::Custom {
+                        break;
+                    }
+                }
+            }
+        }
+        Err(last_error.unwrap_or_else(|| CoreError::Download("没有可用的下载来源".to_owned())))
+    }
+
+    async fn fetch_from_candidate(
+        &self,
+        artifact: &ResolvedArtifact,
+        staging_root: &Path,
+        shared_root: &Path,
+        candidate: &DownloadCandidate,
+        interrupt: Option<&DownloadInterrupt>,
+    ) -> Result<FetchReport> {
+        let staged_file = safe_join(staging_root, &artifact.relative_path)?;
+        let shared_file = safe_join(shared_root, &artifact.relative_path)?;
+        if let Some(reused) = self
+            .reuse_check(artifact, &staged_file, &shared_file)
+            .await?
+        {
+            return Ok(FetchReport {
+                result: reused,
+                final_label: "本地缓存复用".to_owned(),
+                channel: candidate.channel,
+                attempts: Vec::new(),
+                segmented: false,
+                segment_count: 0,
+                degraded_reason: None,
+                reused_local: true,
+            });
+        }
+        let has_trusted_hash =
+            artifact.sha1.is_some() || artifact.sha256.is_some() || artifact.sha512.is_some();
+        let eligible = artifact.size >= SEGMENT_MIN_SIZE_BYTES && has_trusted_hash;
+        if eligible {
+            match self
+                .fetch_segmented(artifact, candidate, &staged_file, interrupt)
+                .await?
+            {
+                SegmentedFetch::Completed { segment_count } => {
+                    let partial_file = partial_path(&staged_file);
+                    verify_file(&partial_file, artifact).await?;
+                    replace_file(&partial_file, &staged_file).await?;
+                    return Ok(FetchReport {
+                        result: DownloadResult {
+                            staged_file,
+                            disposition: DownloadDisposition::Downloaded,
+                            bytes: artifact.size,
+                        },
+                        final_label: candidate.label.clone(),
+                        channel: candidate.channel,
+                        attempts: Vec::new(),
+                        segmented: true,
+                        segment_count,
+                        degraded_reason: None,
+                        reused_local: false,
+                    });
+                }
+                SegmentedFetch::Degrade { reason } => {
+                    // 降级原因意味着分段不可用或不可信,清理后走单连接。
+                    let _ = fs::remove_dir_all(staged_file.with_extension("segments"));
+                    let result = self
+                        .download_single(artifact, &candidate.url, &staged_file, interrupt)
+                        .await?;
+                    return Ok(FetchReport {
+                        result,
+                        final_label: candidate.label.clone(),
+                        channel: candidate.channel,
+                        attempts: Vec::new(),
+                        segmented: false,
+                        segment_count: 0,
+                        degraded_reason: Some(reason),
+                        reused_local: false,
+                    });
+                }
+            }
+        }
+        let result = self
+            .download_single(artifact, &candidate.url, &staged_file, interrupt)
+            .await?;
+        Ok(FetchReport {
+            result,
+            final_label: candidate.label.clone(),
+            channel: candidate.channel,
+            attempts: Vec::new(),
+            segmented: false,
+            segment_count: 0,
+            degraded_reason: None,
+            reused_local: false,
+        })
+    }
+
+    /// 大文件分段并行下载。Range 违规或对象证据变化时安全降级。
+    async fn fetch_segmented(
+        &self,
+        artifact: &ResolvedArtifact,
+        candidate: &DownloadCandidate,
+        staged_file: &Path,
+        interrupt: Option<&DownloadInterrupt>,
+    ) -> Result<SegmentedFetch> {
+        let segments_dir = staged_file.with_extension("segments");
+        let total = artifact.size;
+        // 既有清单:来源或总长度不一致时整体废弃,不保留任何旧分段。
+        let mut manifest = match load_manifest(&segments_dir) {
+            Some(mut existing) if existing.url == candidate.url && existing.total == total => {
+                reconcile_manifest(&segments_dir, &mut existing)?;
+                existing
+            }
+            Some(_) => {
+                let _ = fs::remove_dir_all(&segments_dir);
+                new_manifest(&candidate.url, total, self.segment_target_bytes)
+            }
+            None => new_manifest(&candidate.url, total, self.segment_target_bytes),
+        };
+        save_manifest(&segments_dir, &manifest)?;
+
+        let pending: Vec<SegmentState> = manifest
+            .segments
+            .iter()
+            .filter(|segment| !segment.done)
+            .cloned()
+            .collect();
+        if pending.is_empty() {
+            return merge_segments(&segments_dir, &manifest, &partial_path(staged_file)).await;
+        }
+
+        let outcomes = stream::iter(pending)
+            .map(|segment| {
+                let client = self.client.clone();
+                let permits = Arc::clone(&self.permits);
+                let segments_dir = segments_dir.clone();
+                let expected_etag = manifest.etag.clone();
+                let expected_last_modified = manifest.last_modified.clone();
+                async move {
+                    download_segment(
+                        client,
+                        permits,
+                        &candidate.url,
+                        &segment,
+                        total,
+                        &segments_dir,
+                        expected_etag,
+                        expected_last_modified,
+                        interrupt,
+                    )
+                    .await
+                }
+            })
+            .buffer_unordered(4)
+            .collect::<Vec<_>>()
+            .await;
+
+        for outcome in outcomes {
+            match outcome? {
+                SegmentOutcome::Completed {
+                    index,
+                    etag,
+                    last_modified,
+                } => {
+                    // 分段间对象证据必须一致,否则远端对象不可信,整体降级。
+                    if let Some(etag) = &etag {
+                        if let Some(expected) = &manifest.etag {
+                            if expected != etag {
+                                return Ok(SegmentedFetch::Degrade {
+                                    reason: "分段间 ETag 不一致,远端对象已变化".to_owned(),
+                                });
+                            }
+                        } else {
+                            manifest.etag = Some(etag.clone());
+                        }
+                    }
+                    if let Some(last_modified) = &last_modified {
+                        if let Some(expected) = &manifest.last_modified {
+                            if expected != last_modified {
+                                return Ok(SegmentedFetch::Degrade {
+                                    reason: "分段间 Last-Modified 不一致,远端对象已变化".to_owned(),
+                                });
+                            }
+                        } else {
+                            manifest.last_modified = Some(last_modified.clone());
+                        }
+                    }
+                    let segment = manifest
+                        .segments
+                        .iter_mut()
+                        .find(|entry| entry.index == index)
+                        .ok_or_else(|| CoreError::Download("分段清单不一致".to_owned()))?;
+                    segment.completed = segment.end - segment.start;
+                    segment.done = true;
+                    save_manifest(&segments_dir, &manifest)?;
+                }
+                SegmentOutcome::Degrade { reason } => {
+                    return Ok(SegmentedFetch::Degrade { reason });
+                }
+            }
+        }
+        merge_segments(&segments_dir, &manifest, &partial_path(staged_file)).await
+    }
+
+    async fn download_single(
+        &self,
+        artifact: &ResolvedArtifact,
+        url: &str,
+        staged_file: &Path,
+        interrupt: Option<&DownloadInterrupt>,
+    ) -> Result<DownloadResult> {
         if interrupt.is_some_and(DownloadInterrupt::is_interrupted) {
             return Err(CoreError::TaskPaused);
         }
@@ -135,28 +579,11 @@ impl ArtifactDownloader {
             .acquire()
             .await
             .map_err(|_| CoreError::Download("下载协调器已经关闭".to_owned()))?;
-        let staged_file = safe_join(staging_root, &artifact.relative_path)?;
-        let shared_file = safe_join(shared_root, &artifact.relative_path)?;
-
-        if file_matches(&shared_file, artifact).await? {
-            return Ok(DownloadResult {
-                staged_file: shared_file,
-                disposition: DownloadDisposition::ReusedShared,
-                bytes: artifact.size,
-            });
-        }
-        if file_matches(&staged_file, artifact).await? {
-            return Ok(DownloadResult {
-                staged_file,
-                disposition: DownloadDisposition::ReusedStaged,
-                bytes: artifact.size,
-            });
-        }
         if let Some(parent) = staged_file.parent() {
             tokio::fs::create_dir_all(parent).await?;
         }
 
-        let partial_file = partial_path(&staged_file);
+        let partial_file = partial_path(staged_file);
         let mut existing_length = file_length(&partial_file).await?;
         let mut forced_restart = false;
         if artifact.size > 0 && existing_length > artifact.size {
@@ -165,15 +592,15 @@ impl ArtifactDownloader {
             forced_restart = true;
         }
         if existing_length > 0 && file_matches(&partial_file, artifact).await? {
-            replace_file(&partial_file, &staged_file).await?;
+            replace_file(&partial_file, staged_file).await?;
             return Ok(DownloadResult {
-                staged_file,
+                staged_file: staged_file.to_path_buf(),
                 disposition: DownloadDisposition::ReusedStaged,
                 bytes: artifact.size,
             });
         }
 
-        let mut request = self.client.get(&artifact.url);
+        let mut request = self.client.get(url);
         if existing_length > 0 {
             request = request.header(header::RANGE, format!("bytes={existing_length}-"));
         }
@@ -201,20 +628,17 @@ impl ArtifactDownloader {
         } else if status == StatusCode::RANGE_NOT_SATISFIABLE && existing_length > 0 {
             truncate_file(&partial_file).await?;
             return self
-                .fetch_without_resume(artifact, &partial_file, &staged_file, interrupt)
+                .fetch_without_resume(artifact, url, &partial_file, staged_file, interrupt)
                 .await;
         } else {
-            return Err(CoreError::Download(format!(
-                "{} 返回 HTTP {}",
-                artifact.url, status
-            )));
+            return Err(CoreError::Download(format!("{} 返回 HTTP {}", url, status)));
         };
 
         write_response(response, &partial_file, append, interrupt).await?;
         verify_file(&partial_file, artifact).await?;
-        replace_file(&partial_file, &staged_file).await?;
+        replace_file(&partial_file, staged_file).await?;
         Ok(DownloadResult {
-            staged_file,
+            staged_file: staged_file.to_path_buf(),
             disposition,
             bytes: artifact.size,
         })
@@ -223,6 +647,7 @@ impl ArtifactDownloader {
     async fn fetch_without_resume(
         &self,
         artifact: &ResolvedArtifact,
+        url: &str,
         partial_file: &Path,
         staged_file: &Path,
         interrupt: Option<&DownloadInterrupt>,
@@ -230,11 +655,11 @@ impl ArtifactDownloader {
         if interrupt.is_some_and(DownloadInterrupt::is_interrupted) {
             return Err(CoreError::TaskPaused);
         }
-        let response = self.client.get(&artifact.url).send().await?;
+        let response = self.client.get(url).send().await?;
         if response.status() != StatusCode::OK {
             return Err(CoreError::Download(format!(
                 "{} 重新下载时返回 HTTP {}",
-                artifact.url,
+                url,
                 response.status()
             )));
         }
@@ -247,6 +672,199 @@ impl ArtifactDownloader {
             bytes: artifact.size,
         })
     }
+}
+
+fn new_manifest(url: &str, total: u64, target_bytes: u64) -> SegmentManifest {
+    SegmentManifest {
+        url: url.to_owned(),
+        total,
+        etag: None,
+        last_modified: None,
+        segments: segment_plan(total, target_bytes)
+            .into_iter()
+            .enumerate()
+            .map(|(index, (start, end))| SegmentState {
+                index: index as u32,
+                start,
+                end,
+                completed: 0,
+                done: false,
+            })
+            .collect(),
+    }
+}
+
+#[derive(Debug)]
+enum SegmentOutcome {
+    Completed {
+        index: u32,
+        etag: Option<String>,
+        last_modified: Option<String>,
+    },
+    Degrade {
+        reason: String,
+    },
+}
+
+/// 下载单个分段。Range 违规返回 Degrade,硬错误返回 Err(交由候选回退处理)。
+#[allow(clippy::too_many_arguments)]
+async fn download_segment(
+    client: Client,
+    permits: Arc<Semaphore>,
+    url: &str,
+    segment: &SegmentState,
+    total: u64,
+    segments_dir: &Path,
+    expected_etag: Option<String>,
+    expected_last_modified: Option<String>,
+    interrupt: Option<&DownloadInterrupt>,
+) -> Result<SegmentOutcome> {
+    let span = segment.end - segment.start;
+    let seg_path = segment_file(segments_dir, segment.index);
+    let completed = tokio::fs::metadata(&seg_path)
+        .await
+        .map(|meta| meta.len())
+        .unwrap_or(0);
+    if completed >= span {
+        return Ok(SegmentOutcome::Completed {
+            index: segment.index,
+            etag: None,
+            last_modified: None,
+        });
+    }
+    let _permit = permits
+        .acquire()
+        .await
+        .map_err(|_| CoreError::Download("下载协调器已经关闭".to_owned()))?;
+    let range_start = segment.start + completed;
+    let response = client
+        .get(url)
+        .header(
+            header::RANGE,
+            format!("bytes={range_start}-{}", segment.end - 1),
+        )
+        .send()
+        .await?;
+    let status = response.status();
+    if status == StatusCode::OK {
+        return Ok(SegmentOutcome::Degrade {
+            reason: "来源忽略 Range 分段请求,已降级为单连接续传".to_owned(),
+        });
+    }
+    if status == StatusCode::RANGE_NOT_SATISFIABLE {
+        return Ok(SegmentOutcome::Degrade {
+            reason: "分段范围被来源拒绝,已降级为单连接续传".to_owned(),
+        });
+    }
+    if status != StatusCode::PARTIAL_CONTENT {
+        return Err(CoreError::Download(format!(
+            "{url} 分段请求返回 HTTP {status}"
+        )));
+    }
+    let (range_begin, range_total) = parse_content_range(response.headers())?;
+    if range_begin != range_start || range_total != total {
+        return Ok(SegmentOutcome::Degrade {
+            reason: "分段响应范围与计划不一致,已降级为单连接续传".to_owned(),
+        });
+    }
+    let etag = response
+        .headers()
+        .get(header::ETAG)
+        .and_then(|value| value.to_str().ok())
+        .map(str::to_owned);
+    let last_modified = response
+        .headers()
+        .get(header::LAST_MODIFIED)
+        .and_then(|value| value.to_str().ok())
+        .map(str::to_owned);
+    if let (Some(expected), Some(actual)) = (&expected_etag, &etag)
+        && expected != actual
+    {
+        return Ok(SegmentOutcome::Degrade {
+            reason: "远端对象 ETag 已变化,废弃旧分段".to_owned(),
+        });
+    }
+    if let (Some(expected), Some(actual)) = (&expected_last_modified, &last_modified)
+        && expected != actual
+    {
+        return Ok(SegmentOutcome::Degrade {
+            reason: "远端对象 Last-Modified 已变化,废弃旧分段".to_owned(),
+        });
+    }
+    write_response(response, &seg_path, true, interrupt).await?;
+    Ok(SegmentOutcome::Completed {
+        index: segment.index,
+        etag,
+        last_modified,
+    })
+}
+
+/// 合并全部分段到最终暂存文件并清理分段目录。合并后由调用方执行完整校验。
+async fn merge_segments(
+    segments_dir: &Path,
+    manifest: &SegmentManifest,
+    partial_file: &Path,
+) -> Result<SegmentedFetch> {
+    if manifest.segments.iter().any(|segment| !segment.done) {
+        return Err(CoreError::Download("存在未完成分段,不能合并".to_owned()));
+    }
+    if let Some(parent) = partial_file.parent() {
+        tokio::fs::create_dir_all(parent).await?;
+    }
+    let mut output = OpenOptions::new()
+        .create(true)
+        .write(true)
+        .truncate(true)
+        .open(partial_file)
+        .await?;
+    let mut buffer = vec![0_u8; 256 * 1024];
+    for segment in &manifest.segments {
+        let mut input = File::open(segment_file(segments_dir, segment.index)).await?;
+        loop {
+            let read = input.read(&mut buffer).await?;
+            if read == 0 {
+                break;
+            }
+            output.write_all(&buffer[..read]).await?;
+        }
+    }
+    output.flush().await?;
+    output.sync_data().await?;
+    drop(output);
+    let merged_length = tokio::fs::metadata(partial_file).await?.len();
+    if merged_length != manifest.total {
+        return Err(CoreError::Download(format!(
+            "合并长度 {merged_length} 与计划总长度 {} 不一致",
+            manifest.total
+        )));
+    }
+    let _ = tokio::fs::remove_dir_all(segments_dir).await;
+    Ok(SegmentedFetch::Completed {
+        segment_count: u32::try_from(manifest.segments.len()).unwrap_or(SEGMENT_MAX_COUNT),
+    })
+}
+
+fn parse_content_range(headers: &header::HeaderMap) -> Result<(u64, u64)> {
+    let value = headers
+        .get(header::CONTENT_RANGE)
+        .and_then(|value| value.to_str().ok())
+        .ok_or_else(|| CoreError::Download("分段响应缺少 Content-Range".to_owned()))?;
+    let range = value
+        .strip_prefix("bytes ")
+        .ok_or_else(|| CoreError::Download(format!("Content-Range 格式无效:{value}")))?;
+    let (span, total) = range
+        .split_once('/')
+        .ok_or_else(|| CoreError::Download(format!("Content-Range 格式无效:{value}")))?;
+    let (start, _end) = span
+        .split_once('-')
+        .ok_or_else(|| CoreError::Download(format!("Content-Range 格式无效:{value}")))?;
+    let start: u64 = start
+        .parse()
+        .map_err(|_| CoreError::Download(format!("Content-Range 起点无效:{value}")))?;
+    let total: u64 = total
+        .parse()
+        .map_err(|_| CoreError::Download(format!("Content-Range 总长无效:{value}")))?;
+    Ok((start, total))
 }
 
 #[derive(Debug, Clone)]
@@ -330,6 +948,7 @@ impl ContentExecutor {
         let staging_directory = PathBuf::from(&task.staging_directory);
         let download_directory = staging_directory.join("downloads");
         let shared_directory = PathBuf::from(&task.shared_store_directory);
+        let policy = service.download_source_policy()?;
         let downloads = self
             .download_batch(
                 artifacts.clone(),
@@ -340,9 +959,18 @@ impl ContentExecutor {
                     shared_directory: &shared_directory,
                     total,
                     interrupt: interrupt.as_ref(),
+                    policy: &policy,
                 },
             )
             .await?;
+        if let Some(detail) = crate::TaskSourceDetail::summarize(
+            &downloads
+                .iter()
+                .map(|(_, report)| report)
+                .collect::<Vec<_>>(),
+        ) {
+            service.set_content_task_source_detail(&task.id, &detail)?;
+        }
         service.set_content_task_phase(
             &task.id,
             TaskState::Running,
@@ -350,8 +978,8 @@ impl ContentExecutor {
             "所有模组文件已通过大小、SHA-1 和 SHA-512 校验",
         )?;
 
-        for (artifact, result) in &downloads {
-            commit_shared_file(artifact, result, &shared_directory, &task.id).await?;
+        for (artifact, report) in &downloads {
+            commit_shared_file(artifact, &report.result, &shared_directory, &task.id).await?;
         }
         let publish_directory = staging_directory.join("publish");
         if tokio::fs::try_exists(&publish_directory).await? {
@@ -426,7 +1054,7 @@ impl ContentExecutor {
         &self,
         artifacts: Vec<ResolvedArtifact>,
         context: ContentDownloadContext<'_>,
-    ) -> Result<Vec<(ResolvedArtifact, DownloadResult)>> {
+    ) -> Result<Vec<(ResolvedArtifact, FetchReport)>> {
         let completed = Arc::new(AtomicU64::new(0));
         let downloader = self.downloader.clone();
         stream::iter(artifacts)
@@ -438,12 +1066,14 @@ impl ContentExecutor {
                 let staging_directory = context.staging_directory.to_path_buf();
                 let shared_directory = context.shared_directory.to_path_buf();
                 let total = context.total;
+                let policy = context.policy.clone();
                 async move {
-                    let result = downloader
-                        .fetch_with_interrupt(
+                    let report = downloader
+                        .fetch_with_policy(
                             &artifact,
                             &staging_directory,
                             &shared_directory,
+                            &policy,
                             context.interrupt,
                         )
                         .await?;
@@ -456,7 +1086,7 @@ impl ContentExecutor {
                         total,
                         &artifact.relative_path,
                     )?;
-                    Ok::<_, CoreError>((artifact, result))
+                    Ok::<_, CoreError>((artifact, report))
                 }
             })
             .buffer_unordered(self.max_concurrent_downloads)
@@ -472,6 +1102,7 @@ struct ContentDownloadContext<'a> {
     shared_directory: &'a Path,
     total: u64,
     interrupt: Option<&'a DownloadInterrupt>,
+    policy: &'a SourcePolicy,
 }
 
 fn content_artifact(entry: &ContentPlanEntry) -> Result<ResolvedArtifact> {
@@ -660,6 +1291,7 @@ impl InstallExecutor {
             .iter()
             .fold(0_u64, |total, artifact| total.saturating_add(artifact.size));
         let estimated_total = base_total.saturating_add(task.plan.game.asset_objects_total_bytes);
+        let policy = service.download_source_policy()?;
         service.set_task_progress(&task.id, 0, Some(estimated_total), Some("等待下载游戏文件"))?;
         service.set_task_phase(
             &task.id,
@@ -678,6 +1310,7 @@ impl InstallExecutor {
                     shared_root: shared_directory.clone(),
                     completed_before: 0,
                     total: estimated_total,
+                    policy: policy.clone(),
                 },
                 interrupt.as_ref(),
             )
@@ -689,7 +1322,7 @@ impl InstallExecutor {
         let asset_index_path = downloads
             .iter()
             .find(|(artifact, _)| artifact.kind == ArtifactKind::AssetIndex)
-            .map(|(_, result)| result.staged_file.clone())
+            .map(|(_, report)| report.result.staged_file.clone())
             .ok_or_else(|| CoreError::InvalidInstallRequest("安装计划缺少资源索引".to_owned()))?;
         let asset_artifacts = self.asset_artifacts(&asset_index_path).await?;
         let actual_asset_total = asset_artifacts
@@ -712,11 +1345,20 @@ impl InstallExecutor {
                     shared_root: shared_directory.clone(),
                     completed_before: completed_base,
                     total: actual_total,
+                    policy,
                 },
                 interrupt.as_ref(),
             )
             .await?;
         downloads.extend(asset_downloads);
+        if let Some(detail) = crate::TaskSourceDetail::summarize(
+            &downloads
+                .iter()
+                .map(|(_, report)| report)
+                .collect::<Vec<_>>(),
+        ) {
+            service.set_task_source_detail(&task.id, &detail)?;
+        }
 
         service.set_task_phase(
             &task.id,
@@ -737,9 +1379,9 @@ impl InstallExecutor {
         let runtime = build_runtime_manifest(task, &java_home, &downloads);
         let staged_instance = prepare_instance_directory(task, &runtime, &staging_directory)?;
         extract_native_libraries(&downloads, &staged_instance, &staging_directory)?;
-        for (artifact, result) in &downloads {
+        for (artifact, report) in &downloads {
             if artifact.kind != ArtifactKind::JavaArchive {
-                commit_shared_file(artifact, result, &shared_directory, &task.id).await?;
+                commit_shared_file(artifact, &report.result, &shared_directory, &task.id).await?;
             }
         }
         let target_directory = PathBuf::from(&task.target_directory);
@@ -775,7 +1417,7 @@ impl InstallExecutor {
         artifacts: Vec<ResolvedArtifact>,
         context: DownloadBatchContext,
         interrupt: Option<&DownloadInterrupt>,
-    ) -> Result<Vec<(ResolvedArtifact, DownloadResult)>> {
+    ) -> Result<Vec<(ResolvedArtifact, FetchReport)>> {
         let completed = Arc::new(AtomicU64::new(context.completed_before));
         let downloader = self.downloader.clone();
         stream::iter(artifacts)
@@ -787,9 +1429,16 @@ impl InstallExecutor {
                 let staging_root = context.staging_root.clone();
                 let shared_root = context.shared_root.clone();
                 let total = context.total;
+                let policy = context.policy.clone();
                 async move {
-                    let result = downloader
-                        .fetch_with_interrupt(&artifact, &staging_root, &shared_root, interrupt)
+                    let report = downloader
+                        .fetch_with_policy(
+                            &artifact,
+                            &staging_root,
+                            &shared_root,
+                            &policy,
+                            interrupt,
+                        )
                         .await?;
                     let finished = completed
                         .fetch_add(artifact.size, Ordering::AcqRel)
@@ -800,7 +1449,7 @@ impl InstallExecutor {
                         Some(total),
                         Some(&artifact.relative_path),
                     )?;
-                    Ok::<_, CoreError>((artifact, result))
+                    Ok::<_, CoreError>((artifact, report))
                 }
             })
             .buffer_unordered(self.max_concurrent_downloads)
@@ -899,7 +1548,7 @@ impl InstallExecutor {
         &self,
         service: &AppService,
         task: &InstallTask,
-        downloads: &[(ResolvedArtifact, DownloadResult)],
+        downloads: &[(ResolvedArtifact, FetchReport)],
         staging_directory: &Path,
     ) -> Result<(String, String)> {
         service.set_task_phase(
@@ -943,7 +1592,7 @@ impl InstallExecutor {
                 let archive = downloads
                     .iter()
                     .find(|(artifact, _)| artifact.kind == ArtifactKind::JavaArchive)
-                    .map(|(_, result)| result.staged_file.clone())
+                    .map(|(_, report)| report.result.staged_file.clone())
                     .ok_or_else(|| {
                         CoreError::InvalidStoredState("Java 安装包没有完成下载".to_owned())
                     })?;
@@ -997,6 +1646,7 @@ struct DownloadBatchContext {
     shared_root: PathBuf,
     completed_before: u64,
     total: u64,
+    policy: SourcePolicy,
 }
 
 #[derive(Debug, Deserialize)]
@@ -1196,14 +1846,14 @@ fn rule_applies(rule: &RuntimeRule) -> Result<bool> {
 }
 
 fn extract_native_libraries(
-    downloads: &[(ResolvedArtifact, DownloadResult)],
+    downloads: &[(ResolvedArtifact, FetchReport)],
     staged_instance: &Path,
     staging_directory: &Path,
 ) -> Result<()> {
     let natives_directory = staged_instance.join("natives");
     let mut extracted_dlls = 0_usize;
     let mut native_archives = 0_usize;
-    for (index, (_, result)) in downloads
+    for (index, (_, report)) in downloads
         .iter()
         .filter(|(artifact, _)| artifact.kind == ArtifactKind::NativeLibrary)
         .enumerate()
@@ -1214,7 +1864,7 @@ fn extract_native_libraries(
             fs::remove_dir_all(&temporary)?;
         }
         extract_zip_safely(
-            &result.staged_file,
+            &report.result.staged_file,
             &temporary,
             ArchiveLimits::natives_default(),
         )?;
@@ -1353,7 +2003,7 @@ fn prepare_instance_directory(
 fn build_runtime_manifest(
     task: &InstallTask,
     java_home: &str,
-    downloads: &[(ResolvedArtifact, DownloadResult)],
+    downloads: &[(ResolvedArtifact, FetchReport)],
 ) -> serde_json::Value {
     let classpath: Vec<&str> = downloads
         .iter()

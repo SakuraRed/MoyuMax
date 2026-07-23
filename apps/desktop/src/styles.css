@@ -2745,6 +2745,18 @@ summary:focus-visible {
   line-height: 1.5;
 }
 
+.task-source {
+  margin: 8px 0 0;
+  padding: 6px 10px;
+  border-radius: 6px;
+  background: color-mix(in srgb, var(--info) 7%, var(--surface-2));
+  color: var(--text-2);
+  font-family: "Cascadia Mono", Consolas, monospace;
+  font-size: 11px;
+  line-height: 1.5;
+  word-break: break-all;
+}
+
 .data-content {
   padding: 0;
   overflow: hidden;
