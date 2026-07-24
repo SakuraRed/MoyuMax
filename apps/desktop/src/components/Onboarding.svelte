@@ -176,7 +176,6 @@
               {/each}
             </div>
           </fieldset>
-          <p class="hint">{t("onboarding.language.hint")}</p>
         </div>
         <footer class="wizard-actions">
           <span><button class="inline-link" onclick={() => void skip()}>{t("onboarding.skip")}</button></span>
@@ -287,7 +286,6 @@
               <span class="switch" aria-hidden="true"></span>
             </label>
           </div>
-          <p class="hint">{t("onboarding.privacy.hint")}</p>
         </div>
         <footer class="wizard-actions">
           <span><button class="inline-link" onclick={() => void skip()}>{t("onboarding.skip")}</button></span>

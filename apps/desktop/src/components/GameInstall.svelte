@@ -20,6 +20,7 @@
     ModpackProgressEvent,
     ModpackPreviewResponse,
     MoyuRuntime,
+    NavigationKey,
     OnboardingSelection,
     VersionCatalog,
   } from "../runtime";
@@ -30,6 +31,7 @@
     runtime: MoyuRuntime;
     settings: OnboardingSelection;
     onBack: () => void;
+    onNavigate: (target: NavigationKey) => void;
     onMinimize: () => Promise<void>;
     onToggleMaximize: () => Promise<void>;
     onClose: () => Promise<void>;
@@ -41,6 +43,7 @@
     runtime,
     settings,
     onBack,
+    onNavigate,
     onMinimize,
     onToggleMaximize,
     onClose,
@@ -356,6 +359,7 @@
   activeNavigation={view === "queued" ? "tasks" : "instances"}
   connectionStatus={catalog?.source === "cache" ? t("install.connection.cache") : t("install.connection.online")}
   taskStatus={task ? t("install.taskStatus.active").replace("{state}", taskStateLabel(task)) : t("shell.status.noTasks")}
+  {onNavigate}
   {onMinimize}
   {onToggleMaximize}
   {onClose}
@@ -371,10 +375,8 @@
     {:else if view === "configure"}
       <div class="install-scroll" data-scroll-region="main">
         <header class="install-heading">
-          <button class="button ghost compact" aria-label={t("settings.back")} onclick={onBack}>{t("install.back")}</button>
           <div>
             <h1>{t("home.empty.installFirst")}</h1>
-            <p>{t("install.heading.description")}</p>
           </div>
         </header>
 
@@ -582,7 +584,7 @@
       <div class="install-scroll confirm-layout" data-scroll-region="main">
         <header class="install-heading">
           <button class="button ghost compact" disabled={view === "queueing"} onclick={returnToConfiguration}>{t("install.confirm.backEdit")}</button>
-          <div><h1>{t("install.confirm.heading")}</h1><p>{t("install.confirm.description")}</p></div>
+          <div><h1>{t("install.confirm.heading")}</h1></div>
         </header>
         {#if errorMessage}
           <div class="error-block" role="alert"><strong>{t("install.confirm.errorTitle")}</strong><span>{errorMessage}</span></div>

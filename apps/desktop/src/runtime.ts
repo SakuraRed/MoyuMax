@@ -195,6 +195,8 @@ export interface RecyclePurgeResult {
 
 export type ModrinthSearchIndex = "relevance" | "downloads" | "follows" | "newest" | "updated";
 
+export type ModrinthProjectType = "mod" | "modpack" | "shader" | "resourcepack";
+
 export interface ModrinthSearchQuery {
   query: string;
   gameVersion: string;
@@ -202,6 +204,8 @@ export interface ModrinthSearchQuery {
   index: ModrinthSearchIndex;
   offset: number;
   limit: number;
+  /** 搜索的项目类型；缺省为模组。 */
+  projectType?: ModrinthProjectType;
 }
 
 export interface ModrinthProjectSummary {
@@ -365,6 +369,8 @@ export interface WorldBackupSettings {
   intervalMinutes: number;
   keepCount: number;
 }
+
+export type NavigationKey = "home" | "instances" | "resources" | "tasks" | "data" | "settings";
 
 export type AccountKind = "offline" | "authlib" | "microsoft";
 export type AccountSessionState = "valid" | "expired";
@@ -743,6 +749,14 @@ export interface MoyuRuntime {
   installModpack(previewId: string): Promise<ModpackInstallReport>;
   updateModpack(instanceId: string, sourcePath: string): Promise<ModpackUpdateReport>;
   getInstanceModpack(instanceId: string): Promise<InstalledModpack | null>;
+  /** 在线整合包预览：下载并解析 Modrinth 整合包后返回预览，确认走 installModpack。 */
+  previewOnlineModpack(projectId: string): Promise<ModpackPreviewResponse>;
+  /** 在线光影/资源包安装：按实例版本解析、下载校验后导入实例。 */
+  installOnlineResource(
+    instanceId: string,
+    kind: InstanceResourceKind,
+    projectId: string,
+  ): Promise<InstanceResource>;
   /** 订阅整合包安装/更新进度事件，返回取消订阅函数。 */
   onModpackProgress(handler: (event: ModpackProgressEvent) => void): () => void;
   retryContentTask(taskId: string): Promise<void>;
@@ -1064,6 +1078,10 @@ function createTauriRuntime(): MoyuRuntime {
       invoke<ModpackUpdateReport>("update_modpack", { instanceId, sourcePath }),
     getInstanceModpack: (instanceId) =>
       invoke<InstalledModpack | null>("get_instance_modpack", { instanceId }),
+    previewOnlineModpack: (projectId) =>
+      invoke<ModpackPreviewResponse>("preview_online_modpack", { projectId }),
+    installOnlineResource: (instanceId, kind, projectId) =>
+      invoke<InstanceResource>("install_online_resource", { instanceId, kind, projectId }),
     onModpackProgress: (handler) => {
       let unlisten: (() => void) | undefined;
       void listen<ModpackProgressEvent>("modpack-progress", (event) => {
@@ -1955,6 +1973,45 @@ function createBrowserRuntime(): MoyuRuntime {
       if (!serialized) throw new Error("整合包缺少 modrinth.index.json 或 manifest.json");
       const preview = JSON.parse(serialized) as ModpackPreview;
       return { id: crypto.randomUUID(), preview };
+    },
+    async previewOnlineModpack(projectId) {
+      if (!projectId) throw new Error("Modrinth 项目 ID 格式无效");
+      const serialized = window.localStorage.getItem("moyumax.browser.modpackPreview");
+      if (!serialized) throw new Error("整合包缺少 modrinth.index.json 或 manifest.json");
+      const preview = JSON.parse(serialized) as ModpackPreview;
+      return { id: crypto.randomUUID(), preview };
+    },
+    async installOnlineResource(instanceId, kind, projectId) {
+      if (!projectId) throw new Error("Modrinth 项目 ID 格式无效");
+      if (kind !== "resourcepack" && kind !== "shader") {
+        throw new Error("在线安装仅支持资源包与光影");
+      }
+      const instance = browserInstances().find((candidate) => candidate.id === instanceId);
+      if (!instance) throw new Error("目标实例不存在");
+      const fileName = `${projectId}.zip`;
+      const resources = browserInstanceResources();
+      const resource: InstanceResource = {
+        id: crypto.randomUUID(),
+        instanceId,
+        kind,
+        displayName: projectId,
+        fileName,
+        relativePath:
+          kind === "shader"
+            ? `.minecraft/shaderpacks/${fileName}`
+            : `.minecraft/resourcepacks/${fileName}`,
+        size: 1024,
+        sha256: "3".repeat(64),
+        enabled: true,
+        worldName: null,
+        importedAtUnixSeconds: Math.floor(Date.now() / 1000),
+      };
+      resources.push(resource);
+      window.localStorage.setItem(
+        BROWSER_INSTANCE_RESOURCES_KEY,
+        JSON.stringify(resources),
+      );
+      return resource;
     },
     async installModpack(previewId) {
       if (!previewId) throw new Error("整合包预览已失效，请重新选择文件");

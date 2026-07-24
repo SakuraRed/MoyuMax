@@ -9,6 +9,7 @@
     InstanceWorldInfo,
     ManagedInstance,
     MoyuRuntime,
+    NavigationKey,
     OnboardingSelection,
     RecycleBinItem,
     RecycleItemKind,
@@ -20,10 +21,8 @@
   interface Props {
     runtime: MoyuRuntime;
     settings: OnboardingSelection;
-    onBack: () => void;
-    onOpenResources: () => void;
-    onOpenTasks: () => void;
     onInstancesChanged: () => Promise<void>;
+    onNavigate: (target: NavigationKey) => void;
     onMinimize: () => Promise<void>;
     onToggleMaximize: () => Promise<void>;
     onClose: () => Promise<void>;
@@ -32,10 +31,8 @@
   let {
     runtime,
     settings,
-    onBack,
-    onOpenResources,
-    onOpenTasks,
     onInstancesChanged,
+    onNavigate,
     onMinimize,
     onToggleMaximize,
     onClose,
@@ -402,7 +399,7 @@
   pageTitle={t("nav.data")}
   dataDirectory={settings.dataDirectory}
   activeNavigation="data"
-  onNavigate={(target) => target === "home" ? onBack() : target === "resources" ? onOpenResources() : target === "tasks" ? onOpenTasks() : undefined}
+  {onNavigate}
   connectionStatus={t("data.connectionStatus")}
   taskStatus={changingItem ? t("data.taskStatus.updating") : t("data.taskStatus.summary").replace("{backups}", String(backups.length)).replace("{items}", String(items.length))}
   {onMinimize}
@@ -437,7 +434,6 @@
           <header>
             <div>
               <h2 id="worlds-title">{t("data.worlds.title")}</h2>
-              <p>{t("data.worlds.description")}</p>
             </div>
             <div class="world-toolbar">
               <label class="sr-live" for="world-instance-select">{t("data.worlds.selectInstance")}</label>
@@ -480,7 +476,6 @@
           <header>
             <div>
               <h2 id="screenshots-title">{t("data.screenshots.title")}</h2>
-              <p>{t("data.screenshots.description")}</p>
             </div>
             <div class="screenshot-filters" role="group" aria-label={t("data.screenshots.filterAria")}>
               <button class="filter-chip" class:active={screenshotFilter === "all"} onclick={() => { screenshotFilter = "all"; }}>{t("data.screenshots.filterAll").replace("{count}", String(screenshots.length))}</button>
@@ -532,7 +527,6 @@
           <header>
             <div>
               <h2 id="world-backups-title">{t("data.backups.title")}</h2>
-              <p>{t("data.backups.description")}</p>
             </div>
           </header>
           {#if backups.length === 0}

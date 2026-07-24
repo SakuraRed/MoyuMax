@@ -114,14 +114,14 @@ test("M14-TASK-002 排队任务可调整优先级", async ({ page }) => {
 test("M14-TASK-003 设置全局限速并显示状态", async ({ page }) => {
   await seed(page, []);
 
-  await expect(page.getByText(/当前不限速/)).toBeVisible();
+  await expect(page.getByText("不限速", { exact: true })).toBeVisible();
   await page.getByRole("textbox", { name: /限速/ }).fill("8");
   await page.getByRole("button", { name: "应用" }).click();
-  await expect(page.getByText("当前限速:8 MiB/s(全部分段连接共享)")).toBeVisible();
+  await expect(page.getByText("当前限速：8 MiB/s", { exact: true })).toBeVisible();
 
   await page.reload();
   await page.getByRole("button", { name: "任务", exact: true }).click();
-  await expect(page.getByText("当前限速:8 MiB/s(全部分段连接共享)")).toBeVisible();
+  await expect(page.getByText("当前限速：8 MiB/s", { exact: true })).toBeVisible();
 });
 
 test("UI-A11Y-001 任务控制区在 960x600 与 200% 放大下不溢出", async ({ page }) => {

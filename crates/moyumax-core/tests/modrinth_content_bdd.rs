@@ -7,8 +7,8 @@ use std::{
 };
 
 use moyumax_core::{
-    ContentDependencyKind, ManagedInstanceSummary, ModrinthClient, ModrinthSearchIndex,
-    ModrinthSearchQuery,
+    ContentDependencyKind, ManagedInstanceSummary, ModrinthClient, ModrinthProjectType,
+    ModrinthSearchIndex, ModrinthSearchQuery,
 };
 
 #[tokio::test]
@@ -44,6 +44,7 @@ async fn m5_search_001_filters_for_the_target_client_instance() {
             index: ModrinthSearchIndex::Relevance,
             offset: 0,
             limit: 20,
+            project_type: ModrinthProjectType::Mod,
         })
         .await
         .unwrap();
@@ -458,6 +459,7 @@ fn search_query() -> ModrinthSearchQuery {
         index: ModrinthSearchIndex::Relevance,
         offset: 0,
         limit: 20,
+        project_type: ModrinthProjectType::Mod,
     }
 }
 

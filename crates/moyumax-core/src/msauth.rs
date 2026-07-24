@@ -183,10 +183,17 @@ impl MicrosoftAuthClient {
             .await
             .map_err(ms_network_error)?;
         if !response.status().is_success() {
-            return Err(CoreError::Account(format!(
-                "无法获取 Microsoft 设备码（HTTP {}），请稍后重试",
-                response.status()
-            )));
+            let status = response.status();
+            let detail = response
+                .json::<MsaTokenError>()
+                .await
+                .ok()
+                .and_then(|error| error.error_description.or(Some(error.error)))
+                .filter(|text| !text.is_empty());
+            return Err(CoreError::Account(match detail {
+                Some(detail) => format!("无法获取 Microsoft 设备码：{detail}"),
+                None => format!("无法获取 Microsoft 设备码（HTTP {status}），请稍后重试"),
+            }));
         }
         let payload: DeviceCodeResponse = response
             .json()

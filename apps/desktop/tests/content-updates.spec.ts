@@ -81,10 +81,10 @@ test("M15-UPDATE-001 检查更新后逐项触发更新并进入统一任务队�
     updateEntry("DEP00001", "Fabric API", "fabric-api.jar"),
   ]);
   await page.getByRole("button", { name: "资源" }).click();
-  await expect(page.getByRole("heading", { name: "实例内容" })).toBeVisible();
+  await page.getByRole("button", { name: "实例内容" }).click();
 
   await page.getByRole("button", { name: "检查更新" }).click();
-  await expect(page.getByText("2 项可用更新，更新前会自动创建恢复点", { exact: true })).toBeVisible();
+  await expect(page.getByText("2 项可用更新", { exact: true })).toBeVisible();
   const continuityRow = page.locator(".content-update-panel .installed-content-row").filter({ hasText: "Continuity" });
   await expect(continuityRow.getByText("1.0.0+26.2 → 2.0.0+26.2", { exact: true })).toBeVisible();
   await expectElementPadding(page, ".auto-update-toggle", { block: 16, inline: 20 });
@@ -92,7 +92,7 @@ test("M15-UPDATE-001 检查更新后逐项触发更新并进入统一任务队�
   await expect(page.getByRole("button", { name: "全部更新" })).toHaveCount(0);
 
   await continuityRow.getByRole("button", { name: "更新" }).click();
-  await expect(page.getByText("内容更新任务已进入统一队列", { exact: true })).toBeVisible();
+  await expect(page.getByText("更新任务已加入队列", { exact: true })).toBeVisible();
   await expect(page.locator(".content-update-panel .installed-content-row")).toHaveCount(1);
   const tasks = await page.evaluate(() =>
     JSON.parse(window.localStorage.getItem("moyumax.browser.contentTasks") ?? "[]"),
@@ -112,16 +112,17 @@ test("M15-UPDATE-002 开启按实例自动更新后提供全部更新入口", as
     updateEntry("DEP00001", "Fabric API", "fabric-api.jar"),
   ]);
   await page.getByRole("button", { name: "资源" }).click();
+  await page.getByRole("button", { name: "实例内容" }).click();
 
   const toggle = page.getByRole("checkbox", { name: "按实例自动更新策略" });
   await expect(toggle).not.toBeChecked();
-  await expect(page.getByText("更新仍需你明确触发，不会在后台修改实例。")).toBeVisible();
+  await expect(page.getByText("开启后可一键安装全部可用更新。")).toBeVisible();
   await toggle.check();
   await expect(toggle).toBeChecked();
 
   await page.getByRole("button", { name: "检查更新" }).click();
   await page.getByRole("button", { name: "全部更新" }).click();
-  await expect(page.getByText("内容更新任务已进入统一队列", { exact: true })).toBeVisible();
+  await expect(page.getByText("更新任务已加入队列", { exact: true })).toBeVisible();
   const tasks = await page.evaluate(() =>
     JSON.parse(window.localStorage.getItem("moyumax.browser.contentTasks") ?? "[]"),
   );
@@ -137,6 +138,7 @@ test("M15-UPDATE-002 开启按实例自动更新后提供全部更新入口", as
 test("M15-UPDATE-003 没有可用更新时明确提示且默认只提示不下载", async ({ page }) => {
   await seedContent(page, [installedEntry("ROOT0001", "Continuity", "continuity.jar")], []);
   await page.getByRole("button", { name: "资源" }).click();
+  await page.getByRole("button", { name: "实例内容" }).click();
 
   await page.getByRole("button", { name: "检查更新" }).click();
   await expect(page.getByText("已安装内容均为最新兼容版本。", { exact: true })).toBeVisible();
@@ -174,6 +176,7 @@ test("M15-LOADER-001 Quilt 与 Forge 实例同样出现在内容管理中", asyn
   });
   await page.reload();
   await page.getByRole("button", { name: "资源" }).click();
+  await page.getByRole("button", { name: "实例内容" }).click();
 
   const options = page.locator(".resource-instance-field select option");
   await expect(options).toHaveCount(2);
@@ -192,6 +195,7 @@ test("UI-UPDATE-001 更新面板在 960x600 和 200% 放大下不发生横向溢
   ]);
   await page.setViewportSize({ width: 960, height: 600 });
   await page.getByRole("button", { name: "资源" }).click();
+  await page.getByRole("button", { name: "实例内容" }).click();
   await page.getByRole("checkbox", { name: "按实例自动更新策略" }).check();
   await page.getByRole("button", { name: "检查更新" }).click();
   await expect(page.getByRole("button", { name: "全部更新" })).toBeVisible();

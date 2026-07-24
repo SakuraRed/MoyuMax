@@ -1259,7 +1259,22 @@ async fn install_modpack(
         .map_err(|_| "整合包预览状态锁已损坏，请重启 MoyuMax".to_owned())?
         .remove(&preview_id)
         .ok_or_else(|| "整合包预览已失效，请重新选择文件".to_owned())?;
-    let instance = create_modpack_instance(&app, &service, &metadata, &coordinator, &plan).await?;
+    let online_staging = archive_path.parent().and_then(|uuid_dir| {
+        uuid_dir
+            .parent()
+            .filter(|parent| parent.ends_with("online-modpacks"))
+            .map(|_| uuid_dir.to_path_buf())
+    });
+    let instance = create_modpack_instance(&app, &service, &metadata, &coordinator, &plan).await;
+    let instance = match instance {
+        Ok(instance) => instance,
+        Err(error) => {
+            if let Some(staging) = online_staging {
+                let _ = std::fs::remove_dir_all(staging);
+            }
+            return Err(error);
+        }
+    };
     emit_modpack_progress(
         &app,
         "files",
@@ -1269,7 +1284,7 @@ async fn install_modpack(
     );
     let mci = MciMirrorClient::new().map_err(|error| error.to_string())?;
     let progress_app = app.clone();
-    service
+    let result = service
         .install_modpack_files(
             &plan,
             &archive_path,
@@ -1279,8 +1294,11 @@ async fn install_modpack(
                 emit_modpack_progress(&progress_app, "files", current, total, item);
             },
         )
-        .await
-        .map_err(|error| error.to_string())
+        .await;
+    if let Some(staging) = online_staging {
+        let _ = std::fs::remove_dir_all(staging);
+    }
+    result.map_err(|error| error.to_string())
 }
 
 #[tauri::command]
@@ -1320,6 +1338,91 @@ fn get_instance_modpack(
     service
         .installed_modpack(&instance_id)
         .map_err(|error| error.to_string())
+}
+
+/// 在线整合包预览：下载 mrpack 到暂存目录（SHA-1 校验）后解析预览；
+/// 确认安装复用 `install_modpack`，暂存文件在安装结束后清理。
+#[tauri::command]
+async fn preview_online_modpack(
+    service: State<'_, AppService>,
+    previews: State<'_, ModpackPreviewStore>,
+    project_id: String,
+) -> Result<ModpackPreviewResponse, String> {
+    let client = ModrinthClient::new().map_err(|error| error.to_string())?;
+    let file = client
+        .latest_project_file(&project_id, None, None)
+        .await
+        .map_err(|error| error.to_string())?;
+    let staging_directory = service
+        .selected_data_directory()
+        .map_err(|error| error.to_string())?
+        .join(".staging")
+        .join("online-modpacks")
+        .join(Uuid::new_v4().simple().to_string());
+    let archive_path = client
+        .download_project_file(&file, &staging_directory)
+        .await
+        .map_err(|error| error.to_string())?;
+    let plan = match moyumax_core::parse_modpack_archive(&archive_path) {
+        Ok(plan) => plan,
+        Err(error) => {
+            let _ = std::fs::remove_dir_all(&staging_directory);
+            return Err(error.to_string());
+        }
+    };
+    let preview = moyumax_core::modpack_preview(&plan);
+    let id = Uuid::new_v4().to_string();
+    let mut store = previews
+        .plans
+        .lock()
+        .map_err(|_| "整合包预览状态锁已损坏，请重启 MoyuMax".to_owned())?;
+    if store.len() >= 8 {
+        store.clear();
+    }
+    store.insert(id.clone(), (plan, archive_path));
+    Ok(ModpackPreviewResponse { id, preview })
+}
+
+/// 在线光影/资源包安装：按实例游戏版本解析最新文件，下载校验后走
+/// M16 本地导入事务（同名拒绝、实例隔离、中断收敛）。
+#[tauri::command]
+async fn install_online_resource(
+    service: State<'_, AppService>,
+    instance_id: String,
+    kind: InstanceResourceKind,
+    project_id: String,
+) -> Result<InstanceResource, String> {
+    if !matches!(
+        kind,
+        InstanceResourceKind::ResourcePack | InstanceResourceKind::Shader
+    ) {
+        return Err("在线安装仅支持资源包与光影".to_owned());
+    }
+    let instances = service
+        .list_instances()
+        .map_err(|error| error.to_string())?;
+    let instance = instances
+        .iter()
+        .find(|candidate| candidate.id == instance_id)
+        .ok_or_else(|| "目标实例不存在".to_owned())?;
+    let client = ModrinthClient::new().map_err(|error| error.to_string())?;
+    let file = client
+        .latest_project_file(&project_id, Some(&instance.game_version), None)
+        .await
+        .map_err(|error| error.to_string())?;
+    let staging_directory = service
+        .selected_data_directory()
+        .map_err(|error| error.to_string())?
+        .join(".staging")
+        .join("online-resources")
+        .join(Uuid::new_v4().simple().to_string());
+    let downloaded = client
+        .download_project_file(&file, &staging_directory)
+        .await
+        .map_err(|error| error.to_string())?;
+    let result = service.import_instance_resource(&instance_id, kind, &downloaded, None);
+    let _ = std::fs::remove_dir_all(&staging_directory);
+    result.map_err(|error| error.to_string())
 }
 
 async fn create_modpack_instance(
@@ -2102,6 +2205,8 @@ pub fn run() {
             install_modpack,
             update_modpack,
             get_instance_modpack,
+            preview_online_modpack,
+            install_online_resource,
             retry_content_task,
             resolve_content_task_recovery,
             list_instances,

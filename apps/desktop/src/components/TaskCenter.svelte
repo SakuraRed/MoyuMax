@@ -8,6 +8,7 @@
     ContentInstallTask,
     InstallTask,
     MoyuRuntime,
+    NavigationKey,
     OnboardingSelection,
     RecoveryDecision,
     TaskState,
@@ -21,10 +22,9 @@
     tasks: InstallTask[];
     contentTasks: ContentInstallTask[];
     tasksPaused: boolean;
-    onBack: () => void;
-    onOpenResources: () => void;
     onTasksChanged: () => Promise<void>;
     onToggleTasksPaused: () => Promise<void>;
+    onNavigate: (target: NavigationKey) => void;
     onMinimize: () => Promise<void>;
     onToggleMaximize: () => Promise<void>;
     onClose: () => Promise<void>;
@@ -36,10 +36,9 @@
     tasks,
     contentTasks,
     tasksPaused,
-    onBack,
-    onOpenResources,
     onTasksChanged,
     onToggleTasksPaused,
+    onNavigate,
     onMinimize,
     onToggleMaximize,
     onClose,
@@ -244,7 +243,7 @@
   pageTitle={t("tasks.title")}
   dataDirectory={settings.dataDirectory}
   activeNavigation="tasks"
-  onNavigate={(target) => target === "home" ? onBack() : target === "resources" ? onOpenResources() : undefined}
+  {onNavigate}
   connectionStatus={t("tasks.connectionStatus")}
   taskStatus={t("home.taskStatus.pending").replace("{count}", String([...tasks, ...contentTasks].filter((task) => !["completed", "cancelled"].includes(task.state)).length))}
   {onMinimize}
@@ -253,8 +252,7 @@
 >
   <main class="content task-center-content">
     <header class="task-center-heading">
-      <button class="button ghost compact" onclick={onBack}>{t("settings.back")}</button>
-      <div><h1>{t("tasks.title")}</h1><p>{t("tasks.heading.description")}</p></div>
+      <div><h1>{t("tasks.title")}</h1></div>
     </header>
 
     {#if errorMessage}

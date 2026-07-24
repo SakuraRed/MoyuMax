@@ -301,6 +301,47 @@ async fn m30_acct_010_slow_down_extends_poll_interval() {
     );
 }
 
+#[tokio::test]
+async fn m30_acct_011_device_code_error_surfaces_service_detail() {
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let address = listener.local_addr().unwrap();
+    let server = thread::spawn(move || {
+        for stream in listener.incoming() {
+            let Ok(stream) = stream else { break };
+            let mut reader = BufReader::new(stream.try_clone().unwrap());
+            let _ = read_request(&mut reader);
+            respond(
+                stream,
+                400,
+                &serde_json::json!({
+                    "error": "invalid_request",
+                    "error_description": "AADSTS9002327: Device code flow is not enabled for this application."
+                })
+                .to_string(),
+            );
+        }
+    });
+    let client = MicrosoftAuthClient::with_base_urls(
+        "fixture-client-id",
+        &format!("http://{address}"),
+        "http://127.0.0.1:1",
+        "http://127.0.0.1:1",
+        "http://127.0.0.1:1",
+    )
+    .unwrap();
+
+    let error = client
+        .begin_device_code()
+        .await
+        .expect_err("设备码 400 必须失败");
+
+    assert!(
+        error.to_string().contains("AADSTS9002327"),
+        "服务端错误详情必须透传：{error}"
+    );
+    drop(server);
+}
+
 struct MsAccountFixture {
     _directory: TempDir,
     database_path: std::path::PathBuf,

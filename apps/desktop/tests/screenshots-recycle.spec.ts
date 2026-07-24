@@ -122,18 +122,20 @@ test("M18-RES-001 资源删除进回收站并带索引恢复", async ({ page }) 
   });
   await page.reload();
   await page.getByRole("button", { name: "资源", exact: true }).click();
+  await page.getByRole("button", { name: "实例内容" }).click();
 
   await page.getByRole("button", { name: "删除 faithful" }).click();
   await page.getByRole("button", { name: "确认删除" }).click();
   await expect(page.getByText("还没有导入资源包、光影或数据包", { exact: false })).toBeVisible();
 
-  await page.getByRole("button", { name: "返回首页" }).click();
+  await page.getByRole("button", { name: "首页", exact: true }).first().click();
   await page.getByRole("button", { name: "数据", exact: true }).click();
   const binCard = page.locator(".recycle-card").filter({ hasText: "faithful" });
   await expect(binCard.getByText("资源内容", { exact: true })).toBeVisible();
   await page.getByRole("button", { name: "恢复“faithful”" }).click();
 
   await page.getByRole("button", { name: "资源", exact: true }).click();
+  await page.getByRole("button", { name: "实例内容" }).click();
   const row = page.locator(".installed-content-row").filter({ hasText: "faithful" });
   await expect(row).toBeVisible();
   await expect(row.getByRole("checkbox", { name: "faithful 启用开关" })).toBeChecked();

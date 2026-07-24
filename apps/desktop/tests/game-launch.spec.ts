@@ -37,7 +37,6 @@ test("UI-LAUNCH-001 首页可以启动和停止本地实例", async ({ page }) =
   await expect(page.getByRole("heading", { name: "启动测试" })).toBeVisible();
   await expect(page.getByText("Minecraft 26.2", { exact: false })).toBeVisible();
   await expect(page.getByText("Fabric 0.19.3", { exact: false })).toBeVisible();
-  await expect(page.getByText("本地离线身份：MoyuMaxPlayer", { exact: true })).toBeVisible();
 
   const cardPadding = await page.locator(".instance-card").evaluate((element) => {
     const style = getComputedStyle(element);

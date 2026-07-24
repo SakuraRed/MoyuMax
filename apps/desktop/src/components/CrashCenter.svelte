@@ -7,6 +7,7 @@
     DiagnosticExportResult,
     ManagedInstance,
     MoyuRuntime,
+    NavigationKey,
     OnboardingSelection,
   } from "../runtime";
   import AppShell from "./AppShell.svelte";
@@ -17,9 +18,7 @@
     settings: OnboardingSelection;
     report: CrashReport;
     instance: ManagedInstance | null;
-    onBack: () => void;
-    onOpenResources: () => void;
-    onOpenTasks: () => void;
+    onNavigate: (target: NavigationKey) => void;
     onMinimize: () => Promise<void>;
     onToggleMaximize: () => Promise<void>;
     onClose: () => Promise<void>;
@@ -30,9 +29,7 @@
     settings,
     report,
     instance,
-    onBack,
-    onOpenResources,
-    onOpenTasks,
+    onNavigate,
     onMinimize,
     onToggleMaximize,
     onClose,
@@ -116,7 +113,7 @@
   pageTitle={t("crash.title")}
   dataDirectory={settings.dataDirectory}
   activeNavigation="home"
-  onNavigate={(target) => target === "home" ? onBack() : target === "resources" ? onOpenResources() : target === "tasks" ? onOpenTasks() : undefined}
+  {onNavigate}
   connectionStatus={t("crash.connectionStatus")}
   taskStatus={t("crash.taskStatus")}
   {onMinimize}
@@ -126,10 +123,9 @@
   <main class="content crash-content">
     <div class="crash-scroll" data-scroll-region="main">
       <header class="crash-heading">
-        <button class="back-link" onclick={onBack}>{t("settings.back")}</button>
         <div>
           <h1>{t("crash.title")}</h1>
-          <p>{instance ? t("crash.heading.instanceExit").replace("{name}", instance.name) : t("crash.heading.localExit")}{t("crash.heading.evidenceNote")}</p>
+          <p>{instance ? t("crash.heading.instanceExit").replace("{name}", instance.name) : t("crash.heading.localExit")}</p>
         </div>
       </header>
 
@@ -146,7 +142,6 @@
         <section class="crash-panel" aria-labelledby="crash-actions-title">
           <header>
             <h2 id="crash-actions-title">{t("crash.actions.title")}</h2>
-            <p>{t("crash.actions.description")}</p>
           </header>
           <ol class="crash-recommendations">
             {#each report.recommendations as recommendation}
@@ -164,7 +159,6 @@
         <section class="crash-panel" aria-labelledby="crash-evidence-title">
           <header>
             <h2 id="crash-evidence-title">{t("crash.evidence.title")}</h2>
-            <p>{t("crash.evidence.description")}</p>
           </header>
           <div class="crash-evidence-list">
             {#each report.evidence as evidence}

@@ -26,6 +26,7 @@
     JavaEnvironment,
     ManagedInstance,
     MoyuRuntime,
+    NavigationKey,
     OnboardingSelection,
     ReferencingInstance,
     ReleaseInfo,
@@ -38,8 +39,7 @@
   interface Props {
     runtime: MoyuRuntime;
     settings: OnboardingSelection;
-    onBack: () => void;
-    onOpenHome: () => void;
+    onNavigate: (target: NavigationKey) => void;
     onMinimize: () => Promise<void>;
     onToggleMaximize: () => Promise<void>;
     onClose: () => Promise<void>;
@@ -48,8 +48,7 @@
   let {
     runtime,
     settings,
-    onBack,
-    onOpenHome,
+    onNavigate,
     onMinimize,
     onToggleMaximize,
     onClose,
@@ -616,7 +615,7 @@
   pageTitle={t("settings.pageTitle")}
   dataDirectory={settings.dataDirectory}
   activeNavigation="settings"
-  onNavigate={(target) => target === "home" ? onOpenHome() : undefined}
+  {onNavigate}
   connectionStatus={t("settings.connectionStatus")}
   taskStatus={t("settings.envCount").replace("{count}", String(environments.length))}
   {onMinimize}
@@ -625,7 +624,6 @@
 >
   <main class="content java-content" data-scroll-region="main">
     <header class="task-center-heading">
-      <button class="button ghost compact" onclick={onBack}>{t("settings.back")}</button>
       <div>
         <h1>{t("settings.java.heading")}</h1>
         <p>{t("settings.java.description")}</p>
@@ -741,7 +739,6 @@
           {#if backgroundPackName && backgroundType === "themePack"}
             <small class="background-pack-name">{t("appearance.background.packActive")} {backgroundPackName}</small>
           {/if}
-          <small class="background-note">{t("appearance.background.note")}</small>
         </div>
       </div>
     </section>

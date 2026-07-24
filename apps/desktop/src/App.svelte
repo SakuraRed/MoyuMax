@@ -22,6 +22,7 @@
     InstallTask,
     LaunchSession,
     ManagedInstance,
+    NavigationKey,
     OnboardingSelection,
     PendingIntent,
     WindowCloseAction,
@@ -291,14 +292,18 @@
     phase = "crash";
   }
 
-  function openData(): void {
+  /** 侧边栏统一导航；各页面经 onNavigate 接入。 */
+  function navigate(target: NavigationKey): void {
     notice = "";
-    phase = "data";
-  }
-
-  function openSettings(): void {
-    notice = "";
-    phase = "settings";
+    if (target === "home") {
+      void returnHome();
+      return;
+    }
+    if (target === "instances") {
+      phase = "install";
+      return;
+    }
+    phase = target;
   }
 
   async function toggleTasksPaused(): Promise<void> {
@@ -408,11 +413,9 @@
     {notice}
     onInstall={openInstaller}
     onOpenTasks={() => phase = "tasks"}
-    onOpenResources={() => phase = "resources"}
-    onOpenData={openData}
-    onOpenSettings={openSettings}
     onOpenCrash={openCrashReport}
     onStateChanged={refreshHomeState}
+    onNavigate={navigate}
     onMinimize={() => runtime.minimizeWindow()}
     onToggleMaximize={() => runtime.toggleMaximizeWindow()}
     onClose={() => runtime.closeWindow()}
@@ -422,6 +425,7 @@
     {runtime}
     {settings}
     onBack={() => void returnHome()}
+    onNavigate={navigate}
     onMinimize={() => runtime.minimizeWindow()}
     onToggleMaximize={() => runtime.toggleMaximizeWindow()}
     onClose={() => runtime.closeWindow()}
@@ -431,9 +435,9 @@
     {runtime}
     {settings}
     {instances}
-    onBack={() => void returnHome()}
     onOpenTasks={() => phase = "tasks"}
     onTasksChanged={refreshTasks}
+    onNavigate={navigate}
     onMinimize={() => runtime.minimizeWindow()}
     onToggleMaximize={() => runtime.toggleMaximizeWindow()}
     onClose={() => runtime.closeWindow()}
@@ -445,10 +449,9 @@
     {tasks}
     {contentTasks}
     {tasksPaused}
-    onBack={() => void returnHome()}
-    onOpenResources={() => phase = "resources"}
     onTasksChanged={refreshTasks}
     onToggleTasksPaused={toggleTasksPaused}
+    onNavigate={navigate}
     onMinimize={() => runtime.minimizeWindow()}
     onToggleMaximize={() => runtime.toggleMaximizeWindow()}
     onClose={() => runtime.closeWindow()}
@@ -457,10 +460,8 @@
   <DataCenter
     {runtime}
     {settings}
-    onBack={() => void returnHome()}
-    onOpenResources={() => phase = "resources"}
-    onOpenTasks={() => phase = "tasks"}
     onInstancesChanged={refreshHomeState}
+    onNavigate={navigate}
     onMinimize={() => runtime.minimizeWindow()}
     onToggleMaximize={() => runtime.toggleMaximizeWindow()}
     onClose={() => runtime.closeWindow()}
@@ -469,8 +470,7 @@
   <SettingsCenter
     {runtime}
     {settings}
-    onBack={() => void returnHome()}
-    onOpenHome={() => void returnHome()}
+    onNavigate={navigate}
     onMinimize={() => runtime.minimizeWindow()}
     onToggleMaximize={() => runtime.toggleMaximizeWindow()}
     onClose={() => runtime.closeWindow()}
@@ -481,9 +481,7 @@
     {settings}
     report={selectedCrashReport}
     instance={instances.find((instance) => instance.id === selectedCrashReport?.instanceId) ?? null}
-    onBack={() => void returnHome()}
-    onOpenResources={() => phase = "resources"}
-    onOpenTasks={() => phase = "tasks"}
+    onNavigate={navigate}
     onMinimize={() => runtime.minimizeWindow()}
     onToggleMaximize={() => runtime.toggleMaximizeWindow()}
     onClose={() => runtime.closeWindow()}

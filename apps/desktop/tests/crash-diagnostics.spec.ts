@@ -140,7 +140,7 @@ test("M6-CRASH-001 用户从异常会话进入崩溃页并在预览后导出", a
   await expect(page.getByText("游戏可用内存不足", { exact: true })).toBeVisible();
   await expect(page.getByText("这不等于存档已经损坏", { exact: false })).toBeVisible();
   await expect(page.getByText("game/last-output.log", { exact: true })).toBeVisible();
-  await expect(page.getByText("不会自动上传", { exact: false })).toBeVisible();
+  await expect(page.getByText("预览文件清单后导出到本地 ZIP", { exact: false })).toBeVisible();
   await expect(page.getByRole("button", { name: "确认并导出到本地" })).toHaveCount(0);
 
   await page.getByRole("button", { name: "预览诊断包" }).click();

@@ -11,6 +11,7 @@
     ManagedInstance,
     ModpackUpdateReport,
     MoyuRuntime,
+    NavigationKey,
     OnboardingSelection,
     WorldBackupSummary,
   } from "../runtime";
@@ -28,11 +29,9 @@
     notice: string;
     onInstall: () => void;
     onOpenTasks: () => void;
-    onOpenResources: () => void;
-    onOpenData: () => void;
-    onOpenSettings: () => void;
     onOpenCrash: (report: CrashReport) => void;
     onStateChanged: () => Promise<void>;
+    onNavigate: (target: NavigationKey) => void;
     onMinimize: () => Promise<void>;
     onToggleMaximize: () => Promise<void>;
     onClose: () => Promise<void>;
@@ -49,11 +48,9 @@
     notice,
     onInstall,
     onOpenTasks,
-    onOpenResources,
-    onOpenData,
-    onOpenSettings,
     onOpenCrash,
     onStateChanged,
+    onNavigate,
     onMinimize,
     onToggleMaximize,
     onClose,
@@ -264,7 +261,7 @@
   pageTitle={t("nav.home")}
   dataDirectory={settings.dataDirectory}
   searchVisible
-  onNavigate={(target) => target === "resources" ? onOpenResources() : target === "tasks" ? onOpenTasks() : target === "data" ? onOpenData() : target === "settings" ? onOpenSettings() : undefined}
+  onNavigate={onNavigate}
   taskStatus={activeLaunches.length > 0 ? t("home.taskStatus.running").replace("{count}", String(activeLaunches.length)) : activeTasks.length + activeContentTasks.length > 0 ? t("home.taskStatus.pending").replace("{count}", String(activeTasks.length + activeContentTasks.length)) : t("shell.status.noTasks")}
   {onMinimize}
   {onToggleMaximize}
@@ -277,8 +274,7 @@
       <p>{t("home.empty.description")}</p>
       <button class="button primary large" data-autofocus="true" onclick={onInstall}>{t("home.empty.installFirst")}</button>
       <small>
-        {t("home.empty.altPrefix")} <button class="inline-link" disabled>{t("home.empty.importModpack")}</button> {t("home.empty.altOr")}
-        <button class="inline-link" disabled>{t("home.empty.migrate")}</button>{t("home.empty.altSuffix")}
+        {t("home.empty.altPrefix")} <button class="inline-link" onclick={onInstall}>{t("home.empty.importModpack")}</button>
       </small>
       {#if activeTasks.length > 0}
         {#each activeTasks.slice(0, 1) as task}
@@ -303,7 +299,6 @@
         <header class="home-heading">
           <div>
             <h1>{t("home.heading.title")}</h1>
-            <p>{t("home.heading.description")}</p>
           </div>
           <button class="button" onclick={onInstall}>{t("home.heading.installOther")}</button>
         </header>
@@ -327,7 +322,6 @@
                 {#if pack}
                   <small class="modpack-badge">{pack.packName} {pack.packVersion} · {pack.provider === "modrinth" ? "Modrinth" : "CurseForge"}</small>
                 {/if}
-                <small>{t("home.instance.offlineIdentity")}</small>
                 {#if latest && !active}
                   <small class="latest-session">{t("home.instance.latestSession")}<span>{sessionStateLabel(latest.state)}</span>{#if latest.exitCode !== null}{t("home.instance.exitCode").replace("{code}", String(latest.exitCode))}{/if}</small>
                   <small class="latest-backups">{t("home.instance.latestBackups").replace("{pre}", backupStateLabel(latest.preLaunchBackup)).replace("{post}", backupStateLabel(latest.postExitBackup))}</small>

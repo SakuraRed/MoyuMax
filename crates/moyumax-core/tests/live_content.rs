@@ -2,7 +2,8 @@ use std::{fs, path::Path, time::Duration};
 
 use moyumax_core::{
     AppService, ContentExecutor, LaunchAccount, LaunchOptions, LaunchSessionState, ModrinthClient,
-    ModrinthSearchIndex, ModrinthSearchQuery, OnboardingSelection, run_launch_execution,
+    ModrinthProjectType, ModrinthSearchIndex, ModrinthSearchQuery, OnboardingSelection,
+    run_launch_execution,
 };
 use rusqlite::{Connection, params};
 use tempfile::TempDir;
@@ -68,6 +69,7 @@ async fn current_continuity_dependency_closure_installs_and_launches_from_a_clon
             index: ModrinthSearchIndex::Relevance,
             offset: 0,
             limit: 20,
+            project_type: ModrinthProjectType::Mod,
         })
         .await
         .unwrap();

@@ -41,7 +41,7 @@ test("M26-ABOUT-001 关于区展示版本、许可与未签名声明", async ({ 
   await expect(page.getByText("GPL-3.0-only", { exact: true })).toBeVisible();
   await expect(page.getByText("github.com/SakuraRed/MoyuMax", { exact: true })).toBeVisible();
   await expect(page.getByText("docs/SBOM.json", { exact: false })).toBeVisible();
-  await expect(page.getByText("未签名的开发预览构建", { exact: true })).toBeVisible();
+  await expect(page.getByText("自签名开发预览构建", { exact: true })).toBeVisible();
   await expect(page.getByText("不是正式发行版", { exact: false })).toBeVisible();
   await expectElementPadding(page, ".warning-panel", { block: 16, inline: 20 });
 });

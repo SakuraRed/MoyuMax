@@ -58,6 +58,7 @@ test("M16-RES-001 导入资源包后出现在资源内容清单", async ({ page 
     );
   });
   await page.getByRole("button", { name: "资源", exact: true }).click();
+  await page.getByRole("button", { name: "实例内容" }).click();
   await expect(page.getByRole("heading", { name: "资源内容" })).toBeVisible();
   await expect(page.getByText("还没有导入资源包、光影或数据包", { exact: false })).toBeVisible();
 
@@ -83,6 +84,7 @@ test("M16-RES-002 同名资源拒绝导入且不覆盖清单", async ({ page }) 
   }, existing);
   await page.reload();
   await page.getByRole("button", { name: "资源", exact: true }).click();
+  await page.getByRole("button", { name: "实例内容" }).click();
 
   await page.getByRole("button", { name: "导入资源包" }).click();
   await expect(page.getByText("已拒绝导入且未覆盖", { exact: false })).toBeVisible();
@@ -99,6 +101,7 @@ test("M16-RES-003 启用与停用切换并持久化", async ({ page }) => {
   }, existing);
   await page.reload();
   await page.getByRole("button", { name: "资源", exact: true }).click();
+  await page.getByRole("button", { name: "实例内容" }).click();
 
   const toggle = page.getByRole("checkbox", { name: "faithful 启用开关" });
   await expect(toggle).toBeChecked();
@@ -125,6 +128,7 @@ test("M16-RES-004 数据包必须选择世界后导入", async ({ page }) => {
   });
   await page.reload();
   await page.getByRole("button", { name: "资源", exact: true }).click();
+  await page.getByRole("button", { name: "实例内容" }).click();
 
   await page.getByRole("button", { name: "导入数据包" }).click();
   const worldSelect = page.locator(".datapack-import-form select");
@@ -140,6 +144,7 @@ test("M16-RES-004 数据包必须选择世界后导入", async ({ page }) => {
 
 test("M16-RES-005 没有世界时数据包导入被阻止并说明原因", async ({ page }) => {
   await page.getByRole("button", { name: "资源", exact: true }).click();
+  await page.getByRole("button", { name: "实例内容" }).click();
   await page.getByRole("button", { name: "导入数据包" }).click();
   await expect(page.getByText("这个实例还没有世界", { exact: false })).toBeVisible();
   await expect(page.locator(".datapack-import-form")).toHaveCount(0);
@@ -178,6 +183,7 @@ test("UI-RES-001 资源内容区在 960x600 和 200% 放大下不发生横向溢
   await page.reload();
   await page.setViewportSize({ width: 960, height: 600 });
   await page.getByRole("button", { name: "资源", exact: true }).click();
+  await page.getByRole("button", { name: "实例内容" }).click();
   await page.getByRole("button", { name: "导入数据包" }).click();
   await expect(page.locator(".datapack-import-form")).toBeVisible();
   await page.evaluate(() => {

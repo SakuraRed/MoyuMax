@@ -36,7 +36,8 @@ test.beforeEach(async ({ page }) => {
 test("M22-I18N-001 英文界面渲染资源中心与任务中心", async ({ page }) => {
   await switchToEnglish(page);
   await page.getByRole("button", { name: "Resources", exact: true }).click();
-  await expect(page.getByRole("heading", { name: "Instance content" })).toBeVisible();
+  await expect(page.getByRole("button", { name: "Online catalog" })).toBeVisible();
+  await page.getByRole("button", { name: "Instance content" }).click();
   await expect(page.getByRole("heading", { name: "Locally installed content" })).toBeVisible();
   await expect(page.getByRole("button", { name: "Check for updates" })).toBeVisible();
 
@@ -61,7 +62,6 @@ test("M22-I18N-003 英文界面渲染安装向导", async ({ page }) => {
   await switchToEnglish(page);
   await page.getByRole("button", { name: "Install another version" }).click();
   await expect(page.getByRole("heading", { name: "Install your first game" })).toBeVisible();
-  await expect(page.getByText("Recommended options are pre-selected", { exact: false })).toBeVisible();
 });
 
 test("M22-I18N-004 英文界面渲染数据中心", async ({ page }) => {
@@ -76,7 +76,7 @@ test("UI-I18N-002 英文资源中心在 960x600 和 200% 放大下不溢出", as
   await page.setViewportSize({ width: 960, height: 600 });
   await switchToEnglish(page);
   await page.getByRole("button", { name: "Resources", exact: true }).click();
-  await expect(page.getByRole("heading", { name: "Instance content" })).toBeVisible();
+  await expect(page.getByRole("button", { name: "Online catalog" })).toBeVisible();
   await page.evaluate(() => {
     document.documentElement.style.zoom = "2";
   });
@@ -88,6 +88,7 @@ test("UI-I18N-002 英文资源中心在 960x600 和 200% 放大下不溢出", as
       .filter(
         (element) =>
           !element.classList.contains("sr-live") &&
+          element.clientWidth > 0 &&
           element.scrollWidth > element.clientWidth + 1,
       )
       .map((element) => ({

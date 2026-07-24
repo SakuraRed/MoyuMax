@@ -2,9 +2,8 @@
   import type { Snippet } from "svelte";
 
   import { t, uiBackground, uiBackgroundImageUrl, uiContrast, uiMotion, uiTheme } from "../i18n.svelte";
+  import type { NavigationKey } from "../runtime";
   import Icon from "./Icon.svelte";
-
-  type NavigationKey = "home" | "instances" | "resources" | "tasks" | "data" | "settings";
 
   interface Props {
     pageTitle: string;

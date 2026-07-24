@@ -1,11 +1,12 @@
 use std::{
     collections::{HashMap, HashSet, VecDeque},
     fs,
-    io::Read,
+    io::{Read, Write},
     path::{Component, Path, PathBuf},
     time::Duration,
 };
 
+use futures_util::StreamExt;
 use reqwest::{Client, StatusCode, Url};
 use rusqlite::{OptionalExtension, TransactionBehavior, params};
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
@@ -43,6 +44,28 @@ impl ModrinthSearchIndex {
     }
 }
 
+/// Modrinth 项目类型；搜索与目录浏览按此过滤。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "lowercase")]
+pub enum ModrinthProjectType {
+    #[default]
+    Mod,
+    Modpack,
+    Shader,
+    Resourcepack,
+}
+
+impl ModrinthProjectType {
+    fn api_value(self) -> &'static str {
+        match self {
+            Self::Mod => "mod",
+            Self::Modpack => "modpack",
+            Self::Shader => "shader",
+            Self::Resourcepack => "resourcepack",
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ModrinthSearchQuery {
@@ -52,6 +75,9 @@ pub struct ModrinthSearchQuery {
     pub index: ModrinthSearchIndex,
     pub offset: u32,
     pub limit: u8,
+    /// 搜索的项目类型；缺省为模组（兼容 M5 调用方）。
+    #[serde(default)]
+    pub project_type: ModrinthProjectType,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -77,6 +103,17 @@ pub struct ModrinthSearchPage {
     pub limit: u32,
     #[serde(alias = "total_hits")]
     pub total_hits: u64,
+}
+
+/// 在线项目版本的主文件（整合包/光影/资源包安装用）。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ModrinthVersionFile {
+    pub url: String,
+    pub filename: String,
+    pub sha1: String,
+    pub sha512: String,
+    pub size: u64,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -294,13 +331,28 @@ impl ModrinthClient {
     }
 
     pub async fn search_mods(&self, query: &ModrinthSearchQuery) -> Result<ModrinthSearchPage> {
+        self.search_projects(query).await
+    }
+
+    /// 按项目类型搜索在线目录。模组沿用版本/加载器/客户端侧过滤；
+    /// 整合包、光影、资源包在提供游戏版本时附加版本过滤，否则全目录浏览。
+    pub async fn search_projects(&self, query: &ModrinthSearchQuery) -> Result<ModrinthSearchPage> {
         validate_search_query(query)?;
-        let facets = serde_json::to_string(&vec![
-            vec!["project_type:mod"],
-            vec![format!("versions:{}", query.game_version).as_str()],
-            vec![format!("categories:{}", query.loader).as_str()],
-            vec!["client_side:required", "client_side:optional"],
-        ])?;
+        let mut facet_groups: Vec<Vec<String>> = vec![vec![format!(
+            "project_type:{}",
+            query.project_type.api_value()
+        )]];
+        if query.project_type == ModrinthProjectType::Mod {
+            facet_groups.push(vec![format!("versions:{}", query.game_version)]);
+            facet_groups.push(vec![format!("categories:{}", query.loader)]);
+            facet_groups.push(vec![
+                "client_side:required".to_owned(),
+                "client_side:optional".to_owned(),
+            ]);
+        } else if !query.game_version.trim().is_empty() {
+            facet_groups.push(vec![format!("versions:{}", query.game_version)]);
+        }
+        let facets = serde_json::to_string(&facet_groups)?;
         let mut url = self.endpoint("search")?;
         url.query_pairs_mut()
             .append_pair("query", query.query.trim())
@@ -309,6 +361,113 @@ impl ModrinthClient {
             .append_pair("offset", &query.offset.to_string())
             .append_pair("limit", &query.limit.to_string());
         self.get_json(url).await
+    }
+
+    /// 项目最新版本的主文件（在线整合包/光影/资源包安装用）。
+    /// 提供游戏版本或加载器时按实例约束过滤；优先正式版。
+    pub async fn latest_project_file(
+        &self,
+        project_id: &str,
+        game_version: Option<&str>,
+        loader: Option<&str>,
+    ) -> Result<ModrinthVersionFile> {
+        validate_identifier(project_id, "Modrinth 项目 ID")?;
+        let mut url = self.endpoint(&format!("project/{project_id}/version"))?;
+        {
+            let mut pairs = url.query_pairs_mut();
+            if let Some(game_version) = game_version.filter(|value| !value.trim().is_empty()) {
+                pairs.append_pair(
+                    "game_versions",
+                    &serde_json::to_string(&vec![game_version])?,
+                );
+            }
+            if let Some(loader) = loader.filter(|value| !value.trim().is_empty()) {
+                pairs.append_pair("loaders", &serde_json::to_string(&vec![loader])?);
+            }
+        }
+        let mut versions: Vec<ModrinthVersion> = self.get_json(url).await?;
+        versions.sort_by_key(|version| version.version_type.priority());
+        let version = versions
+            .iter()
+            .find(|version| version.status == ModrinthVersionStatus::Listed)
+            .or(versions.first())
+            .ok_or_else(|| CoreError::Content("该项目没有匹配当前条件的版本".to_owned()))?;
+        let file = version
+            .files
+            .iter()
+            .find(|file| file.primary)
+            .or(version.files.first())
+            .ok_or_else(|| CoreError::Content("该版本没有可下载文件".to_owned()))?;
+        validate_hash(&file.hashes.sha1, 40, "SHA-1")?;
+        validate_hash(&file.hashes.sha512, 128, "SHA-512")?;
+        Ok(ModrinthVersionFile {
+            url: file.url.clone(),
+            filename: file.filename.clone(),
+            sha1: file.hashes.sha1.clone(),
+            sha512: file.hashes.sha512.clone(),
+            size: file.size,
+        })
+    }
+
+    /// 流式下载项目文件到目标目录，SHA-1 校验后原子改名返回最终路径。
+    pub async fn download_project_file(
+        &self,
+        file: &ModrinthVersionFile,
+        destination_directory: &Path,
+    ) -> Result<PathBuf> {
+        if file.filename.is_empty()
+            || file.filename.contains(['/', '\\'])
+            || file.filename == "."
+            || file.filename == ".."
+        {
+            return Err(CoreError::Content("服务端返回的文件名无效".to_owned()));
+        }
+        fs::create_dir_all(destination_directory)?;
+        let staging = destination_directory.join(format!("{}.part", Uuid::new_v4().simple()));
+        let target = destination_directory.join(&file.filename);
+        let outcome = self.download_to_staging(file, &staging).await;
+        match outcome {
+            Ok(()) => {
+                fs::rename(&staging, &target)?;
+                Ok(target)
+            }
+            Err(error) => {
+                let _ = fs::remove_file(&staging);
+                Err(error)
+            }
+        }
+    }
+
+    async fn download_to_staging(&self, file: &ModrinthVersionFile, staging: &Path) -> Result<()> {
+        let response = self
+            .client
+            .get(&file.url)
+            .send()
+            .await
+            .map_err(|error| CoreError::Content(format!("无法下载项目文件：{error}")))?;
+        if !response.status().is_success() {
+            return Err(CoreError::Content(format!(
+                "项目文件下载失败（HTTP {}）",
+                response.status()
+            )));
+        }
+        let mut hasher = Sha1::new();
+        let mut writer = std::io::BufWriter::new(fs::File::create(staging)?);
+        let mut stream = response.bytes_stream();
+        while let Some(chunk) = stream.next().await {
+            let chunk =
+                chunk.map_err(|error| CoreError::Content(format!("项目文件下载中断：{error}")))?;
+            hasher.update(&chunk);
+            writer.write_all(&chunk)?;
+        }
+        writer.flush()?;
+        let digest = content_encode_hex(hasher.finalize());
+        if !digest.eq_ignore_ascii_case(&file.sha1) {
+            return Err(CoreError::Content(
+                "项目文件 SHA-1 校验失败，已拒绝使用".to_owned(),
+            ));
+        }
+        Ok(())
     }
 
     pub async fn resolve_mod_install_plan(
@@ -1988,8 +2147,14 @@ fn validate_search_query(query: &ModrinthSearchQuery) -> Result<()> {
     if query.query.trim().is_empty() {
         return Err(CoreError::Content("请输入 Modrinth 搜索词".to_owned()));
     }
-    validate_instance_term(&query.game_version, "游戏版本")?;
-    validate_instance_term(&query.loader, "加载器")?;
+    // 模组必须有版本/加载器约束；目录浏览（整合包/光影/资源包）可留空，
+    // 留空时不附加对应过滤。
+    if query.project_type == ModrinthProjectType::Mod || !query.game_version.trim().is_empty() {
+        validate_instance_term(&query.game_version, "游戏版本")?;
+    }
+    if query.project_type == ModrinthProjectType::Mod || !query.loader.trim().is_empty() {
+        validate_instance_term(&query.loader, "加载器")?;
+    }
     if !(1..=100).contains(&query.limit) {
         return Err(CoreError::Content(
             "Modrinth 单页结果数量必须在 1 到 100 之间".to_owned(),
