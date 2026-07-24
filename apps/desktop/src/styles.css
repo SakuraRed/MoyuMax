@@ -1217,33 +1217,39 @@ summary:focus-visible {
 }
 
 .empty-graphic {
-  position: relative;
-  width: 72px;
-  height: 58px;
+  width: 120px;
+  height: 88px;
   margin-bottom: 10px;
-  border: 2px solid var(--border-strong);
-  border-radius: 8px;
 }
 
-.empty-graphic::before,
-.empty-graphic::after {
-  position: absolute;
-  top: 14px;
-  width: 34px;
-  height: 34px;
-  border: 2px solid var(--accent);
-  content: "";
+.fish-swim {
+  animation: fish-swim 7s ease-in-out infinite;
 }
 
-.empty-graphic::before {
-  left: 18px;
-  transform: rotate(30deg) skewX(-30deg) scaleY(0.86);
+.fish-bubble {
+  animation: fish-bubble-rise 4s ease-in infinite;
+  opacity: 0;
 }
 
-.empty-graphic::after {
-  left: 18px;
-  transform: rotate(-30deg) skewX(30deg) scaleY(0.86);
-  opacity: 0.6;
+.bubble-b {
+  animation-delay: 1.8s;
+}
+
+@keyframes fish-swim {
+  0%, 100% { transform: translateX(-8px); }
+  50% { transform: translateX(10px); }
+}
+
+@keyframes fish-bubble-rise {
+  0% { transform: translateY(0); opacity: 0; }
+  15% { opacity: 0.9; }
+  100% { transform: translateY(-26px); opacity: 0; }
+}
+
+.window[data-motion="reduce"] .fish-swim,
+.window[data-motion="reduce"] .fish-bubble {
+  animation: none;
+  opacity: 0.85;
 }
 
 .toast {

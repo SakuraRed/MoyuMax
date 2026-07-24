@@ -284,7 +284,19 @@
 >
   {#if instances.length === 0}
     <main class="content home-empty" bind:this={homeRoot}>
-      <div class="empty-graphic" aria-hidden="true"></div>
+      <svg class="empty-graphic fishtank" viewBox="0 0 120 88" aria-hidden="true">
+        <rect x="18" y="18" width="84" height="54" rx="8" fill="var(--surface)" stroke="var(--border-strong)" stroke-width="2"/>
+        <path d="M20 34 Q35 28 50 34 T80 34 T100 34 V64 Q100 70 94 70 H26 Q20 70 20 64 Z" fill="var(--accent-dim)"/>
+        <path d="M20 34 Q35 28 50 34 T80 34 T100 34" fill="none" stroke="var(--accent)" stroke-width="2" stroke-linecap="round"/>
+        <path d="M34 66 Q32 56 36 50 M42 66 Q44 58 40 52" fill="none" stroke="var(--accent)" stroke-width="2" stroke-linecap="round" opacity="0.7"/>
+        <g class="fish-swim">
+          <ellipse cx="62" cy="48" rx="11" ry="6.5" fill="var(--accent)"/>
+          <path d="M51 48 L43 42.5 V53.5 Z" fill="var(--accent)"/>
+          <circle cx="68" cy="46.5" r="1.4" fill="var(--on-accent)"/>
+        </g>
+        <circle class="fish-bubble bubble-a" cx="80" cy="56" r="2.4" fill="none" stroke="var(--accent)" stroke-width="1.6"/>
+        <circle class="fish-bubble bubble-b" cx="86" cy="60" r="1.7" fill="none" stroke="var(--accent)" stroke-width="1.4"/>
+      </svg>
       <h1>{t("home.empty.title")}</h1>
       <p>{t("home.empty.description")}</p>
       <button class="button primary large" data-autofocus="true" onclick={onInstall}>{t("home.empty.installFirst")}</button>
