@@ -184,12 +184,10 @@ impl MciMirrorClient {
             .base_url
             .join(&format!("curseforge/v1/mods/{project_id}/files/{file_id}"))
             .map_err(|error| CoreError::Content(format!("MCI 文件地址无效：{error}")))?;
-        let response = self
-            .client
-            .get(url)
-            .send()
-            .await
-            .map_err(|error| CoreError::Content(format!("无法解析 CurseForge 文件：{error}")))?;
+        let response =
+            self.client.get(url).send().await.map_err(|error| {
+                CoreError::Content(format!("无法解析 CurseForge 文件：{error}"))
+            })?;
         if !response.status().is_success() {
             return Err(CoreError::Content(format!(
                 "MCI Mirror 返回 HTTP {}",
@@ -205,9 +203,9 @@ impl MciMirrorClient {
             .map(|hash| hash.value.clone())
             .ok_or_else(|| CoreError::Content("CurseForge 文件缺少 SHA-1".to_owned()))?;
         Ok(CurseForgeFile {
-            url: file.download_url.ok_or_else(|| {
-                CoreError::Content("CurseForge 文件没有可用下载地址".to_owned())
-            })?,
+            url: file
+                .download_url
+                .ok_or_else(|| CoreError::Content("CurseForge 文件没有可用下载地址".to_owned()))?,
             file_name: file.file_name,
             size: file.file_length,
             sha1,
@@ -280,10 +278,7 @@ pub fn parse_modpack_archive(archive_path: &Path) -> Result<ModpackPlan> {
     ))
 }
 
-fn parse_modrinth_index(
-    index: &[u8],
-    archive: &mut ZipArchive<fs::File>,
-) -> Result<ModpackPlan> {
+fn parse_modrinth_index(index: &[u8], archive: &mut ZipArchive<fs::File>) -> Result<ModpackPlan> {
     #[derive(Deserialize)]
     #[serde(rename_all = "camelCase")]
     struct MrIndex {
@@ -316,10 +311,14 @@ fn parse_modrinth_index(
         )));
     }
     if index.game != "minecraft" {
-        return Err(CoreError::Content("整合包目标游戏不是 minecraft".to_owned()));
+        return Err(CoreError::Content(
+            "整合包目标游戏不是 minecraft".to_owned(),
+        ));
     }
     if index.files.is_empty() || index.files.len() > MAX_PACK_FILES {
-        return Err(CoreError::Content("整合包文件数量超出可接受范围".to_owned()));
+        return Err(CoreError::Content(
+            "整合包文件数量超出可接受范围".to_owned(),
+        ));
     }
     let game_version = required_dependency(&index.dependencies, "minecraft")?.to_owned();
     let (loader_kind, loader_version) = resolve_loader_dependency(&index.dependencies)?;
@@ -394,7 +393,9 @@ fn parse_curseforge_manifest(
     let manifest: CfManifest = serde_json::from_slice(manifest)
         .map_err(|error| CoreError::Content(format!("manifest.json 无效：{error}")))?;
     if manifest.files.is_empty() || manifest.files.len() > MAX_PACK_FILES {
-        return Err(CoreError::Content("整合包文件数量超出可接受范围".to_owned()));
+        return Err(CoreError::Content(
+            "整合包文件数量超出可接受范围".to_owned(),
+        ));
     }
     let loader = manifest
         .minecraft
@@ -439,7 +440,10 @@ fn parse_curseforge_manifest(
     })
 }
 
-fn required_dependency<'a>(dependencies: &'a HashMap<String, String>, key: &str) -> Result<&'a str> {
+fn required_dependency<'a>(
+    dependencies: &'a HashMap<String, String>,
+    key: &str,
+) -> Result<&'a str> {
     dependencies
         .get(key)
         .map(String::as_str)
@@ -458,7 +462,9 @@ fn resolve_loader_dependency(dependencies: &HashMap<String, String>) -> Result<(
             return Ok((kind.to_owned(), version.clone()));
         }
     }
-    Err(CoreError::Content("整合包没有声明受支持的加载器".to_owned()))
+    Err(CoreError::Content(
+        "整合包没有声明受支持的加载器".to_owned(),
+    ))
 }
 
 fn normalize_loader_kind(kind: &str) -> Result<&str> {
@@ -473,17 +479,13 @@ fn validate_pack_relative_path(path: &str) -> Result<String> {
     let mut components = Vec::new();
     for component in relative.components() {
         let Component::Normal(value) = component else {
-            return Err(CoreError::Content(format!(
-                "整合包包含不安全路径：{path}"
-            )));
+            return Err(CoreError::Content(format!("整合包包含不安全路径：{path}")));
         };
-        let value = value.to_str().ok_or_else(|| {
-            CoreError::Content("整合包路径不是有效 Unicode".to_owned())
-        })?;
+        let value = value
+            .to_str()
+            .ok_or_else(|| CoreError::Content("整合包路径不是有效 Unicode".to_owned()))?;
         if value.contains(':') || value.contains('\\') {
-            return Err(CoreError::Content(format!(
-                "整合包包含不安全路径：{path}"
-            )));
+            return Err(CoreError::Content(format!("整合包包含不安全路径：{path}")));
         }
         components.push(value.to_owned());
     }
@@ -503,7 +505,9 @@ fn collect_overrides(
             .by_index(index)
             .map_err(|error| CoreError::Content(format!("整合包无法读取：{error}")))?;
         let Some(name) = entry.enclosed_name().map(|path| path.to_path_buf()) else {
-            return Err(CoreError::Content("整合包 overrides 包含不安全路径".to_owned()));
+            return Err(CoreError::Content(
+                "整合包 overrides 包含不安全路径".to_owned(),
+            ));
         };
         let name_str = name.to_string_lossy().replace('\\', "/");
         if !name_str.starts_with(prefix) || entry.is_dir() {
@@ -677,8 +681,7 @@ impl AppService {
                 "更新必须使用同一来源格式的整合包".to_owned(),
             ));
         }
-        if installed.game_version != plan.game_version
-            || installed.loader_kind != plan.loader_kind
+        if installed.game_version != plan.game_version || installed.loader_kind != plan.loader_kind
         {
             return Err(CoreError::Content(format!(
                 "新版整合包要求 Minecraft {} 与 {}，与当前实例不一致",
@@ -704,7 +707,11 @@ impl AppService {
             .files
             .iter()
             .map(|file| file.relative_path.clone())
-            .chain(plan.overrides.iter().map(|entry| entry.relative_path.clone()))
+            .chain(
+                plan.overrides
+                    .iter()
+                    .map(|entry| entry.relative_path.clone()),
+            )
             .collect();
         let mut deleted_files = 0_u64;
         let mut kept_user_modified = Vec::new();
@@ -731,9 +738,7 @@ impl AppService {
         for file in &mut filtered_plan.files {
             if let Some(managed) = managed_index.get(&file.relative_path) {
                 let target = minecraft_root.join(&file.relative_path);
-                if target.exists()
-                    && !file_sha512(&target)?.eq_ignore_ascii_case(&managed.sha512)
-                {
+                if target.exists() && !file_sha512(&target)?.eq_ignore_ascii_case(&managed.sha512) {
                     user_modified_paths.insert(file.relative_path.clone());
                 }
             }
@@ -836,12 +841,7 @@ impl AppService {
                         )
                         .await?;
                     on_progress(index as u64, total, &format!("解析 {}", resolved.file_name));
-                    (
-                        resolved.url,
-                        resolved.size,
-                        Some(resolved.sha1),
-                        None,
-                    )
+                    (resolved.url, resolved.size, Some(resolved.sha1), None)
                 }
             };
             artifacts.push((
@@ -878,8 +878,8 @@ impl AppService {
         let shared_root = self.selected_data_directory()?.join("store");
         fs::create_dir_all(&shared_root)?;
         let total = artifacts.len() as u64;
-        let downloads = futures_util::stream::iter(
-            artifacts.into_iter().enumerate().map(|(index, (relative, artifact))| {
+        let downloads = futures_util::stream::iter(artifacts.into_iter().enumerate().map(
+            |(index, (relative, artifact))| {
                 let downloader = downloader.clone();
                 let download_root = download_root.clone();
                 let shared_root = shared_root.clone();
@@ -891,8 +891,8 @@ impl AppService {
                     on_progress(index as u64 + 1, total, &artifact.relative_path);
                     Ok::<_, CoreError>((relative, report))
                 }
-            }),
-        )
+            },
+        ))
         .buffer_unordered(4)
         .try_collect::<Vec<(String, crate::FetchReport)>>()
         .await?;
@@ -903,15 +903,13 @@ impl AppService {
             let mut archive = ZipArchive::new(file)
                 .map_err(|error| CoreError::Content(format!("整合包无法读取：{error}")))?;
             for entry_plan in &plan.overrides {
-                let mut entry = archive
-                    .by_name(&entry_plan.zip_entry)
-                    .map_err(|error| CoreError::Content(format!(
+                let mut entry = archive.by_name(&entry_plan.zip_entry).map_err(|error| {
+                    CoreError::Content(format!(
                         "整合包缺少 overrides 条目 {}：{error}",
                         entry_plan.zip_entry
-                    )))?;
-                let target = staging
-                    .join("overrides")
-                    .join(&entry_plan.relative_path);
+                    ))
+                })?;
+                let target = staging.join("overrides").join(&entry_plan.relative_path);
                 if let Some(parent) = target.parent() {
                     fs::create_dir_all(parent)?;
                 }
@@ -932,7 +930,10 @@ impl AppService {
         let snapshot_root = instance_root
             .join(".moyumax")
             .join("snapshots")
-            .join(format!("modpack-{}", staging.file_name().unwrap_or_default().to_string_lossy()));
+            .join(format!(
+                "modpack-{}",
+                staging.file_name().unwrap_or_default().to_string_lossy()
+            ));
         let mut entries: Vec<(PathBuf, String)> = downloads
             .into_iter()
             .map(|(relative, report)| (report.result.staged_file, relative))
@@ -993,7 +994,8 @@ impl AppService {
                 continue;
             }
             for instance in &instances {
-                let _ = rollback_modpack_journal(Path::new(&instance.root_directory), &operation_dir);
+                let _ =
+                    rollback_modpack_journal(Path::new(&instance.root_directory), &operation_dir);
             }
             let _ = fs::remove_dir_all(&operation_dir);
         }

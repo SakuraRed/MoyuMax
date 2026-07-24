@@ -8,9 +8,7 @@ use std::{
     thread,
 };
 
-use moyumax_core::{
-    AppService, MciMirrorClient, ModpackProvider, parse_modpack_archive,
-};
+use moyumax_core::{AppService, MciMirrorClient, ModpackProvider, parse_modpack_archive};
 use rusqlite::{Connection, params};
 use sha1::{Digest, Sha1};
 use sha2::Sha512;
@@ -97,7 +95,10 @@ async fn m29_install_001_modrinth_pack_installs_files_and_records_atomically() {
     assert_eq!(report.installed_files, 2);
     let minecraft = fixture.instance_root.join(".minecraft");
     assert_eq!(fs::read(minecraft.join("mods/a.jar")).unwrap(), b"aaa-mod");
-    assert_eq!(fs::read(minecraft.join("config/b.cfg")).unwrap(), b"bbb-config");
+    assert_eq!(
+        fs::read(minecraft.join("config/b.cfg")).unwrap(),
+        b"bbb-config"
+    );
     let installed = fixture
         .service
         .installed_modpack(&fixture.instance_id)
@@ -140,9 +141,18 @@ async fn m29_install_002_hash_failure_rolls_back_everything() {
 
     assert!(!error.to_string().is_empty());
     let minecraft = fixture.instance_root.join(".minecraft");
-    assert!(!minecraft.join("mods/a.jar").exists(), "失败时不得留下任何已提交文件");
+    assert!(
+        !minecraft.join("mods/a.jar").exists(),
+        "失败时不得留下任何已提交文件"
+    );
     assert!(!minecraft.join("mods/b.jar").exists());
-    assert!(fixture.service.installed_modpack(&fixture.instance_id).unwrap().is_none());
+    assert!(
+        fixture
+            .service
+            .installed_modpack(&fixture.instance_id)
+            .unwrap()
+            .is_none()
+    );
 }
 
 #[tokio::test]
@@ -151,7 +161,10 @@ async fn m29_update_001_replaces_deletes_and_keeps_user_modifications() {
     let server = FixtureServer::new(HashMap::from([
         ("/1.0.0/mods/a.jar".to_owned(), b"aaa-v1".to_vec()),
         ("/1.0.0/mods/b.jar".to_owned(), b"bbb-v1".to_vec()),
-        ("/1.0.0/config/user.cfg".to_owned(), b"user-original".to_vec()),
+        (
+            "/1.0.0/config/user.cfg".to_owned(),
+            b"user-original".to_vec(),
+        ),
         ("/2.0.0/mods/a.jar".to_owned(), b"aaa-v2".to_vec()),
         ("/2.0.0/mods/c.jar".to_owned(), b"ccc-new".to_vec()),
     ]));
@@ -193,15 +206,27 @@ async fn m29_update_001_replaces_deletes_and_keeps_user_modifications() {
         .expect("更新必须成功");
 
     let minecraft = fixture.instance_root.join(".minecraft");
-    assert_eq!(fs::read(minecraft.join("mods/a.jar")).unwrap(), b"aaa-v2", "变化文件必须替换");
+    assert_eq!(
+        fs::read(minecraft.join("mods/a.jar")).unwrap(),
+        b"aaa-v2",
+        "变化文件必须替换"
+    );
     assert!(!minecraft.join("mods/b.jar").exists(), "移除文件必须删除");
-    assert_eq!(fs::read(minecraft.join("mods/c.jar")).unwrap(), b"ccc-new", "新增文件必须安装");
+    assert_eq!(
+        fs::read(minecraft.join("mods/c.jar")).unwrap(),
+        b"ccc-new",
+        "新增文件必须安装"
+    );
     assert_eq!(
         fs::read(minecraft.join("config/user.cfg")).unwrap(),
         b"user-edited",
         "用户改动文件必须保留"
     );
-    assert!(report.kept_user_modified.contains(&"config/user.cfg".to_owned()));
+    assert!(
+        report
+            .kept_user_modified
+            .contains(&"config/user.cfg".to_owned())
+    );
     assert_eq!(report.deleted_files, 1);
     let installed = fixture
         .service
@@ -214,10 +239,16 @@ async fn m29_update_001_replaces_deletes_and_keeps_user_modifications() {
 #[tokio::test]
 async fn m29_update_002_version_mismatch_is_rejected() {
     let fixture = PackFixture::new();
-    let server = FixtureServer::new(HashMap::from([
-        ("/1.0.0/mods/a.jar".to_owned(), b"aaa".to_vec()),
-    ]));
-    let v1 = fixture.write_modrinth_pack_with_base("tundra", "1.0.0", &server, &[("mods/a.jar", b"aaa")]);
+    let server = FixtureServer::new(HashMap::from([(
+        "/1.0.0/mods/a.jar".to_owned(),
+        b"aaa".to_vec(),
+    )]));
+    let v1 = fixture.write_modrinth_pack_with_base(
+        "tundra",
+        "1.0.0",
+        &server,
+        &[("mods/a.jar", b"aaa")],
+    );
     let plan_v1 = parse_modpack_archive(&v1).unwrap();
     let mci = MciMirrorClient::with_base_url(&server.base_url()).unwrap();
     fixture
@@ -348,7 +379,10 @@ impl PackFixture {
             .directory
             .path()
             .join(format!("{name}-{version}.mrpack"));
-        write_zip(&path, &[("modrinth.index.json", index.to_string().as_bytes())]);
+        write_zip(
+            &path,
+            &[("modrinth.index.json", index.to_string().as_bytes())],
+        );
         path
     }
 
@@ -374,10 +408,7 @@ impl PackFixture {
         if with_overrides {
             entries.push(("overrides/options.txt", b"options"));
         }
-        let path = self
-            .directory
-            .path()
-            .join(format!("{name}-{version}.zip"));
+        let path = self.directory.path().join(format!("{name}-{version}.zip"));
         write_zip(&path, &entries);
         path
     }
