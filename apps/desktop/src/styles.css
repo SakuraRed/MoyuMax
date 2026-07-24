@@ -982,6 +982,12 @@ summary:focus-visible {
   justify-content: center;
   gap: 8px;
   text-align: center;
+  overflow-y: auto;
+}
+
+.java-content {
+  overflow-x: hidden;
+  overflow-y: auto;
 }
 
 .home-empty p {

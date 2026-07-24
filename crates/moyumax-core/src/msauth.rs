@@ -317,10 +317,12 @@ impl MicrosoftAuthClient {
             .await
             .map_err(ms_network_error)?;
         if !response.status().is_success() {
-            return Err(CoreError::Account(format!(
-                "Xbox Live 用户认证失败（HTTP {}），请稍后重试",
-                response.status()
-            )));
+            let status = response.status();
+            let detail = read_service_error(response).await;
+            return Err(CoreError::Account(match detail {
+                Some(detail) => format!("Xbox Live 用户认证失败：{detail}"),
+                None => format!("Xbox Live 用户认证失败（HTTP {status}），请稍后重试"),
+            }));
         }
         let payload: XboxAuthResponse = response
             .json()
@@ -401,10 +403,12 @@ impl MicrosoftAuthClient {
             .await
             .map_err(ms_network_error)?;
         if !response.status().is_success() {
-            return Err(CoreError::Account(format!(
-                "Minecraft Services 登录失败（HTTP {}），请稍后重试",
-                response.status()
-            )));
+            let status = response.status();
+            let detail = read_service_error(response).await;
+            return Err(CoreError::Account(match detail {
+                Some(detail) => format!("Minecraft Services 登录失败：{detail}"),
+                None => format!("Minecraft Services 登录失败（HTTP {status}），请稍后重试"),
+            }));
         }
         let payload: McLoginResponse = response.json().await.map_err(|_| {
             CoreError::Account("Minecraft Services 返回了无法解析的响应".to_owned())
@@ -516,6 +520,32 @@ async fn sleep_cancellable(duration: Duration, cancel: &MicrosoftLoginCancel) ->
 
 fn ms_network_error(error: reqwest::Error) -> CoreError {
     CoreError::AccountNetwork(format!("无法连接 Microsoft 认证服务：{error}"))
+}
+
+/// 读取认证服务的错误响应体（Xbox/Minecraft 的 JSON 错误），返回可读详情。
+async fn read_service_error(response: reqwest::Response) -> Option<String> {
+    let text = response.text().await.ok()?;
+    let parsed: serde_json::Value = serde_json::from_str(&text).ok()?;
+    for key in [
+        "errorMessage",
+        "error_description",
+        "Message",
+        "error",
+        "errorType",
+    ] {
+        if let Some(value) = parsed.get(key).and_then(|value| value.as_str())
+            && !value.is_empty()
+            && value != "Forbidden"
+        {
+            return Some(value.to_owned());
+        }
+    }
+    let trimmed = text.trim();
+    if trimmed.is_empty() {
+        None
+    } else {
+        Some(trimmed.chars().take(200).collect())
+    }
 }
 
 #[derive(Debug, Deserialize)]
