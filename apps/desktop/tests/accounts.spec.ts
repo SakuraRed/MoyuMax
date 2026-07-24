@@ -129,7 +129,7 @@ test("M20-ACCT-004 会话过期的账户刷新失败并保留过期标记", asyn
 
 test("M20-ACCT-005 Microsoft 仅文字说明不提供伪装入口", async ({ page }) => {
   await page.getByRole("button", { name: "设置" }).click();
-  await expect(page.getByText("Microsoft 登录在应用注册完成后提供", { exact: false })).toBeVisible();
+  await expect(page.getByText("Microsoft 应用已注册，登录功能在后续里程碑提供", { exact: false })).toBeVisible();
   await expect(page.getByRole("button", { name: /Microsoft/ })).toHaveCount(0);
 });
 

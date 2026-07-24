@@ -183,7 +183,7 @@ export const zhCN: Record<string, string> = {
 
   // 账户区（SettingsCenter）
   "settings.accounts.title": "账户",
-  "settings.accounts.description": "离线账户仅用于本地单人游戏；外置账户经 Authlib Injector 认证且只保存令牌。Microsoft 登录在应用注册完成后提供。",
+  "settings.accounts.description": "离线账户仅用于本地单人游戏；外置账户经 Authlib Injector 认证且只保存令牌。Microsoft 应用已注册，登录功能在后续里程碑提供。",
   "settings.accounts.addOffline": "添加离线账户",
   "settings.accounts.addAuthlib": "添加外置账户",
   "settings.accounts.offlineNameLabel": "玩家名（3-16 位字母、数字或下划线）",

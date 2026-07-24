@@ -178,7 +178,7 @@ export const zhTW: Record<string, string> = {
 
   // 帳戶區（SettingsCenter）
   "settings.accounts.title": "帳戶",
-  "settings.accounts.description": "離線帳戶僅用於本機單人遊戲；外置帳戶經 Authlib Injector 驗證且只儲存權杖。Microsoft 登入在應用程式註冊完成後提供。",
+  "settings.accounts.description": "離線帳戶僅用於本機單人遊戲；外置帳戶經 Authlib Injector 驗證且只儲存權杖。Microsoft 應用程式已完成註冊，登入功能將於後續里程碑提供。",
   "settings.accounts.addOffline": "新增離線帳戶",
   "settings.accounts.addAuthlib": "新增外置帳戶",
   "settings.accounts.offlineNameLabel": "玩家名稱（3-16 位字母、數字或底線）",

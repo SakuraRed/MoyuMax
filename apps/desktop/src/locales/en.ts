@@ -178,7 +178,7 @@ export const en: Record<string, string> = {
 
   // Accounts section (SettingsCenter)
   "settings.accounts.title": "Accounts",
-  "settings.accounts.description": "Offline accounts are for local single-player only; authlib accounts authenticate via Authlib Injector and only the token is stored. Microsoft sign-in will be available once app registration is complete.",
+  "settings.accounts.description": "Offline accounts are for local single-player only; authlib accounts authenticate via Authlib Injector and only the token is stored. The Microsoft app is registered; sign-in arrives in a later milestone.",
   "settings.accounts.addOffline": "Add offline account",
   "settings.accounts.addAuthlib": "Add authlib account",
   "settings.accounts.offlineNameLabel": "Player name (3-16 letters, digits, or underscores)",

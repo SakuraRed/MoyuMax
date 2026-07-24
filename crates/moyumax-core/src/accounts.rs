@@ -15,6 +15,14 @@ use uuid::Uuid;
 use crate::{AppService, CoreError, LaunchAccount, Result, unix_timestamp};
 
 pub const LITTLESKIN_YGGDRASIL_URL: &str = "https://littleskin.cn/api/yggdrasil";
+
+/// MoyuMax 的 Microsoft 应用注册（公共客户端，设备码流）。
+///
+/// 2026-07-24 由项目所有者在 Azure 注册（个人 Microsoft 帐户 + 允许公共客户端流）。
+/// Client ID 是公开标识，不是机密；登录流程（设备码 → MSA → Xbox Live → XSTS →
+/// Minecraft Services）在后续里程碑实现，届时使用此常量。
+pub const MICROSOFT_APP_CLIENT_ID: &str = "a5897d46-0863-48dd-84f2-467896967591";
+
 const COMPAT_OFFLINE_PLAYER: &str = "MoyuMaxPlayer";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
