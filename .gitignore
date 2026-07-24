@@ -28,6 +28,14 @@
 /apps/desktop/test-results/
 /apps/desktop/playwright-report/
 
+# Engineering process documents (kept locally, not published)
+/.codex/
+/.continue-here.md
+/docs/plans/
+/docs/review/
+/docs/research/
+/features/
+
 # IDE and OS
 .idea/
 .vscode/
