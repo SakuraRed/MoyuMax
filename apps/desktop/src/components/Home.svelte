@@ -6,8 +6,10 @@
     ContentInstallTask,
     CrashReport,
     InstallTask,
+    InstalledModpack,
     LaunchSession,
     ManagedInstance,
+    ModpackUpdateReport,
     MoyuRuntime,
     OnboardingSelection,
     WorldBackupSummary,
@@ -62,12 +64,52 @@
   let actionError = $state("");
   let recycleCandidate = $state<ManagedInstance | null>(null);
   let recycleDialog = $state<HTMLElement | null>(null);
+  let modpacks = $state<Record<string, InstalledModpack>>({});
+  let updatingPack = $state<string | null>(null);
+  let packReport = $state<ModpackUpdateReport | null>(null);
   let homeRoot: HTMLElement | undefined = $state();
 
   onMount(async () => {
     await tick();
     homeRoot?.querySelector<HTMLElement>("[data-autofocus]")?.focus();
   });
+
+  $effect(() => {
+    void loadModpacks(instances);
+  });
+
+  async function loadModpacks(list: ManagedInstance[]): Promise<void> {
+    const next: Record<string, InstalledModpack> = {};
+    for (const instance of list) {
+      const pack = await runtime.getInstanceModpack(instance.id).catch(() => null);
+      if (pack) next[instance.id] = pack;
+    }
+    modpacks = next;
+  }
+
+  async function updatePack(instance: ManagedInstance): Promise<void> {
+    updatingPack = instance.id;
+    actionMessage = "";
+    actionError = "";
+    packReport = null;
+    try {
+      const path = await runtime.pickModpackFile();
+      if (!path) return;
+      packReport = await runtime.updateModpack(instance.id, path);
+      actionMessage = t("modpack.updateDone")
+        .replace("{name}", packReport.packName)
+        .replace("{from}", packReport.fromVersion)
+        .replace("{to}", packReport.toVersion);
+      if (packReport.keptUserModified.length > 0) {
+        actionMessage += t("modpack.keptNote").replace("{files}", packReport.keptUserModified.join("、"));
+      }
+      await loadModpacks(instances);
+    } catch (error) {
+      actionError = error instanceof Error ? error.message : String(error);
+    } finally {
+      updatingPack = null;
+    }
+  }
 
   const activeTasks = $derived(
     tasks.filter((task) => !["completed", "cancelled"].includes(task.state)),
@@ -271,6 +313,7 @@
             {@const active = activeSession(instance.id)}
             {@const latest = latestSession(instance.id)}
             {@const crashReport = crashReportForSession(latest)}
+            {@const pack = modpacks[instance.id]}
             <article class:running={active?.state === "running"} class:crashed={Boolean(crashReport)} class="instance-card">
               <div class="instance-cover" aria-hidden="true">{instance.name.slice(0, 1)}</div>
               <div class="instance-copy">
@@ -281,6 +324,9 @@
                   </span>
                 </div>
                 <p>{t("home.instance.summary").replace("{version}", instance.gameVersion).replace("{loader}", loaderLabel(instance))}</p>
+                {#if pack}
+                  <small class="modpack-badge">{pack.packName} {pack.packVersion} · {pack.provider === "modrinth" ? "Modrinth" : "CurseForge"}</small>
+                {/if}
                 <small>{t("home.instance.offlineIdentity")}</small>
                 {#if latest && !active}
                   <small class="latest-session">{t("home.instance.latestSession")}<span>{sessionStateLabel(latest.state)}</span>{#if latest.exitCode !== null}{t("home.instance.exitCode").replace("{code}", String(latest.exitCode))}{/if}</small>
@@ -304,6 +350,13 @@
                 {/if}
                 {#if crashReport && !active}
                   <button class="button crash-report-button" onclick={() => onOpenCrash(crashReport)}>{t("home.launch.crashReport")}</button>
+                {/if}
+                {#if pack && !active}
+                  <button
+                    class="button ghost"
+                    disabled={updatingPack !== null}
+                    onclick={() => void updatePack(instance)}
+                  >{updatingPack === instance.id ? t("modpack.updating") : t("modpack.update")}</button>
                 {/if}
                 {#if !active}
                   <button

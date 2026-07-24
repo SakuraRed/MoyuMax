@@ -18,6 +18,7 @@ mod install;
 mod java_env;
 mod launch;
 mod loader_install;
+mod modpack;
 mod recycle;
 mod resources;
 mod screenshots;
@@ -37,6 +38,7 @@ pub use install::*;
 pub use java_env::*;
 pub use launch::*;
 pub use loader_install::*;
+pub use modpack::*;
 pub use recycle::*;
 pub use resources::*;
 pub use screenshots::*;
@@ -162,6 +164,7 @@ impl AppService {
         service.recover_interrupted_launch_sessions()?;
         service.recover_interrupted_recycle_operations()?;
         service.recover_interrupted_world_rollbacks()?;
+        service.recover_interrupted_modpack_ops()?;
         service.recover_java_deletions()?;
         service.generate_missing_crash_reports()?;
         Ok(service)
@@ -503,6 +506,25 @@ impl AppService {
                     last_validated_at_unix_seconds INTEGER
                 );
                 PRAGMA user_version = 15;
+                ",
+            )?;
+        }
+        // v16:整合包安装记录与受管文件清单。
+        let version: i64 = connection.query_row("PRAGMA user_version", [], |row| row.get(0))?;
+        if version < 16 {
+            connection.execute_batch(
+                "
+                CREATE TABLE IF NOT EXISTS instance_modpacks (
+                    instance_id TEXT PRIMARY KEY NOT NULL REFERENCES instances(id) ON DELETE CASCADE,
+                    provider TEXT NOT NULL,
+                    pack_name TEXT NOT NULL,
+                    pack_version TEXT NOT NULL,
+                    game_version TEXT NOT NULL,
+                    loader_kind TEXT NOT NULL,
+                    managed_files_json TEXT NOT NULL,
+                    installed_at_unix_seconds INTEGER NOT NULL
+                );
+                PRAGMA user_version = 16;
                 ",
             )?;
         }

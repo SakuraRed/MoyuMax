@@ -12,14 +12,15 @@ use moyumax_core::{
     ContentInstallPlan, ContentInstallTask, ContentUpdateInfo, CrashReportSummary,
     DiagnosticExportPreview, DiagnosticExportResult, DownloadInterrupt, ExitImpactSummary,
     FabricLoaderSummary, InstallExecutor, InstallSelection, InstallTask, InstalledContent,
-    InstanceIsolation, InstanceResource, InstanceResourceKind, InstanceScreenshot,
-    InstanceWorldInfo, JavaArchitecture, JavaDeleteOutcome, JavaDistribution,
-    JavaEnvironmentSummary, LaunchExecution, LaunchOptions, LaunchSessionSummary,
-    ManagedInstanceSummary, MetadataClient, ModrinthClient, ModrinthSearchPage,
-    ModrinthSearchQuery, OnboardingSelection, RecoveryDecision, RecycleBinItem, RecyclePurgeResult,
-    ReleaseInfo, ResolvedInstallRequest, ResolvedLoader, ShellState, SourcePolicy, ThemePack,
-    UiBackground, UpdateClient, VersionCatalog, WindowCloseBehavior, WorldBackupSummary,
-    YggdrasilClient, min_version_block, run_launch_execution,
+    InstalledModpack, InstanceIsolation, InstanceResource, InstanceResourceKind,
+    InstanceScreenshot, InstanceWorldInfo, JavaArchitecture, JavaDeleteOutcome, JavaDistribution,
+    JavaEnvironmentSummary, LaunchExecution, LaunchOptions, LaunchSessionSummary, LoaderChoice,
+    ManagedInstanceSummary, MciMirrorClient, MetadataClient, ModrinthClient, ModrinthSearchPage,
+    ModrinthSearchQuery, ModpackInstallReport, ModpackUpdateReport, OnboardingSelection,
+    RecoveryDecision, RecycleBinItem, RecyclePurgeResult, ReleaseInfo, ResolvedInstallRequest,
+    ResolvedLoader, ShellState, SourcePolicy, ThemePack, UiBackground, UpdateClient, VersionCatalog,
+    WindowCloseBehavior, WorldBackupSummary, YggdrasilClient, min_version_block,
+    run_launch_execution,
 };
 use serde::Serialize;
 use tauri::{Emitter, Manager, State};
@@ -46,6 +47,11 @@ struct InstallPreviewStore {
 #[derive(Debug, Default)]
 struct ContentPreviewStore {
     plans: Mutex<HashMap<String, ContentInstallPlan>>,
+}
+
+#[derive(Debug, Default)]
+struct ModpackPreviewStore {
+    plans: Mutex<HashMap<String, (moyumax_core::ModpackPlan, PathBuf)>>,
 }
 
 #[derive(Debug, Default)]
@@ -372,6 +378,22 @@ struct UiPreferences {
     language: String,
     motion: String,
     contrast: String,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ModpackPreviewResponse {
+    id: String,
+    preview: moyumax_core::ModpackPreview,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ModpackProgressEvent {
+    stage: String,
+    current: u64,
+    total: u64,
+    item: String,
 }
 
 #[derive(Debug, Serialize)]
@@ -1088,6 +1110,203 @@ fn read_background_image(
 }
 
 #[tauri::command]
+fn import_modpack_preview(
+    previews: State<'_, ModpackPreviewStore>,
+    source_path: String,
+) -> Result<ModpackPreviewResponse, String> {
+    let path = PathBuf::from(&source_path);
+    if !path.is_file() {
+        return Err("整合包文件不存在".to_owned());
+    }
+    let plan = moyumax_core::parse_modpack_archive(&path).map_err(|error| error.to_string())?;
+    let preview = moyumax_core::modpack_preview(&plan);
+    let id = Uuid::new_v4().to_string();
+    let mut store = previews
+        .plans
+        .lock()
+        .map_err(|_| "整合包预览状态锁已损坏，请重启 MoyuMax".to_owned())?;
+    if store.len() >= 8 {
+        store.clear();
+    }
+    store.insert(id.clone(), (plan, path));
+    Ok(ModpackPreviewResponse { id, preview })
+}
+
+#[tauri::command]
+async fn install_modpack(
+    app: tauri::AppHandle,
+    service: State<'_, AppService>,
+    metadata: State<'_, MetadataClient>,
+    previews: State<'_, ModpackPreviewStore>,
+    coordinator: State<'_, TaskCoordinator>,
+    preview_id: String,
+) -> Result<ModpackInstallReport, String> {
+    let (plan, archive_path) = previews
+        .plans
+        .lock()
+        .map_err(|_| "整合包预览状态锁已损坏，请重启 MoyuMax".to_owned())?
+        .remove(&preview_id)
+        .ok_or_else(|| "整合包预览已失效，请重新选择文件".to_owned())?;
+    let instance = create_modpack_instance(
+        &app,
+        &service,
+        &metadata,
+        &coordinator,
+        &plan,
+    )
+    .await?;
+    emit_modpack_progress(&app, "files", 0, plan.files.len() as u64, "准备下载整合包文件");
+    let mci = MciMirrorClient::new().map_err(|error| error.to_string())?;
+    let progress_app = app.clone();
+    service
+        .install_modpack_files(&plan, &archive_path, &instance.id, &mci, &|current, total, item| {
+            emit_modpack_progress(&progress_app, "files", current, total, item);
+        })
+        .await
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+async fn update_modpack(
+    app: tauri::AppHandle,
+    service: State<'_, AppService>,
+    instance_id: String,
+    source_path: String,
+) -> Result<ModpackUpdateReport, String> {
+    let archive_path = PathBuf::from(&source_path);
+    if !archive_path.is_file() {
+        return Err("整合包文件不存在".to_owned());
+    }
+    let plan = moyumax_core::parse_modpack_archive(&archive_path)
+        .map_err(|error| error.to_string())?;
+    let mci = MciMirrorClient::new().map_err(|error| error.to_string())?;
+    let progress_app = app.clone();
+    service
+        .update_modpack(&plan, &archive_path, &instance_id, &mci, &|current, total, item| {
+            emit_modpack_progress(&progress_app, "files", current, total, item);
+        })
+        .await
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+fn get_instance_modpack(
+    service: State<'_, AppService>,
+    instance_id: String,
+) -> Result<Option<InstalledModpack>, String> {
+    service
+        .installed_modpack(&instance_id)
+        .map_err(|error| error.to_string())
+}
+
+async fn create_modpack_instance(
+    app: &tauri::AppHandle,
+    service: &AppService,
+    metadata: &MetadataClient,
+    coordinator: &TaskCoordinator,
+    plan: &moyumax_core::ModpackPlan,
+) -> Result<ManagedInstanceSummary, String> {
+    let catalog = service
+        .cached_version_catalog()
+        .map_err(|error| error.to_string())?
+        .ok_or_else(|| "本地没有可信的官方版本目录，请先打开一次新建实例页".to_owned())?;
+    let trusted_version = catalog
+        .versions
+        .into_iter()
+        .find(|version| version.id == plan.game_version)
+        .ok_or_else(|| {
+            format!(
+                "整合包要求的 Minecraft {} 不在已缓存的官方目录中",
+                plan.game_version
+            )
+        })?;
+    let loader = match plan.loader_kind.as_str() {
+        "fabric" => LoaderChoice::Fabric {
+            version: plan.loader_version.clone(),
+        },
+        "quilt" => LoaderChoice::Quilt {
+            version: plan.loader_version.clone(),
+        },
+        "forge" => LoaderChoice::Forge {
+            version: plan.loader_version.clone(),
+        },
+        "neoforge" => LoaderChoice::NeoForge {
+            version: plan.loader_version.clone(),
+        },
+        other => return Err(format!("不支持的加载器：{other}")),
+    };
+    let selection = InstallSelection {
+        instance_name: format!("{} {}", plan.name, plan.version),
+        game_version: trusted_version,
+        loader,
+        isolation: InstanceIsolation::Full,
+    };
+    emit_modpack_progress(app, "game", 0, 1, "解析游戏安装计划");
+    let request = metadata
+        .resolve_install_request(&selection)
+        .await
+        .map_err(|error| error.to_string())?;
+    let task = service
+        .enqueue_install_task(&request)
+        .map_err(|error| error.to_string())?;
+    coordinator.submit_install(service.clone(), task.id.clone());
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(40 * 60);
+    loop {
+        if std::time::Instant::now() > deadline {
+            return Err("游戏安装超时".to_owned());
+        }
+        let tasks = service.list_install_tasks().map_err(|error| error.to_string())?;
+        let current = tasks
+            .iter()
+            .find(|candidate| candidate.id == task.id)
+            .ok_or_else(|| "游戏安装任务丢失".to_owned())?;
+        match current.state {
+            moyumax_core::TaskState::Completed => break,
+            moyumax_core::TaskState::Failed => {
+                let summary = current
+                    .progress
+                    .error_summary
+                    .clone()
+                    .unwrap_or_else(|| "游戏安装失败".to_owned());
+                return Err(format!("游戏安装失败：{summary}"));
+            }
+            _ => {
+                emit_modpack_progress(
+                    app,
+                    "game",
+                    current.progress.completed_bytes,
+                    current.progress.total_bytes.unwrap_or(0),
+                    &current
+                        .progress
+                        .current_item
+                        .clone()
+                        .unwrap_or_else(|| "正在安装游戏".to_owned()),
+                );
+                tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+            }
+        }
+    }
+    service
+        .list_instances()
+        .map_err(|error| error.to_string())?
+        .into_iter()
+        .find(|instance| instance.name == selection.instance_name)
+        .ok_or_else(|| "游戏安装完成但实例未登记".to_owned())
+}
+
+fn emit_modpack_progress(app: &tauri::AppHandle, stage: &str, current: u64, total: u64, item: &str) {
+    let _ = app.emit(
+        "modpack-progress",
+        ModpackProgressEvent {
+            stage: stage.to_owned(),
+            current,
+            total,
+            item: item.to_owned(),
+        },
+    );
+}
+
+#[tauri::command]
 fn get_world_backup_settings(
     service: State<'_, AppService>,
 ) -> Result<WorldBackupSettings, String> {
@@ -1650,6 +1869,7 @@ pub fn run() {
             app.manage(modrinth);
             app.manage(InstallPreviewStore::default());
             app.manage(ContentPreviewStore::default());
+            app.manage(ModpackPreviewStore::default());
             app.manage(DiagnosticPreviewStore::default());
             app.manage(coordinator);
             app.manage(LaunchCoordinator::default());
@@ -1742,6 +1962,10 @@ pub fn run() {
             import_background_image,
             import_theme_pack,
             read_background_image,
+            import_modpack_preview,
+            install_modpack,
+            update_modpack,
+            get_instance_modpack,
             retry_content_task,
             resolve_content_task_recovery,
             list_instances,

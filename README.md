@@ -57,6 +57,7 @@ corepack pnpm --filter @moyumax/desktop tauri dev
 - [发布资产](docs/plans/MILESTONE-26-RELEASE-ASSETS.md)
 - [GitHub Actions Windows CI](docs/plans/MILESTONE-27-CI.md)
 - [自定义背景与纯数据主题包](docs/plans/MILESTONE-28-CUSTOM-THEME.md)
+- [Modrinth 与 CurseForge 整合包安装与更新](docs/plans/MILESTONE-29-MODPACK-INSTALL.md)
 - [下载来源统一与多线程加速计划](docs/plans/DOWNLOAD-SOURCES-AND-ACCELERATION.md)
 - [技术栈决策](docs/architecture/ADR-0001-DESKTOP-STACK.md)
 

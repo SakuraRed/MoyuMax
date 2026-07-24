@@ -16,6 +16,9 @@
     InstallPreview,
     InstallTask,
     LoaderChoice,
+    ModpackInstallReport,
+    ModpackProgressEvent,
+    ModpackPreviewResponse,
     MoyuRuntime,
     OnboardingSelection,
     VersionCatalog,
@@ -62,6 +65,11 @@
   let loaderRequestSequence = 0;
   let taskPoll: ReturnType<typeof setInterval> | undefined;
   let taskPollRunning = false;
+  let packPreview = $state<ModpackPreviewResponse | null>(null);
+  let packInstalling = $state(false);
+  let packProgress = $state<ModpackProgressEvent | null>(null);
+  let packDone = $state<ModpackInstallReport | null>(null);
+  let packError = $state("");
 
   const visibleVersions = $derived(
     (catalog?.versions ?? [])
@@ -78,6 +86,12 @@
 
   onMount(() => {
     void loadCatalog();
+    const unlisten = runtime.onModpackProgress((event) => {
+      packProgress = event;
+    });
+    return () => {
+      unlisten();
+    };
   });
 
   onDestroy(() => {
@@ -97,6 +111,32 @@
     } catch (error) {
       errorMessage = error instanceof Error ? error.message : String(error);
       view = "configure";
+    }
+  }
+
+  async function importPack(): Promise<void> {
+    packError = "";
+    packDone = null;
+    try {
+      const path = await runtime.pickModpackFile();
+      if (!path) return;
+      packPreview = await runtime.importModpackPreview(path);
+    } catch (error) {
+      packError = error instanceof Error ? error.message : String(error);
+    }
+  }
+
+  async function confirmPackInstall(): Promise<void> {
+    if (!packPreview || packInstalling) return;
+    packInstalling = true;
+    packError = "";
+    packProgress = null;
+    try {
+      packDone = await runtime.installModpack(packPreview.id);
+    } catch (error) {
+      packError = error instanceof Error ? error.message : String(error);
+    } finally {
+      packInstalling = false;
     }
   }
 
@@ -337,6 +377,52 @@
             <p>{t("install.heading.description")}</p>
           </div>
         </header>
+
+        <section class="install-section" aria-labelledby="modpack-import-heading">
+          <div class="section-number">包</div>
+          <div class="section-content">
+            <h2 id="modpack-import-heading">{t("modpack.heading")}</h2>
+            <p class="modpack-hint">{t("modpack.description")}</p>
+            {#if packError}
+              <div class="error-block" role="alert"><strong>{t("modpack.errorTitle")}</strong><span>{packError}</span></div>
+            {/if}
+            {#if packDone}
+              <div class="content-queued" role="status">
+                <div>
+                  <strong>{t("modpack.doneTitle")}</strong>
+                  <span>{t("modpack.doneBody").replace("{name}", packDone.packName).replace("{version}", packDone.packVersion).replace("{count}", String(packDone.installedFiles))}</span>
+                </div>
+              </div>
+            {:else if packPreview}
+              <div class="modpack-preview">
+                <div class="backup-title-line">
+                  <h3>{packPreview.preview.name}</h3>
+                  <span>{packPreview.preview.provider === "modrinth" ? "Modrinth" : "CurseForge"}</span>
+                </div>
+                <p>{t("modpack.previewLine")
+                  .replace("{version}", packPreview.preview.version)
+                  .replace("{game}", packPreview.preview.gameVersion)
+                  .replace("{loader}", packPreview.preview.loaderKind)
+                  .replace("{loaderVersion}", packPreview.preview.loaderVersion)
+                  .replace("{count}", String(packPreview.preview.fileCount))
+                  .replace("{size}", formatBytes(packPreview.preview.totalBytes))}</p>
+                {#if packInstalling && packProgress}
+                  <div class="modpack-progress" role="status">
+                    <span>{packProgress.stage === "game" ? t("modpack.stageGame") : t("modpack.stageFiles")} {packProgress.current}/{packProgress.total} · {packProgress.item}</span>
+                  </div>
+                {/if}
+                <div class="local-content-actions">
+                  <button class="button primary compact" disabled={packInstalling} onclick={() => void confirmPackInstall()}>
+                    {packInstalling ? t("modpack.installing") : t("modpack.confirmInstall")}
+                  </button>
+                  <button class="button ghost compact" disabled={packInstalling} onclick={() => { packPreview = null; }}>{t("common.cancel")}</button>
+                </div>
+              </div>
+            {:else}
+              <button class="button ghost compact" onclick={() => void importPack()}>{t("modpack.import")}</button>
+            {/if}
+          </div>
+        </section>
 
         {#if catalog?.source === "cache"}
           <div class="info-banner" role="status">

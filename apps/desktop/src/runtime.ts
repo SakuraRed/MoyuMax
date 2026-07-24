@@ -417,6 +417,58 @@ export type UiBackground =
   | { type: "image"; file: string }
   | { type: "themePack"; pack: ThemePack };
 
+export type ModpackProvider = "modrinth" | "curseforge";
+
+export interface ModpackPreview {
+  provider: ModpackProvider;
+  name: string;
+  version: string;
+  gameVersion: string;
+  loaderKind: string;
+  loaderVersion: string;
+  fileCount: number;
+  totalBytes: number;
+}
+
+export interface ModpackPreviewResponse {
+  id: string;
+  preview: ModpackPreview;
+}
+
+export interface InstalledModpack {
+  provider: ModpackProvider;
+  packName: string;
+  packVersion: string;
+  gameVersion: string;
+  loaderKind: string;
+  managedFiles: { relativePath: string; sha512: string; size: number }[];
+  installedAtUnixSeconds: number;
+}
+
+export interface ModpackInstallReport {
+  instanceId: string;
+  packName: string;
+  packVersion: string;
+  installedFiles: number;
+}
+
+export interface ModpackUpdateReport {
+  packName: string;
+  fromVersion: string;
+  toVersion: string;
+  addedFiles: number;
+  replacedFiles: number;
+  deletedFiles: number;
+  keptUserModified: string[];
+}
+
+export interface ModpackProgressEvent {
+  stage: string;
+  current: number;
+  total: number;
+  item: string;
+}
+
 export const LITTLESKIN_YGGDRASIL_URL = "https://littleskin.cn/api/yggdrasil";
 
 export type LaunchSessionState =
@@ -663,6 +715,14 @@ export interface MoyuRuntime {
   pickBackgroundImage(): Promise<string | null>;
   /** 打开原生文件选择器挑选主题包 JSON；用户取消时返回 null。 */
   pickThemePackFile(): Promise<string | null>;
+  /** 打开原生文件选择器挑选整合包（.mrpack/.zip）；用户取消时返回 null。 */
+  pickModpackFile(): Promise<string | null>;
+  importModpackPreview(sourcePath: string): Promise<ModpackPreviewResponse>;
+  installModpack(previewId: string): Promise<ModpackInstallReport>;
+  updateModpack(instanceId: string, sourcePath: string): Promise<ModpackUpdateReport>;
+  getInstanceModpack(instanceId: string): Promise<InstalledModpack | null>;
+  /** 订阅整合包安装/更新进度事件，返回取消订阅函数。 */
+  onModpackProgress(handler: (event: ModpackProgressEvent) => void): () => void;
   retryContentTask(taskId: string): Promise<void>;
   resolveContentTaskRecovery(taskId: string, decision: RecoveryDecision): Promise<void>;
   listInstances(): Promise<ManagedInstance[]>;
@@ -730,6 +790,14 @@ const BROWSER_WORLD_DETAILS_KEY = "moyumax.browser.worldDetails";
 const BROWSER_SCREENSHOTS_KEY = "moyumax.browser.screenshots";
 const BROWSER_BACKUP_SETTINGS_KEY = "moyumax.browser.backupSettings";
 const BROWSER_ACCOUNTS_KEY = "moyumax.browser.accounts";
+const BROWSER_MODPACKS_KEY = "moyumax.browser.modpacks";
+const browserModpackProgressHandlers = new Set<(event: ModpackProgressEvent) => void>();
+
+function browserEmitModpackProgress(event: ModpackProgressEvent): void {
+  for (const handler of browserModpackProgressHandlers) {
+    handler(event);
+  }
+}
 const BROWSER_MODRINTH_OFFLINE_KEY = "moyumax.browser.modrinthOffline";
 const BROWSER_CLOSE_BEHAVIOR_KEY = "moyumax.browser.windowCloseBehavior";
 const BROWSER_SHELL_STATE_KEY = "moyumax.browser.shellState";
@@ -934,6 +1002,32 @@ function createTauriRuntime(): MoyuRuntime {
         filters: [{ name: "主题包", extensions: ["json"] }],
       });
       return typeof selected === "string" ? selected : null;
+    },
+    pickModpackFile: async () => {
+      const { open } = await import("@tauri-apps/plugin-dialog");
+      const selected = await open({
+        multiple: false,
+        directory: false,
+        filters: [{ name: "整合包", extensions: ["mrpack", "zip"] }],
+      });
+      return typeof selected === "string" ? selected : null;
+    },
+    importModpackPreview: (sourcePath) =>
+      invoke<ModpackPreviewResponse>("import_modpack_preview", { sourcePath }),
+    installModpack: (previewId) =>
+      invoke<ModpackInstallReport>("install_modpack", { previewId }),
+    updateModpack: (instanceId, sourcePath) =>
+      invoke<ModpackUpdateReport>("update_modpack", { instanceId, sourcePath }),
+    getInstanceModpack: (instanceId) =>
+      invoke<InstalledModpack | null>("get_instance_modpack", { instanceId }),
+    onModpackProgress: (handler) => {
+      let unlisten: (() => void) | undefined;
+      void listen<ModpackProgressEvent>("modpack-progress", (event) => {
+        handler(event.payload);
+      }).then((release) => {
+        unlisten = release;
+      });
+      return () => unlisten?.();
     },
     retryContentTask: (taskId) => invoke<void>("retry_content_task", { taskId }),
     resolveContentTaskRecovery: (taskId, decision) =>
@@ -1737,6 +1831,81 @@ function createBrowserRuntime(): MoyuRuntime {
     async pickThemePackFile() {
       return window.localStorage.getItem("moyumax.browser.pickedThemePack");
     },
+    async pickModpackFile() {
+      return window.localStorage.getItem("moyumax.browser.pickedModpackFile");
+    },
+    async importModpackPreview(_sourcePath) {
+      const serialized = window.localStorage.getItem("moyumax.browser.modpackPreview");
+      if (!serialized) throw new Error("整合包缺少 modrinth.index.json 或 manifest.json");
+      const preview = JSON.parse(serialized) as ModpackPreview;
+      return { id: crypto.randomUUID(), preview };
+    },
+    async installModpack(previewId) {
+      if (!previewId) throw new Error("整合包预览已失效，请重新选择文件");
+      const serialized = window.localStorage.getItem("moyumax.browser.modpackPreview");
+      if (!serialized) throw new Error("整合包预览已失效，请重新选择文件");
+      const preview = JSON.parse(serialized) as ModpackPreview;
+      browserEmitModpackProgress({ stage: "game", current: 1, total: 1, item: "正在安装游戏" });
+      browserEmitModpackProgress({
+        stage: "files",
+        current: preview.fileCount,
+        total: preview.fileCount,
+        item: "整合包文件已校验",
+      });
+      const instances = browserInstances();
+      const instance = instances[0];
+      const modpacks = browserModpacks();
+      if (instance) {
+        modpacks[instance.id] = {
+          provider: preview.provider,
+          packName: preview.name,
+          packVersion: preview.version,
+          gameVersion: preview.gameVersion,
+          loaderKind: preview.loaderKind,
+          managedFiles: [],
+          installedAtUnixSeconds: Math.floor(Date.now() / 1000),
+        };
+        window.localStorage.setItem(BROWSER_MODPACKS_KEY, JSON.stringify(modpacks));
+      }
+      return {
+        instanceId: instance?.id ?? "instance-id",
+        packName: preview.name,
+        packVersion: preview.version,
+        installedFiles: preview.fileCount,
+      };
+    },
+    async updateModpack(instanceId, _sourcePath) {
+      const serialized = window.localStorage.getItem("moyumax.browser.modpackUpdateReport");
+      const modpacks = browserModpacks();
+      const existing = modpacks[instanceId];
+      if (!existing) throw new Error("该实例不是由整合包安装的");
+      if (serialized) {
+        const report = JSON.parse(serialized) as ModpackUpdateReport;
+        existing.packVersion = report.toVersion;
+        window.localStorage.setItem(BROWSER_MODPACKS_KEY, JSON.stringify(modpacks));
+        return report;
+      }
+      const previewRaw = window.localStorage.getItem("moyumax.browser.modpackPreview");
+      const preview = previewRaw ? (JSON.parse(previewRaw) as ModpackPreview) : null;
+      return {
+        packName: existing.packName,
+        fromVersion: existing.packVersion,
+        toVersion: preview?.version ?? existing.packVersion,
+        addedFiles: 0,
+        replacedFiles: 0,
+        deletedFiles: 0,
+        keptUserModified: [],
+      };
+    },
+    async getInstanceModpack(instanceId) {
+      return browserModpacks()[instanceId] ?? null;
+    },
+    onModpackProgress(handler) {
+      browserModpackProgressHandlers.add(handler);
+      return () => {
+        browserModpackProgressHandlers.delete(handler);
+      };
+    },
     async listInstanceScreenshots(instanceId) {
       return browserScreenshots()[instanceId] ?? [];
     },
@@ -2445,6 +2614,11 @@ function browserBackupSettings(): WorldBackupSettings {
 function browserAccounts(): AccountSummary[] {
   const serialized = window.localStorage.getItem(BROWSER_ACCOUNTS_KEY);
   return serialized ? (JSON.parse(serialized) as AccountSummary[]) : [];
+}
+
+function browserModpacks(): Record<string, InstalledModpack> {
+  const serialized = window.localStorage.getItem(BROWSER_MODPACKS_KEY);
+  return serialized ? (JSON.parse(serialized) as Record<string, InstalledModpack>) : {};
 }
 
 function browserPushRecycleEntry(input: {

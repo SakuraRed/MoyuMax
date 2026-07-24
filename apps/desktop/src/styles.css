@@ -3516,6 +3516,51 @@ summary:focus-visible {
   font-size: 11.5px;
 }
 
+.modpack-hint {
+  margin: 0 0 10px;
+  color: var(--text-3);
+  font-size: 12.5px;
+}
+
+.modpack-preview {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: var(--frame-row-inset-block) var(--frame-row-inset-inline);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface-2);
+}
+
+.modpack-preview h3 {
+  margin: 0;
+  font-size: 13.5px;
+}
+
+.modpack-preview p {
+  margin: 0;
+  color: var(--text-2);
+  font-size: 12px;
+}
+
+.modpack-progress {
+  padding: 8px 10px;
+  border-radius: 7px;
+  color: var(--text-2);
+  background: var(--accent-dim);
+  font-size: 11.5px;
+}
+
+.modpack-badge {
+  display: inline-block;
+  margin-top: 2px;
+  padding: var(--compact-label-inset-block) var(--compact-label-inset-inline);
+  border-radius: 5px;
+  color: var(--accent);
+  background: var(--accent-dim);
+  font-size: 11px;
+}
+
 .backup-empty-row {
   padding: var(--frame-row-inset-block) var(--frame-row-inset-inline);
   border: 1px solid var(--border);
@@ -3721,6 +3766,10 @@ summary:focus-visible {
   .datapack-import-form {
     align-items: stretch;
     flex-direction: column;
+  }
+
+  .install-form-card {
+    grid-template-columns: minmax(0, 1fr);
   }
 
   .resource-instance-field,
