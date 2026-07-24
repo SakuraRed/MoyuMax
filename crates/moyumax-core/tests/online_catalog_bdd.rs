@@ -180,6 +180,53 @@ async fn catalog_download_verifies_sha1_before_commit() {
     );
 }
 
+#[tokio::test]
+async fn catalog_download_decodes_gzip_encoded_responses() {
+    // CDN 以 gzip 内容编码返回时，客户端必须解码后再校验哈希。
+    let gzipped: Vec<u8> = vec![
+        31, 139, 8, 0, 201, 31, 99, 106, 2, 255, 203, 205, 79, 41, 72, 76, 206, 214, 77, 170, 44,
+        73, 45, 6, 0, 98, 231, 109, 90, 13, 0, 0, 0,
+    ];
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let address = listener.local_addr().unwrap();
+    let server = thread::spawn(move || {
+        for stream in listener.incoming() {
+            let Ok(stream) = stream else { break };
+            let mut reader = BufReader::new(stream.try_clone().unwrap());
+            let _ = read_request(&mut reader);
+            let mut stream = stream;
+            stream
+                .write_all(
+                    format!(
+                        "HTTP/1.1 200 OK\r\nContent-Type: application/octet-stream\r\nContent-Encoding: gzip\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                        gzipped.len()
+                    )
+                    .as_bytes(),
+                )
+                .unwrap();
+            stream.write_all(&gzipped).unwrap();
+            stream.flush().unwrap();
+        }
+    });
+    let client = ModrinthClient::with_base_url(&format!("http://{address}/")).unwrap();
+    let directory = TempDir::new().unwrap();
+    let file = moyumax_core::ModrinthVersionFile {
+        url: format!("http://{address}/files/pack.mrpack"),
+        filename: "pack.mrpack".to_owned(),
+        sha1: hex_encode(&Sha1::digest(b"modpack-bytes")),
+        sha512: "a".repeat(128),
+        size: 13,
+    };
+
+    let path = client
+        .download_project_file(&file, directory.path())
+        .await
+        .expect("gzip 编码响应必须解码下载");
+
+    assert_eq!(std::fs::read(&path).unwrap(), b"modpack-bytes");
+    drop(server);
+}
+
 fn decode_facets(path: &str) -> String {
     let query = path.split('?').nth(1).unwrap_or("");
     query

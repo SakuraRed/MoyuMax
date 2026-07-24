@@ -19,7 +19,9 @@ use uuid::Uuid;
 
 use crate::{CoreError, Result, accounts::MICROSOFT_APP_CLIENT_ID, unix_timestamp};
 
-const MSA_BASE_URL: &str = "https://login.microsoftonline.com/consumers/oauth2/v2.0";
+// common 租户同时接受组织与个人 Microsoft 帐户；应用注册须包含个人帐户
+// （signInAudience = AzureADandPersonalMicrosoftAccount 或 PersonalMicrosoftAccount）。
+const MSA_BASE_URL: &str = "https://login.microsoftonline.com/common/oauth2/v2.0";
 const XBL_BASE_URL: &str = "https://user.auth.xboxlive.com";
 const XSTS_BASE_URL: &str = "https://xsts.auth.xboxlive.com";
 const MCS_BASE_URL: &str = "https://api.minecraftservices.com";

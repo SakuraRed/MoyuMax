@@ -13,6 +13,7 @@ MoyuMax 客户端许可证为 GPL-3.0-only;下表列出全部直接及传递依�
 | cargo | anyhow | 1.0.104 | MIT OR Apache-2.0 |
 | cargo | arbitrary | 1.4.2 | MIT OR Apache-2.0 |
 | cargo | arboard | 3.6.1 | MIT OR Apache-2.0 |
+| cargo | async-compression | 0.4.42 | MIT OR Apache-2.0 |
 | cargo | atk | 0.18.2 | MIT |
 | cargo | atk-sys | 0.18.2 | MIT |
 | cargo | atomic-waker | 1.1.2 | Apache-2.0 OR MIT |
@@ -53,6 +54,8 @@ MoyuMax 客户端许可证为 GPL-3.0-only;下表列出全部直接及传递依�
 | cargo | clipboard-win | 5.4.1 | BSL-1.0 |
 | cargo | cmake | 0.1.58 | MIT OR Apache-2.0 |
 | cargo | combine | 4.6.7 | MIT |
+| cargo | compression-codecs | 0.4.38 | MIT OR Apache-2.0 |
+| cargo | compression-core | 0.4.32 | MIT OR Apache-2.0 |
 | cargo | const-oid | 0.10.2 | Apache-2.0 OR MIT |
 | cargo | cookie | 0.18.1 | MIT OR Apache-2.0 |
 | cargo | core-foundation | 0.9.4 | MIT OR Apache-2.0 |

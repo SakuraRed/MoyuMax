@@ -14,7 +14,7 @@ rust-version = "1.96"
 
 [workspace.dependencies]
 futures-util = "=0.3.33"
-reqwest = { version = "=0.13.4", default-features = false, features = ["form", "json", "rustls", "stream", "system-proxy"] }
+reqwest = { version = "=0.13.4", default-features = false, features = ["deflate", "form", "gzip", "json", "rustls", "stream", "system-proxy"] }
 regex = "=1.13.1"
 rusqlite = { version = "=0.40.1", features = ["bundled"] }
 serde = { version = "=1.0.229", features = ["derive"] }

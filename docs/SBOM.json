@@ -89,6 +89,15 @@
     {
       "type": "library",
       "ecosystem": "cargo",
+      "name": "async-compression",
+      "version": "0.4.42",
+      "purl": "pkg:cargo/async-compression@0.4.42",
+      "license": "MIT OR Apache-2.0",
+      "repository": "https://github.com/Nullus157/async-compression"
+    },
+    {
+      "type": "library",
+      "ecosystem": "cargo",
       "name": "atk",
       "version": "0.18.2",
       "purl": "pkg:cargo/atk@0.18.2",
@@ -445,6 +454,24 @@
       "purl": "pkg:cargo/combine@4.6.7",
       "license": "MIT",
       "repository": "https://github.com/Marwes/combine"
+    },
+    {
+      "type": "library",
+      "ecosystem": "cargo",
+      "name": "compression-codecs",
+      "version": "0.4.38",
+      "purl": "pkg:cargo/compression-codecs@0.4.38",
+      "license": "MIT OR Apache-2.0",
+      "repository": "https://github.com/Nullus157/async-compression"
+    },
+    {
+      "type": "library",
+      "ecosystem": "cargo",
+      "name": "compression-core",
+      "version": "0.4.32",
+      "purl": "pkg:cargo/compression-core@0.4.32",
+      "license": "MIT OR Apache-2.0",
+      "repository": "https://github.com/Nullus157/async-compression"
     },
     {
       "type": "library",

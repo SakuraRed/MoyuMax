@@ -21,10 +21,12 @@ pub const LITTLESKIN_YGGDRASIL_URL: &str = "https://littleskin.cn/api/yggdrasil"
 
 /// MoyuMax 的 Microsoft 应用注册（公共客户端，设备码流）。
 ///
-/// 2026-07-24 由项目所有者在 Azure 注册（个人 Microsoft 帐户 + 允许公共客户端流）。
-/// Client ID 是公开标识，不是机密；设备码登录链路（MSA → Xbox Live → XSTS →
-/// Minecraft Services）在 `msauth` 模块实现并以本常量发起。
-pub const MICROSOFT_APP_CLIENT_ID: &str = "a5897d46-0863-48dd-84f2-467896967591";
+/// 2026-07-24 由项目所有者在 Azure 重新注册（含个人 Microsoft 帐户 +
+/// 允许公共客户端流 + 设备代码流）。前一个注册（a5897d46…）因帐户类型不含
+/// 个人 MSA 报 AADSTS700016，已弃用。Client ID 是公开标识，不是机密；
+/// 设备码登录链路（MSA → Xbox Live → XSTS → Minecraft Services）在
+/// `msauth` 模块实现并以本常量发起。
+pub const MICROSOFT_APP_CLIENT_ID: &str = "7f00149b-8b23-4ac4-86ef-d982a58c07a3";
 
 const COMPAT_OFFLINE_PLAYER: &str = "MoyuMaxPlayer";
 /// MC 访问令牌剩余有效期不足该秒数时，启动前先经刷新链换新。
