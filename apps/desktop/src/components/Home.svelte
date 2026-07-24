@@ -222,7 +222,6 @@
   pageTitle={t("nav.home")}
   dataDirectory={settings.dataDirectory}
   searchVisible
-  navigationTargets={["resources", "tasks", "data", "settings"]}
   onNavigate={(target) => target === "resources" ? onOpenResources() : target === "tasks" ? onOpenTasks() : target === "data" ? onOpenData() : target === "settings" ? onOpenSettings() : undefined}
   taskStatus={activeLaunches.length > 0 ? t("home.taskStatus.running").replace("{count}", String(activeLaunches.length)) : activeTasks.length + activeContentTasks.length > 0 ? t("home.taskStatus.pending").replace("{count}", String(activeTasks.length + activeContentTasks.length)) : t("shell.status.noTasks")}
   {onMinimize}

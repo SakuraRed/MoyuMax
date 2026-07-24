@@ -116,7 +116,6 @@
   pageTitle={t("crash.title")}
   dataDirectory={settings.dataDirectory}
   activeNavigation="home"
-  navigationTargets={["home", "resources", "tasks"]}
   onNavigate={(target) => target === "home" ? onBack() : target === "resources" ? onOpenResources() : target === "tasks" ? onOpenTasks() : undefined}
   connectionStatus={t("crash.connectionStatus")}
   taskStatus={t("crash.taskStatus")}

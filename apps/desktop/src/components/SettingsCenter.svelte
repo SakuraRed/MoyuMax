@@ -555,7 +555,6 @@
   pageTitle={t("settings.pageTitle")}
   dataDirectory={settings.dataDirectory}
   activeNavigation="settings"
-  navigationTargets={["home"]}
   onNavigate={(target) => target === "home" ? onOpenHome() : undefined}
   connectionStatus={t("settings.connectionStatus")}
   taskStatus={t("settings.envCount").replace("{count}", String(environments.length))}

@@ -321,7 +321,6 @@
   pageTitle={t("nav.resources")}
   dataDirectory={settings.dataDirectory}
   activeNavigation="resources"
-  navigationTargets={["home", "tasks"]}
   onNavigate={(target) => target === "home" ? onBack() : target === "tasks" ? onOpenTasks() : undefined}
   connectionStatus={searchError ? t("resources.connection.offline") : t("resources.connection.online")}
   {onMinimize}

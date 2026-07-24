@@ -14,7 +14,6 @@
     searchVisible?: boolean;
     navigationDisabled?: boolean;
     activeNavigation?: NavigationKey;
-    navigationTargets?: NavigationKey[];
     connectionStatus?: string;
     taskStatus?: string;
     onMinimize: () => Promise<void>;
@@ -31,7 +30,6 @@
     searchVisible = false,
     navigationDisabled = false,
     activeNavigation = "home",
-    navigationTargets = [],
     connectionStatus = t("shell.status.defaultConnection"),
     taskStatus = t("shell.status.noTasks"),
     onMinimize,
@@ -101,7 +99,7 @@
           class="nav-item"
           aria-label={t(item.labelKey)}
           aria-current={active ? "page" : undefined}
-          disabled={navigationDisabled || (!active && !navigationTargets.includes(item.key))}
+          disabled={navigationDisabled}
           onclick={() => onNavigate?.(item.key)}
         >
           <Icon name={item.name} />
@@ -109,7 +107,12 @@
         </button>
       {/each}
       <span class="nav-spacer"></span>
-      <button class="account" aria-label={t("shell.account.aria")} disabled>
+      <button
+        class="account"
+        aria-label={t("shell.account.aria")}
+        disabled={navigationDisabled}
+        onclick={() => onNavigate?.("settings")}
+      >
         <span class="avatar">?</span>
         <span><strong>{t("shell.account.notLoggedIn")}</strong><small>{t("shell.account.addHint")}</small></span>
       </button>

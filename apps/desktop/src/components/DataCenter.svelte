@@ -402,7 +402,6 @@
   pageTitle={t("nav.data")}
   dataDirectory={settings.dataDirectory}
   activeNavigation="data"
-  navigationTargets={["home", "resources", "tasks"]}
   onNavigate={(target) => target === "home" ? onBack() : target === "resources" ? onOpenResources() : target === "tasks" ? onOpenTasks() : undefined}
   connectionStatus={t("data.connectionStatus")}
   taskStatus={changingItem ? t("data.taskStatus.updating") : t("data.taskStatus.summary").replace("{backups}", String(backups.length)).replace("{items}", String(items.length))}

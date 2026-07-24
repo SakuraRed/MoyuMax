@@ -244,7 +244,6 @@
   pageTitle={t("tasks.title")}
   dataDirectory={settings.dataDirectory}
   activeNavigation="tasks"
-  navigationTargets={["home", "resources"]}
   onNavigate={(target) => target === "home" ? onBack() : target === "resources" ? onOpenResources() : undefined}
   connectionStatus={t("tasks.connectionStatus")}
   taskStatus={t("home.taskStatus.pending").replace("{count}", String([...tasks, ...contentTasks].filter((task) => !["completed", "cancelled"].includes(task.state)).length))}
