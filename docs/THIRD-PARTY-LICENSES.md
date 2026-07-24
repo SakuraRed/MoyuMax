@@ -311,6 +311,7 @@ MoyuMax 客户端许可证为 GPL-3.0-only;下表列出全部直接及传递依�
 | cargo | rustls-platform-verifier-android | 0.1.1 | MIT OR Apache-2.0 |
 | cargo | rustls-webpki | 0.103.13 | ISC |
 | cargo | rustversion | 1.0.23 | MIT OR Apache-2.0 |
+| cargo | ryu | 1.0.23 | Apache-2.0 OR BSL-1.0 |
 | cargo | same-file | 1.0.6 | Unlicense/MIT |
 | cargo | schannel | 0.1.29 | MIT |
 | cargo | schemars | 0.8.22 | MIT |
@@ -330,6 +331,7 @@ MoyuMax 客户端许可证为 GPL-3.0-only;下表列出全部直接及传递依�
 | cargo | serde_repr | 0.1.21 | MIT OR Apache-2.0 |
 | cargo | serde_spanned | 0.6.9 | MIT OR Apache-2.0 |
 | cargo | serde_spanned | 1.1.1 | MIT OR Apache-2.0 |
+| cargo | serde_urlencoded | 0.7.1 | MIT/Apache-2.0 |
 | cargo | serde_with | 3.21.0 | MIT OR Apache-2.0 |
 | cargo | serde_with_macros | 3.21.0 | MIT OR Apache-2.0 |
 | cargo | serde-untagged | 0.1.9 | MIT OR Apache-2.0 |

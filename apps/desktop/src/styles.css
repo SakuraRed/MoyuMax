@@ -3397,6 +3397,37 @@ summary:focus-visible {
   background: var(--warn-dim) !important;
 }
 
+.device-code-panel p {
+  margin: 0;
+  color: var(--text-2);
+  font-size: 12px;
+}
+
+.device-code-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  min-width: 0;
+}
+
+.device-code-row [role="status"] {
+  color: var(--text-2);
+  font-size: 12px;
+}
+
+.device-code {
+  font-size: 20px;
+  letter-spacing: 2px;
+  font-family: var(--font-mono, monospace);
+}
+
+.device-code-uri {
+  color: var(--text-2);
+  font-size: 12px;
+  overflow-wrap: anywhere;
+}
+
 .dev-risk {
   color: var(--warn);
 }

@@ -19,6 +19,7 @@ mod java_env;
 mod launch;
 mod loader_install;
 mod modpack;
+mod msauth;
 mod recycle;
 mod resources;
 mod screenshots;
@@ -39,6 +40,7 @@ pub use java_env::*;
 pub use launch::*;
 pub use loader_install::*;
 pub use modpack::*;
+pub use msauth::*;
 pub use recycle::*;
 pub use resources::*;
 pub use screenshots::*;
@@ -135,6 +137,8 @@ pub enum CoreError {
     AccountCredentials(String),
     #[error("无法连接认证服务器：{0}")]
     AccountNetwork(String),
+    #[error("登录已取消：{0}")]
+    AccountLoginCancelled(String),
     #[error("任务已暂停，可在恢复全部任务后继续")]
     TaskPaused,
 }
@@ -145,6 +149,7 @@ pub type Result<T> = std::result::Result<T, CoreError>;
 pub struct AppService {
     database_path: PathBuf,
     default_data_directory: String,
+    microsoft_auth: Option<msauth::MicrosoftAuthClient>,
 }
 
 impl AppService {
@@ -156,6 +161,7 @@ impl AppService {
         let service = Self {
             database_path: database_path.to_path_buf(),
             default_data_directory: path_text(default_data_directory),
+            microsoft_auth: None,
         };
         service.migrate()?;
         service.recover_interrupted_install_tasks()?;
@@ -168,6 +174,20 @@ impl AppService {
         service.recover_java_deletions()?;
         service.generate_missing_crash_reports()?;
         Ok(service)
+    }
+
+    /// 覆盖 Microsoft 认证端点（测试注入本地替身；生产始终为官方端点）。
+    #[must_use]
+    pub fn with_microsoft_auth_client(mut self, client: msauth::MicrosoftAuthClient) -> Self {
+        self.microsoft_auth = Some(client);
+        self
+    }
+
+    pub(crate) fn microsoft_auth_client(&self) -> Result<msauth::MicrosoftAuthClient> {
+        match &self.microsoft_auth {
+            Some(client) => Ok(client.clone()),
+            None => msauth::MicrosoftAuthClient::production(),
+        }
     }
 
     pub fn bootstrap_state(&self) -> Result<BootstrapState> {
@@ -525,6 +545,17 @@ impl AppService {
                     installed_at_unix_seconds INTEGER NOT NULL
                 );
                 PRAGMA user_version = 16;
+                ",
+            )?;
+        }
+        // v17:Microsoft 账户（MSA 刷新令牌与 MC 令牌过期时间）。
+        let version: i64 = connection.query_row("PRAGMA user_version", [], |row| row.get(0))?;
+        if version < 17 {
+            connection.execute_batch(
+                "
+                ALTER TABLE accounts ADD COLUMN msa_refresh_token TEXT NOT NULL DEFAULT '';
+                ALTER TABLE accounts ADD COLUMN mc_expires_at_unix_seconds INTEGER;
+                PRAGMA user_version = 17;
                 ",
             )?;
         }

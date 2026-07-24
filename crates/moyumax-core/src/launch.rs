@@ -28,6 +28,7 @@ pub struct LaunchAccount {
     access_token: String,
     client_id: String,
     xuid: String,
+    user_type: &'static str,
 }
 
 impl fmt::Debug for LaunchAccount {
@@ -68,6 +69,7 @@ impl LaunchAccount {
             access_token: "0".to_owned(),
             client_id: String::new(),
             xuid: String::new(),
+            user_type: "legacy",
         })
     }
 
@@ -103,7 +105,15 @@ impl LaunchAccount {
             access_token: access_token.to_owned(),
             client_id: client_token.to_owned(),
             xuid: String::new(),
+            user_type: "legacy",
         })
+    }
+
+    /// Microsoft 账户的启动身份（MC 访问令牌，`user_type=msa`）。
+    pub fn microsoft(player_name: &str, player_uuid: &str, access_token: &str) -> Result<Self> {
+        let mut account = Self::yggdrasil(player_name, player_uuid, access_token, "")?;
+        account.user_type = "msa";
+        Ok(account)
     }
 }
 
@@ -839,7 +849,7 @@ pub fn prepare_launch_from_runtime(
         ),
         ("clientid", account.client_id.clone()),
         ("auth_xuid", account.xuid.clone()),
-        ("user_type", "legacy".to_owned()),
+        ("user_type", account.user_type.to_owned()),
         ("user_properties", "{}".to_owned()),
         ("version_type", version_type.to_owned()),
     ]);

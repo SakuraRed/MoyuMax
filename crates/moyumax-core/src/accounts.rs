@@ -1,9 +1,8 @@
-//! 账户模型与 Authlib Injector（Yggdrasil）外置登录。
+//! 账户模型、Authlib Injector（Yggdrasil）外置登录与 Microsoft 设备码登录。
 //!
-//! 离线与外置账户统一存入 `accounts` 表；外置登录只保存令牌与玩家档案，
-//! 密码只在当次认证请求中使用，绝不落盘。令牌不序列化到前端——
-//! `AccountSummary` 不含任何令牌字段。Microsoft 登录受应用注册进度限制，
-//! 本模块不提供入口。
+//! 离线、外置与 Microsoft 账户统一存入 `accounts` 表；外置登录只保存令牌与玩家档案，
+//! 密码只在当次认证请求中使用，绝不落盘；Microsoft 账户保存 MSA 刷新令牌与
+//! MC 访问令牌（含过期时间）。令牌不序列化到前端——`AccountSummary` 不含任何令牌字段。
 
 use std::{fmt, time::Duration};
 
@@ -12,24 +11,31 @@ use rusqlite::{OptionalExtension, TransactionBehavior, params};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
-use crate::{AppService, CoreError, LaunchAccount, Result, unix_timestamp};
+use crate::{
+    AppService, CoreError, LaunchAccount, Result,
+    msauth::{DeviceCodeGrant, MicrosoftAuthClient, MicrosoftLoginCancel, MicrosoftProfile},
+    unix_timestamp,
+};
 
 pub const LITTLESKIN_YGGDRASIL_URL: &str = "https://littleskin.cn/api/yggdrasil";
 
 /// MoyuMax 的 Microsoft 应用注册（公共客户端，设备码流）。
 ///
 /// 2026-07-24 由项目所有者在 Azure 注册（个人 Microsoft 帐户 + 允许公共客户端流）。
-/// Client ID 是公开标识，不是机密；登录流程（设备码 → MSA → Xbox Live → XSTS →
-/// Minecraft Services）在后续里程碑实现，届时使用此常量。
+/// Client ID 是公开标识，不是机密；设备码登录链路（MSA → Xbox Live → XSTS →
+/// Minecraft Services）在 `msauth` 模块实现并以本常量发起。
 pub const MICROSOFT_APP_CLIENT_ID: &str = "a5897d46-0863-48dd-84f2-467896967591";
 
 const COMPAT_OFFLINE_PLAYER: &str = "MoyuMaxPlayer";
+/// MC 访问令牌剩余有效期不足该秒数时，启动前先经刷新链换新。
+const MC_TOKEN_REFRESH_MARGIN_SECONDS: i64 = 300;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub enum AccountKind {
     Offline,
     Authlib,
+    Microsoft,
 }
 
 impl AccountKind {
@@ -37,6 +43,7 @@ impl AccountKind {
         match value {
             "offline" => Ok(Self::Offline),
             "authlib" => Ok(Self::Authlib),
+            "microsoft" => Ok(Self::Microsoft),
             _ => Err(CoreError::InvalidStoredState(format!(
                 "未知账户类型：{value}"
             ))),
@@ -82,6 +89,8 @@ struct StoredAccount {
     summary: AccountSummary,
     access_token: String,
     client_token: String,
+    msa_refresh_token: String,
+    mc_expires_at_unix_seconds: Option<i64>,
 }
 
 impl fmt::Debug for StoredAccount {
@@ -91,6 +100,11 @@ impl fmt::Debug for StoredAccount {
             .field("summary", &self.summary)
             .field("access_token", &"<redacted>")
             .field("client_token", &"<redacted>")
+            .field("msa_refresh_token", &"<redacted>")
+            .field(
+                "mc_expires_at_unix_seconds",
+                &self.mc_expires_at_unix_seconds,
+            )
             .finish()
     }
 }
@@ -489,12 +503,21 @@ impl AppService {
         Ok(())
     }
 
-    /// 刷新外置账户会话；令牌被吊销时标记过期，网络错误保持原状态。
+    /// 刷新外置或 Microsoft 账户会话；令牌被吊销时标记过期，网络错误保持原状态。
     pub async fn refresh_account_session(&self, account_id: &str) -> Result<AccountSummary> {
         let stored = self.stored_account(account_id)?;
-        if stored.summary.kind == AccountKind::Offline {
-            return Ok(stored.summary);
+        match stored.summary.kind {
+            AccountKind::Offline => Ok(stored.summary),
+            AccountKind::Authlib => self.refresh_authlib_session(&stored).await,
+            AccountKind::Microsoft => {
+                let client = self.microsoft_auth_client()?;
+                self.refresh_microsoft_session(&client, &stored).await
+            }
         }
+    }
+
+    async fn refresh_authlib_session(&self, stored: &StoredAccount) -> Result<AccountSummary> {
+        let account_id = stored.summary.id.as_str();
         let server_url = stored
             .summary
             .server_url
@@ -535,8 +558,125 @@ impl AppService {
         }
     }
 
-    /// 解析启动身份：默认账户或指定账户；外置令牌失效时拒绝启动。
-    pub fn account_launch_identity(&self, account_id: Option<&str>) -> Result<LaunchAccount> {
+    /// Microsoft 会话刷新：MSA 刷新令牌轮换 + 完整 Xbox 链，随事务更新。
+    async fn refresh_microsoft_session(
+        &self,
+        client: &MicrosoftAuthClient,
+        stored: &StoredAccount,
+    ) -> Result<AccountSummary> {
+        if stored.msa_refresh_token.is_empty() {
+            return Err(CoreError::InvalidStoredState(
+                "Microsoft 账户缺少刷新令牌".to_owned(),
+            ));
+        }
+        match client.refresh_profile(&stored.msa_refresh_token).await {
+            Ok(profile) => {
+                self.persist_microsoft_profile(&stored.summary.id, &profile)?;
+                self.account_summary(&stored.summary.id)
+            }
+            Err(CoreError::AccountCredentials(message)) => {
+                self.connection()?.execute(
+                    "UPDATE accounts SET session_state = 'expired' WHERE id = ?1",
+                    params![stored.summary.id],
+                )?;
+                Err(CoreError::AccountCredentials(format!(
+                    "Microsoft 会话已失效，请重新登录：{message}"
+                )))
+            }
+            Err(error) => Err(error),
+        }
+    }
+
+    /// Microsoft 设备码登录完成：轮询 + Xbox 链 + 档案，成功后入库。
+    /// 同一玩家 UUID 的 Microsoft 账户已存在时更新令牌（重新登录语义）。
+    pub async fn complete_microsoft_device_login(
+        &self,
+        client: &MicrosoftAuthClient,
+        grant: &DeviceCodeGrant,
+        cancel: &MicrosoftLoginCancel,
+    ) -> Result<AccountSummary> {
+        let profile = client.poll_device_code(grant, cancel).await?;
+        let existing = {
+            let connection = self.connection()?;
+            connection
+                .query_row(
+                    "SELECT id FROM accounts WHERE kind = 'microsoft' AND player_uuid = ?1",
+                    params![profile.player_uuid],
+                    |row| row.get::<_, String>(0),
+                )
+                .optional()?
+        };
+        let account_id = match existing {
+            Some(id) => id,
+            None => {
+                let id = Uuid::new_v4().to_string();
+                let now = unix_timestamp();
+                let mut connection = self.connection()?;
+                let transaction =
+                    connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
+                transaction.execute(
+                    "
+                    INSERT INTO accounts (
+                        id, kind, username, player_uuid, server_url, access_token, client_token,
+                        is_default, session_state, created_at_unix_seconds,
+                        last_validated_at_unix_seconds
+                    ) VALUES (?1, 'microsoft', ?2, ?3, NULL, '', '', 0, 'valid', ?4, ?4)
+                    ",
+                    params![id, profile.player_name, profile.player_uuid, now],
+                )?;
+                let has_default: bool = transaction.query_row(
+                    "SELECT EXISTS(SELECT 1 FROM accounts WHERE is_default = 1 AND id != ?1)",
+                    params![id],
+                    |row| row.get(0),
+                )?;
+                if !has_default {
+                    transaction.execute(
+                        "UPDATE accounts SET is_default = 1 WHERE id = ?1",
+                        params![id],
+                    )?;
+                }
+                transaction.commit()?;
+                id
+            }
+        };
+        self.persist_microsoft_profile(&account_id, &profile)?;
+        self.account_summary(&account_id)
+    }
+
+    /// 把 Microsoft 档案的令牌与过期时间随事务写入账户行。
+    fn persist_microsoft_profile(
+        &self,
+        account_id: &str,
+        profile: &MicrosoftProfile,
+    ) -> Result<()> {
+        let now = unix_timestamp();
+        let mut connection = self.connection()?;
+        let transaction = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        transaction.execute(
+            "
+            UPDATE accounts
+            SET username = ?2, player_uuid = ?3, access_token = ?4, msa_refresh_token = ?5,
+                mc_expires_at_unix_seconds = ?6, session_state = 'valid',
+                last_validated_at_unix_seconds = ?7
+            WHERE id = ?1
+            ",
+            params![
+                account_id,
+                profile.player_name,
+                profile.player_uuid,
+                profile.mc_access_token,
+                profile.msa_refresh_token,
+                profile.mc_expires_at_unix_seconds,
+                now,
+            ],
+        )?;
+        transaction.commit()?;
+        Ok(())
+    }
+
+    /// 解析启动身份：默认账户或指定账户；外置令牌失效时拒绝启动；
+    /// Microsoft 账户的 MC 令牌临期（剩余不足 5 分钟）时先经刷新链换新。
+    pub async fn account_launch_identity(&self, account_id: Option<&str>) -> Result<LaunchAccount> {
         if self.list_accounts()?.is_empty() {
             // 兼容路径：没有任何账户时创建默认离线账户，与早期版本行为一致。
             self.add_offline_account(COMPAT_OFFLINE_PLAYER)?;
@@ -567,6 +707,25 @@ impl AppService {
                     &stored.client_token,
                 )
             }
+            AccountKind::Microsoft => {
+                if summary.session_state == AccountSessionState::Expired {
+                    return Err(CoreError::AccountCredentials(
+                        "该 Microsoft 账户会话已过期，请重新登录后再启动游戏".to_owned(),
+                    ));
+                }
+                let mut stored = self.stored_account(&summary.id)?;
+                let expires = stored.mc_expires_at_unix_seconds.unwrap_or(0);
+                if expires <= unix_timestamp() + MC_TOKEN_REFRESH_MARGIN_SECONDS {
+                    let client = self.microsoft_auth_client()?;
+                    self.refresh_microsoft_session(&client, &stored).await?;
+                    stored = self.stored_account(&summary.id)?;
+                }
+                LaunchAccount::microsoft(
+                    &stored.summary.username,
+                    &stored.summary.player_uuid,
+                    &stored.access_token,
+                )
+            }
         }
     }
 
@@ -584,7 +743,7 @@ impl AppService {
                 "
                 SELECT id, kind, username, player_uuid, server_url, is_default, session_state,
                        created_at_unix_seconds, last_validated_at_unix_seconds,
-                       access_token, client_token
+                       access_token, client_token, msa_refresh_token, mc_expires_at_unix_seconds
                 FROM accounts WHERE id = ?1
                 ",
                 params![account_id],
@@ -601,6 +760,8 @@ impl AppService {
                         row.get::<_, Option<i64>>(8)?,
                         row.get::<_, String>(9)?,
                         row.get::<_, String>(10)?,
+                        row.get::<_, String>(11)?,
+                        row.get::<_, Option<i64>>(12)?,
                     ))
                 },
             )
@@ -617,6 +778,8 @@ impl AppService {
             last_validated_at,
             access_token,
             client_token,
+            msa_refresh_token,
+            mc_expires_at_unix_seconds,
         )) = row
         else {
             return Err(CoreError::Account("账户不存在".to_owned()));
@@ -635,6 +798,8 @@ impl AppService {
             },
             access_token,
             client_token,
+            msa_refresh_token,
+            mc_expires_at_unix_seconds,
         })
     }
 }

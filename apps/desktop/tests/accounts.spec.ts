@@ -127,10 +127,10 @@ test("M20-ACCT-004 会话过期的账户刷新失败并保留过期标记", asyn
   await expect(page.getByText("会话已过期", { exact: true })).toBeVisible();
 });
 
-test("M20-ACCT-005 Microsoft 仅文字说明不提供伪装入口", async ({ page }) => {
+test("M20-ACCT-005 Microsoft 提供真实设备码登录入口", async ({ page }) => {
   await page.getByRole("button", { name: "设置" }).click();
-  await expect(page.getByText("Microsoft 应用已注册，登录功能在后续里程碑提供", { exact: false })).toBeVisible();
-  await expect(page.getByRole("button", { name: /Microsoft/ })).toHaveCount(0);
+  await expect(page.getByRole("button", { name: "添加 Microsoft 账户" })).toBeVisible();
+  await expect(page.getByText("登录功能在后续里程碑提供", { exact: false })).toHaveCount(0);
 });
 
 test("UI-ACCT-001 账户区与添加表单在 960x600 和 200% 放大下不溢出", async ({ page }) => {

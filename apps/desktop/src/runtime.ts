@@ -366,7 +366,7 @@ export interface WorldBackupSettings {
   keepCount: number;
 }
 
-export type AccountKind = "offline" | "authlib";
+export type AccountKind = "offline" | "authlib" | "microsoft";
 export type AccountSessionState = "valid" | "expired";
 
 export interface AccountSummary {
@@ -379,6 +379,20 @@ export interface AccountSummary {
   sessionState: AccountSessionState;
   createdAtUnixSeconds: number;
   lastValidatedAtUnixSeconds: number | null;
+}
+
+/** Microsoft 设备码登录的展示信息（用户码与验证地址）。 */
+export interface DeviceCodeInfo {
+  userCode: string;
+  verificationUri: string;
+  expiresInSeconds: number;
+}
+
+/** `microsoft-device-login` 事件负载（绝不携带令牌）。 */
+export interface MicrosoftLoginEvent {
+  state: "completed" | "failed" | "cancelled";
+  account: AccountSummary | null;
+  message: string | null;
 }
 
 export interface UiPreferences {
@@ -694,6 +708,14 @@ export interface MoyuRuntime {
   setDefaultAccount(accountId: string): Promise<void>;
   removeAccount(accountId: string): Promise<void>;
   refreshAccountSession(accountId: string): Promise<AccountSummary>;
+  /** 发起 Microsoft 设备码登录；返回用户码与验证地址，结果经事件到达。 */
+  startMicrosoftDeviceLogin(): Promise<DeviceCodeInfo>;
+  /** 取消正在进行的 Microsoft 设备码登录。 */
+  cancelMicrosoftDeviceLogin(): Promise<void>;
+  /** 订阅 Microsoft 设备码登录结果事件，返回取消订阅函数。 */
+  onMicrosoftDeviceLogin(handler: (event: MicrosoftLoginEvent) => void): () => void;
+  /** 在系统浏览器打开 https 外部链接。 */
+  openExternalUrl(url: string): Promise<void>;
   getUiPreferences(): Promise<UiPreferences>;
   setUiTheme(theme: string): Promise<void>;
   setUiLanguage(language: string): Promise<void>;
@@ -792,6 +814,14 @@ const BROWSER_BACKUP_SETTINGS_KEY = "moyumax.browser.backupSettings";
 const BROWSER_ACCOUNTS_KEY = "moyumax.browser.accounts";
 const BROWSER_MODPACKS_KEY = "moyumax.browser.modpacks";
 const browserModpackProgressHandlers = new Set<(event: ModpackProgressEvent) => void>();
+const browserMicrosoftLoginHandlers = new Set<(event: MicrosoftLoginEvent) => void>();
+let browserMicrosoftLoginTimer: number | undefined;
+
+function browserEmitMicrosoftLogin(event: MicrosoftLoginEvent): void {
+  for (const handler of browserMicrosoftLoginHandlers) {
+    handler(event);
+  }
+}
 
 function browserEmitModpackProgress(event: ModpackProgressEvent): void {
   for (const handler of browserModpackProgressHandlers) {
@@ -962,6 +992,20 @@ function createTauriRuntime(): MoyuRuntime {
     removeAccount: (accountId) => invoke<void>("remove_account", { accountId }),
     refreshAccountSession: (accountId) =>
       invoke<AccountSummary>("refresh_account_session", { accountId }),
+    startMicrosoftDeviceLogin: () =>
+      invoke<DeviceCodeInfo>("start_microsoft_device_login"),
+    cancelMicrosoftDeviceLogin: () =>
+      invoke<void>("cancel_microsoft_device_login"),
+    onMicrosoftDeviceLogin: (handler) => {
+      let unlisten: (() => void) | undefined;
+      void listen<MicrosoftLoginEvent>("microsoft-device-login", (event) => {
+        handler(event.payload);
+      }).then((release) => {
+        unlisten = release;
+      });
+      return () => unlisten?.();
+    },
+    openExternalUrl: (url) => invoke<void>("open_external_url", { url }),
     getUiPreferences: () => invoke<UiPreferences>("get_ui_preferences"),
     setUiTheme: (theme) => invoke<void>("set_ui_theme", { theme }),
     setUiLanguage: (language) => invoke<void>("set_ui_language", { language }),
@@ -1701,9 +1745,81 @@ function createBrowserRuntime(): MoyuRuntime {
       if (account.kind === "authlib" && account.sessionState === "expired") {
         throw new Error("账户凭据无效或会话已过期：会话已被认证服务器吊销，请重新登录");
       }
+      if (account.kind === "microsoft" && account.sessionState === "expired") {
+        throw new Error("Microsoft 会话已失效，请重新登录：Microsoft 会话已被吊销，请重新登录");
+      }
       account.lastValidatedAtUnixSeconds = Math.floor(Date.now() / 1000);
       window.localStorage.setItem(BROWSER_ACCOUNTS_KEY, JSON.stringify(accounts));
       return account;
+    },
+    async startMicrosoftDeviceLogin() {
+      if (browserMicrosoftLoginTimer !== undefined) {
+        throw new Error("已有 Microsoft 登录正在进行");
+      }
+      const scenario =
+        window.localStorage.getItem("moyumax.browser.msLoginScenario") ?? "success";
+      const info: DeviceCodeInfo = {
+        userCode: "AB12-CD34",
+        verificationUri: "https://www.microsoft.com/link",
+        expiresInSeconds: 900,
+      };
+      if (scenario === "fail-start") {
+        throw new Error("无法获取 Microsoft 设备码（HTTP 503），请稍后重试");
+      }
+      const delay = scenario === "pending" ? 60_000 : 1_000;
+      browserMicrosoftLoginTimer = window.setTimeout(() => {
+        browserMicrosoftLoginTimer = undefined;
+        if (scenario === "pending") {
+          return;
+        }
+        if (scenario === "fail") {
+          browserEmitMicrosoftLogin({
+            state: "failed",
+            account: null,
+            message: "该 Microsoft 账户未拥有 Minecraft，请使用已购买游戏的账户登录",
+          });
+          return;
+        }
+        const accounts = browserAccounts();
+        const now = Math.floor(Date.now() / 1000);
+        const account: AccountSummary = {
+          id: crypto.randomUUID(),
+          kind: "microsoft",
+          username: "Steve",
+          playerUuid: crypto.randomUUID(),
+          serverUrl: null,
+          isDefault: accounts.every((candidate) => !candidate.isDefault),
+          sessionState: "valid",
+          createdAtUnixSeconds: now,
+          lastValidatedAtUnixSeconds: now,
+        };
+        accounts.push(account);
+        window.localStorage.setItem(BROWSER_ACCOUNTS_KEY, JSON.stringify(accounts));
+        browserEmitMicrosoftLogin({ state: "completed", account, message: null });
+      }, delay);
+      return info;
+    },
+    async cancelMicrosoftDeviceLogin() {
+      if (browserMicrosoftLoginTimer !== undefined) {
+        window.clearTimeout(browserMicrosoftLoginTimer);
+        browserMicrosoftLoginTimer = undefined;
+        browserEmitMicrosoftLogin({
+          state: "cancelled",
+          account: null,
+          message: "Microsoft 登录已取消",
+        });
+      }
+    },
+    onMicrosoftDeviceLogin(handler) {
+      browserMicrosoftLoginHandlers.add(handler);
+      return () => {
+        browserMicrosoftLoginHandlers.delete(handler);
+      };
+    },
+    async openExternalUrl(url) {
+      if (!url.startsWith("https://")) {
+        throw new Error("只允许打开 https 链接");
+      }
     },
     async getUiPreferences() {
       const serialized = window.localStorage.getItem("moyumax.browser.uiPreferences");

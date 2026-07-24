@@ -2771,6 +2771,15 @@
     {
       "type": "library",
       "ecosystem": "cargo",
+      "name": "ryu",
+      "version": "1.0.23",
+      "purl": "pkg:cargo/ryu@1.0.23",
+      "license": "Apache-2.0 OR BSL-1.0",
+      "repository": "https://github.com/dtolnay/ryu"
+    },
+    {
+      "type": "library",
+      "ecosystem": "cargo",
       "name": "same-file",
       "version": "1.0.6",
       "purl": "pkg:cargo/same-file@1.0.6",
@@ -2938,6 +2947,15 @@
       "purl": "pkg:cargo/serde_spanned@1.1.1",
       "license": "MIT OR Apache-2.0",
       "repository": "https://github.com/toml-rs/toml"
+    },
+    {
+      "type": "library",
+      "ecosystem": "cargo",
+      "name": "serde_urlencoded",
+      "version": "0.7.1",
+      "purl": "pkg:cargo/serde_urlencoded@0.7.1",
+      "license": "MIT/Apache-2.0",
+      "repository": "https://github.com/nox/serde_urlencoded"
     },
     {
       "type": "library",

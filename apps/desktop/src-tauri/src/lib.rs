@@ -15,12 +15,12 @@ use moyumax_core::{
     InstalledModpack, InstanceIsolation, InstanceResource, InstanceResourceKind,
     InstanceScreenshot, InstanceWorldInfo, JavaArchitecture, JavaDeleteOutcome, JavaDistribution,
     JavaEnvironmentSummary, LaunchExecution, LaunchOptions, LaunchSessionSummary, LoaderChoice,
-    ManagedInstanceSummary, MciMirrorClient, MetadataClient, ModrinthClient, ModrinthSearchPage,
-    ModrinthSearchQuery, ModpackInstallReport, ModpackUpdateReport, OnboardingSelection,
-    RecoveryDecision, RecycleBinItem, RecyclePurgeResult, ReleaseInfo, ResolvedInstallRequest,
-    ResolvedLoader, ShellState, SourcePolicy, ThemePack, UiBackground, UpdateClient, VersionCatalog,
-    WindowCloseBehavior, WorldBackupSummary, YggdrasilClient, min_version_block,
-    run_launch_execution,
+    ManagedInstanceSummary, MciMirrorClient, MetadataClient, MicrosoftAuthClient,
+    MicrosoftLoginCancel, ModpackInstallReport, ModpackUpdateReport, ModrinthClient,
+    ModrinthSearchPage, ModrinthSearchQuery, OnboardingSelection, RecoveryDecision, RecycleBinItem,
+    RecyclePurgeResult, ReleaseInfo, ResolvedInstallRequest, ResolvedLoader, ShellState,
+    SourcePolicy, ThemePack, UiBackground, UpdateClient, VersionCatalog, WindowCloseBehavior,
+    WorldBackupSummary, YggdrasilClient, min_version_block, run_launch_execution,
 };
 use serde::Serialize;
 use tauri::{Emitter, Manager, State};
@@ -57,6 +57,14 @@ struct ModpackPreviewStore {
 #[derive(Debug, Default)]
 struct DiagnosticPreviewStore {
     reports: Mutex<HashMap<String, String>>,
+}
+
+/// Microsoft 设备码登录的进行中状态；同一时间只允许一轮。
+/// 内部句柄共享，Clone 后可安全 move 进后台轮询任务。
+#[derive(Debug, Clone, Default)]
+struct MicrosoftLoginState {
+    running: Arc<Mutex<bool>>,
+    cancel: MicrosoftLoginCancel,
 }
 
 #[derive(Debug, Clone)]
@@ -944,6 +952,110 @@ async fn refresh_account_session(
         .map_err(|error| error.to_string())
 }
 
+/// 设备码登录的非敏感展示信息（用户码与验证地址）。
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct DeviceCodeInfo {
+    user_code: String,
+    verification_uri: String,
+    expires_in_seconds: u64,
+}
+
+/// `microsoft-device-login` 事件负载（绝不携带令牌）。
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct MicrosoftLoginEvent {
+    state: String,
+    account: Option<AccountSummary>,
+    message: Option<String>,
+}
+
+#[tauri::command]
+async fn start_microsoft_device_login(
+    app: tauri::AppHandle,
+    service: State<'_, AppService>,
+    login_state: State<'_, MicrosoftLoginState>,
+) -> Result<DeviceCodeInfo, String> {
+    {
+        let running = login_state
+            .running
+            .lock()
+            .map_err(|_| "登录状态不可用".to_owned())?;
+        if *running {
+            return Err("已有 Microsoft 登录正在进行".to_owned());
+        }
+    }
+    let client = MicrosoftAuthClient::production().map_err(|error| error.to_string())?;
+    let grant = client
+        .begin_device_code()
+        .await
+        .map_err(|error| error.to_string())?;
+    let info = DeviceCodeInfo {
+        user_code: grant.user_code.clone(),
+        verification_uri: grant.verification_uri.clone(),
+        expires_in_seconds: grant.expires_in_seconds,
+    };
+    login_state.cancel.reset();
+    {
+        let mut running = login_state
+            .running
+            .lock()
+            .map_err(|_| "登录状态不可用".to_owned())?;
+        *running = true;
+    }
+    let cancel = login_state.cancel.clone();
+    let service = service.inner().clone();
+    let login_state = login_state.inner().clone();
+    tauri::async_runtime::spawn(async move {
+        let result = service
+            .complete_microsoft_device_login(&client, &grant, &cancel)
+            .await;
+        let event = match result {
+            Ok(account) => MicrosoftLoginEvent {
+                state: "completed".to_owned(),
+                account: Some(account),
+                message: None,
+            },
+            Err(moyumax_core::CoreError::AccountLoginCancelled(message)) => MicrosoftLoginEvent {
+                state: "cancelled".to_owned(),
+                account: None,
+                message: Some(message),
+            },
+            Err(error) => MicrosoftLoginEvent {
+                state: "failed".to_owned(),
+                account: None,
+                message: Some(error.to_string()),
+            },
+        };
+        if let Ok(mut running) = login_state.running.lock() {
+            *running = false;
+        }
+        let _ = app.emit("microsoft-device-login", event);
+    });
+    Ok(info)
+}
+
+#[tauri::command]
+fn cancel_microsoft_device_login(
+    login_state: State<'_, MicrosoftLoginState>,
+) -> Result<(), String> {
+    login_state.cancel.cancel();
+    Ok(())
+}
+
+/// 在系统浏览器打开外部链接；仅允许 https，拒绝其他协议。
+#[tauri::command]
+fn open_external_url(url: String) -> Result<(), String> {
+    if !url.starts_with("https://") {
+        return Err("只允许打开 https 链接".to_owned());
+    }
+    std::process::Command::new("rundll32")
+        .args(["url.dll,FileProtocolHandler", &url])
+        .spawn()
+        .map_err(|error| format!("无法打开系统浏览器：{error}"))?;
+    Ok(())
+}
+
 #[tauri::command]
 fn get_ui_preferences(service: State<'_, AppService>) -> Result<UiPreferences, String> {
     Ok(UiPreferences {
@@ -1147,21 +1259,26 @@ async fn install_modpack(
         .map_err(|_| "整合包预览状态锁已损坏，请重启 MoyuMax".to_owned())?
         .remove(&preview_id)
         .ok_or_else(|| "整合包预览已失效，请重新选择文件".to_owned())?;
-    let instance = create_modpack_instance(
+    let instance = create_modpack_instance(&app, &service, &metadata, &coordinator, &plan).await?;
+    emit_modpack_progress(
         &app,
-        &service,
-        &metadata,
-        &coordinator,
-        &plan,
-    )
-    .await?;
-    emit_modpack_progress(&app, "files", 0, plan.files.len() as u64, "准备下载整合包文件");
+        "files",
+        0,
+        plan.files.len() as u64,
+        "准备下载整合包文件",
+    );
     let mci = MciMirrorClient::new().map_err(|error| error.to_string())?;
     let progress_app = app.clone();
     service
-        .install_modpack_files(&plan, &archive_path, &instance.id, &mci, &|current, total, item| {
-            emit_modpack_progress(&progress_app, "files", current, total, item);
-        })
+        .install_modpack_files(
+            &plan,
+            &archive_path,
+            &instance.id,
+            &mci,
+            &|current, total, item| {
+                emit_modpack_progress(&progress_app, "files", current, total, item);
+            },
+        )
         .await
         .map_err(|error| error.to_string())
 }
@@ -1177,14 +1294,20 @@ async fn update_modpack(
     if !archive_path.is_file() {
         return Err("整合包文件不存在".to_owned());
     }
-    let plan = moyumax_core::parse_modpack_archive(&archive_path)
-        .map_err(|error| error.to_string())?;
+    let plan =
+        moyumax_core::parse_modpack_archive(&archive_path).map_err(|error| error.to_string())?;
     let mci = MciMirrorClient::new().map_err(|error| error.to_string())?;
     let progress_app = app.clone();
     service
-        .update_modpack(&plan, &archive_path, &instance_id, &mci, &|current, total, item| {
-            emit_modpack_progress(&progress_app, "files", current, total, item);
-        })
+        .update_modpack(
+            &plan,
+            &archive_path,
+            &instance_id,
+            &mci,
+            &|current, total, item| {
+                emit_modpack_progress(&progress_app, "files", current, total, item);
+            },
+        )
         .await
         .map_err(|error| error.to_string())
 }
@@ -1255,7 +1378,9 @@ async fn create_modpack_instance(
         if std::time::Instant::now() > deadline {
             return Err("游戏安装超时".to_owned());
         }
-        let tasks = service.list_install_tasks().map_err(|error| error.to_string())?;
+        let tasks = service
+            .list_install_tasks()
+            .map_err(|error| error.to_string())?;
         let current = tasks
             .iter()
             .find(|candidate| candidate.id == task.id)
@@ -1294,7 +1419,13 @@ async fn create_modpack_instance(
         .ok_or_else(|| "游戏安装完成但实例未登记".to_owned())
 }
 
-fn emit_modpack_progress(app: &tauri::AppHandle, stage: &str, current: u64, total: u64, item: &str) {
+fn emit_modpack_progress(
+    app: &tauri::AppHandle,
+    stage: &str,
+    current: u64,
+    total: u64,
+    item: &str,
+) {
     let _ = app.emit(
         "modpack-progress",
         ModpackProgressEvent {
@@ -1434,6 +1565,7 @@ async fn start_instance(
     let coordinator = coordinator.inner().clone();
     let account = service
         .account_launch_identity(None)
+        .await
         .map_err(|error| error.to_string())?;
     let preparation_service = service.clone();
     let execution = tauri::async_runtime::spawn_blocking(move || {
@@ -1871,6 +2003,7 @@ pub fn run() {
             app.manage(ContentPreviewStore::default());
             app.manage(ModpackPreviewStore::default());
             app.manage(DiagnosticPreviewStore::default());
+            app.manage(MicrosoftLoginState::default());
             app.manage(coordinator);
             app.manage(LaunchCoordinator::default());
             app.manage(Arc::clone(&shell));
@@ -1945,6 +2078,9 @@ pub fn run() {
             set_default_account,
             remove_account,
             refresh_account_session,
+            start_microsoft_device_login,
+            cancel_microsoft_device_login,
+            open_external_url,
             get_ui_preferences,
             set_ui_theme,
             set_ui_language,

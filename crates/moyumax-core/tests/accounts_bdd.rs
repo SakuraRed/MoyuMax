@@ -143,7 +143,7 @@ async fn m20_acct_004_default_is_unique_and_launch_uses_default_identity() {
         .count();
     assert_eq!(defaults, 1, "默认账户必须唯一");
 
-    let identity = fixture.service.account_launch_identity(None).unwrap();
+    let identity = fixture.service.account_launch_identity(None).await.unwrap();
     assert_eq!(
         identity.player_uuid().to_string(),
         "069a79f4-44e9-4726-a5be-fca90e38aaf5"
@@ -192,6 +192,7 @@ async fn m20_acct_005_revoked_token_marks_expired_and_blocks_launch() {
     let error = fixture
         .service
         .account_launch_identity(None)
+        .await
         .expect_err("会话过期必须拒绝启动");
     assert!(error.to_string().contains("重新登录"));
 }
@@ -212,11 +213,11 @@ fn m20_acct_006_removing_default_promotes_the_earliest_remaining() {
     assert!(fixture.service.remove_account("missing-id").is_err());
 }
 
-#[test]
-fn m20_acct_007_empty_store_creates_compatible_offline_default() {
+#[tokio::test]
+async fn m20_acct_007_empty_store_creates_compatible_offline_default() {
     let fixture = AccountFixture::new();
 
-    let identity = fixture.service.account_launch_identity(None).unwrap();
+    let identity = fixture.service.account_launch_identity(None).await.unwrap();
 
     assert_eq!(
         identity.player_uuid(),

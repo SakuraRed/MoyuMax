@@ -21,6 +21,7 @@
   import { formatBytes } from "../installation";
   import type {
     AccountSummary,
+    DeviceCodeInfo,
     JavaDeleteOutcome,
     JavaEnvironment,
     ManagedInstance,
@@ -75,6 +76,8 @@
   let authlibUser = $state("");
   let authlibPass = $state("");
   let pendingAccountRemove = $state<string | null>(null);
+  let msLogin = $state<DeviceCodeInfo | null>(null);
+  let msCodeCopied = $state(false);
   let cliEnabled = $state(false);
   let updateChecks = $state(true);
   let checkingUpdates = $state(false);
@@ -89,6 +92,21 @@
 
   onMount(() => {
     void refresh();
+    const unsubscribe = runtime.onMicrosoftDeviceLogin((event) => {
+      if (event.state === "completed" && event.account) {
+        msLogin = null;
+        msCodeCopied = false;
+        notice = t("settings.accounts.loggedIn");
+        void runtime.listAccounts().then((list) => { accounts = list; });
+      } else if (event.state === "failed") {
+        msLogin = null;
+        errorMessage = event.message ?? t("settings.accounts.deviceCode.failed");
+      } else if (event.state === "cancelled") {
+        msLogin = null;
+        msCodeCopied = false;
+      }
+    });
+    return unsubscribe;
   });
 
   async function refresh(): Promise<void> {
@@ -312,7 +330,50 @@
   }
 
   function accountKindLabel(account: AccountSummary): string {
-    return account.kind === "offline" ? t("settings.accounts.kind.offline") : t("settings.accounts.kind.authlib");
+    if (account.kind === "offline") return t("settings.accounts.kind.offline");
+    if (account.kind === "microsoft") return t("settings.accounts.kind.microsoft");
+    return t("settings.accounts.kind.authlib");
+  }
+
+  async function startMicrosoftLogin(): Promise<void> {
+    busy = "add-account";
+    errorMessage = "";
+    notice = "";
+    msCodeCopied = false;
+    try {
+      msLogin = await runtime.startMicrosoftDeviceLogin();
+    } catch (error) {
+      errorMessage = error instanceof Error ? error.message : String(error);
+    } finally {
+      busy = "";
+    }
+  }
+
+  async function cancelMicrosoftLogin(): Promise<void> {
+    try {
+      await runtime.cancelMicrosoftDeviceLogin();
+    } catch (error) {
+      errorMessage = error instanceof Error ? error.message : String(error);
+    }
+  }
+
+  async function copyDeviceCode(): Promise<void> {
+    if (!msLogin) return;
+    try {
+      await navigator.clipboard.writeText(msLogin.userCode);
+      msCodeCopied = true;
+    } catch {
+      errorMessage = t("settings.accounts.deviceCode.copyFailed");
+    }
+  }
+
+  async function openVerificationLink(): Promise<void> {
+    if (!msLogin) return;
+    try {
+      await runtime.openExternalUrl(msLogin.verificationUri);
+    } catch (error) {
+      errorMessage = error instanceof Error ? error.message : String(error);
+    }
   }
 
   async function submitOffline(): Promise<void> {
@@ -692,10 +753,28 @@
           <p>{t("settings.accounts.description")}</p>
         </div>
         <div class="local-content-actions">
-          <button class="button ghost compact" disabled={busy !== ""} onclick={() => { addForm = addForm === "offline" ? "" : "offline"; }}>{t("settings.accounts.addOffline")}</button>
-          <button class="button ghost compact" disabled={busy !== ""} onclick={() => { addForm = addForm === "authlib" ? "" : "authlib"; }}>{t("settings.accounts.addAuthlib")}</button>
+          <button class="button ghost compact" disabled={busy !== "" || msLogin !== null} onclick={() => { addForm = addForm === "offline" ? "" : "offline"; }}>{t("settings.accounts.addOffline")}</button>
+          <button class="button ghost compact" disabled={busy !== "" || msLogin !== null} onclick={() => { addForm = addForm === "authlib" ? "" : "authlib"; }}>{t("settings.accounts.addAuthlib")}</button>
+          <button class="button primary compact" disabled={busy !== "" || msLogin !== null} onclick={() => void startMicrosoftLogin()}>{busy === "add-account" ? t("settings.accounts.deviceCode.requesting") : t("settings.accounts.addMicrosoft")}</button>
         </div>
       </header>
+      {#if msLogin}
+        <div class="account-form device-code-panel" role="group" aria-label={t("settings.accounts.addMicrosoft")}>
+          <p>{t("settings.accounts.deviceCode.instruction")}</p>
+          <div class="device-code-row">
+            <strong class="device-code" aria-label={t("settings.accounts.deviceCode.codeLabel")}>{msLogin.userCode}</strong>
+            <button class="button ghost compact" onclick={() => void copyDeviceCode()}>{msCodeCopied ? t("settings.accounts.deviceCode.copied") : t("settings.accounts.deviceCode.copy")}</button>
+          </div>
+          <div class="device-code-row">
+            <span class="device-code-uri">{msLogin.verificationUri}</span>
+            <button class="button ghost compact" onclick={() => void openVerificationLink()}>{t("settings.accounts.deviceCode.openLink")}</button>
+          </div>
+          <div class="device-code-row">
+            <span role="status">{t("settings.accounts.deviceCode.waiting")}</span>
+            <button class="button ghost compact" onclick={() => void cancelMicrosoftLogin()}>{t("common.cancel")}</button>
+          </div>
+        </div>
+      {/if}
       {#if addForm === "offline"}
         <div class="account-form" role="group" aria-label={t("settings.accounts.addOffline")}>
           <label>
@@ -753,13 +832,13 @@
                   {#if account.isDefault}<span>{t("settings.accounts.defaultBadge")}</span>{/if}
                   {#if account.sessionState === "expired"}<span class="account-expired">{t("settings.accounts.sessionExpired")}</span>{/if}
                 </div>
-                <p>{account.kind === "offline" ? t("settings.accounts.offlineNote") : t("settings.accounts.authlibNote").replace("{url}", account.serverUrl ?? "")}</p>
+                <p>{account.kind === "offline" ? t("settings.accounts.offlineNote") : account.kind === "microsoft" ? t("settings.accounts.microsoftNote") : t("settings.accounts.authlibNote").replace("{url}", account.serverUrl ?? "")}</p>
               </div>
               <div class="backup-side">
                 {#if !account.isDefault}
                   <button class="button ghost compact" disabled={busy !== ""} onclick={() => void makeDefault(account)}>{t("settings.accounts.makeDefault")}</button>
                 {/if}
-                {#if account.kind === "authlib"}
+                {#if account.kind === "authlib" || account.kind === "microsoft"}
                   <button class="button ghost compact" disabled={busy !== ""} onclick={() => void refreshSession(account)}>{busy === account.id ? t("settings.accounts.refreshing") : t("settings.accounts.refreshSession")}</button>
                 {/if}
                 {#if pendingAccountRemove === account.id}
