@@ -216,6 +216,14 @@ export interface ModrinthProjectSummary {
   downloads: number;
   clientSide: string;
   serverSide: string;
+  /** 项目图标 URL；为空时前端显示首字母占位。 */
+  iconUrl: string | null;
+  /** 主要作者；可能为空。 */
+  author: string | null;
+  /** 最近更新时间（ISO 8601）。 */
+  dateModified: string | null;
+  /** 支持的游戏版本。 */
+  versions: string[];
 }
 
 export interface ModrinthSearchPage {
@@ -1337,23 +1345,45 @@ function createBrowserRuntime(): MoyuRuntime {
       if (window.localStorage.getItem(BROWSER_MODRINTH_OFFLINE_KEY) === "true") {
         throw new Error("无法连接 Modrinth：浏览器测试环境处于离线状态");
       }
-      const hit: ModrinthProjectSummary = {
-        projectId: "ROOT0001",
-        slug: "continuity",
-        title: "Continuity",
-        description: "为方块纹理提供连续连接效果。",
-        downloads: 42,
-        clientSide: "required",
-        serverSide: "optional",
-      };
-      const matches = `${hit.title} ${hit.description}`
-        .toLocaleLowerCase()
-        .includes(query.query.trim().toLocaleLowerCase());
+      const catalog: ModrinthProjectSummary[] = [
+        {
+          projectId: "ROOT0001",
+          slug: "continuity",
+          title: "Continuity",
+          description: "为方块纹理提供连续连接效果。",
+          downloads: 34_200_000,
+          clientSide: "required",
+          serverSide: "optional",
+          iconUrl: null,
+          author: "peppodev",
+          dateModified: "2026-06-18T10:00:00Z",
+          versions: ["26.1", "26.2"],
+        },
+        {
+          projectId: "ROOT0002",
+          slug: "lithium",
+          title: "Lithium",
+          description: "不改动原版行为的游戏逻辑性能优化。",
+          downloads: 18_700_000,
+          clientSide: "optional",
+          serverSide: "optional",
+          iconUrl: null,
+          author: "jellysquid3",
+          dateModified: "2026-05-30T10:00:00Z",
+          versions: ["26.2"],
+        },
+      ];
+      const keyword = query.query.trim().toLocaleLowerCase();
+      const hits = keyword
+        ? catalog.filter((hit) =>
+            `${hit.title} ${hit.description}`.toLocaleLowerCase().includes(keyword),
+          )
+        : catalog;
       return {
-        hits: matches ? [hit] : [],
+        hits: hits.slice(query.offset, query.offset + query.limit),
         offset: query.offset,
         limit: query.limit,
-        totalHits: matches ? 1 : 0,
+        totalHits: hits.length,
       };
     },
     async previewModrinthInstall(instanceId, projectId, selectedOptionalProjects) {
@@ -2955,6 +2985,20 @@ function browserVersionCatalog(): VersionCatalog {
         ...release,
         id: "1.20.1",
         releaseTime: "2023-06-12T12:00:00+00:00",
+        recommended: false,
+      },
+      {
+        ...release,
+        id: "25w30a",
+        releaseType: "snapshot",
+        releaseTime: "2026-07-20T12:00:00+00:00",
+        recommended: false,
+      },
+      {
+        ...release,
+        id: "b1.7.3",
+        releaseType: "oldBeta",
+        releaseTime: "2011-07-08T12:00:00+00:00",
         recommended: false,
       },
     ],

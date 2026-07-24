@@ -93,6 +93,18 @@ pub struct ModrinthProjectSummary {
     pub client_side: String,
     #[serde(alias = "server_side")]
     pub server_side: String,
+    /// 项目图标（可能为空；前端占位显示首字母）。
+    #[serde(alias = "icon_url", default)]
+    pub icon_url: Option<String>,
+    /// 主要作者（搜索接口返回单个 author 字段）。
+    #[serde(alias = "author", default)]
+    pub author: Option<String>,
+    /// 最近更新时间（ISO 8601）。
+    #[serde(alias = "date_modified", default)]
+    pub date_modified: Option<String>,
+    /// 支持的游戏版本（用于列表展示，升序取最新）。
+    #[serde(default)]
+    pub versions: Vec<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -2144,9 +2156,7 @@ fn content_encode_hex(bytes: impl AsRef<[u8]>) -> String {
 }
 
 fn validate_search_query(query: &ModrinthSearchQuery) -> Result<()> {
-    if query.query.trim().is_empty() {
-        return Err(CoreError::Content("请输入 Modrinth 搜索词".to_owned()));
-    }
+    // 空搜索词即浏览模式：配合 index=downloads 返回热门资源（HMCL 式目录）。
     // 模组必须有版本/加载器约束；目录浏览（整合包/光影/资源包）可留空，
     // 留空时不附加对应过滤。
     if query.project_type == ModrinthProjectType::Mod || !query.game_version.trim().is_empty() {

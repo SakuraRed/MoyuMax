@@ -63,7 +63,6 @@
   let task = $state<InstallTask | null>(null);
   let errorMessage = $state("");
   let loaderMessage = $state("");
-  let showOlderVersions = $state(false);
   let pageRoot: HTMLElement | undefined = $state();
   let loaderRequestSequence = 0;
   let taskPoll: ReturnType<typeof setInterval> | undefined;
@@ -73,12 +72,48 @@
   let packProgress = $state<ModpackProgressEvent | null>(null);
   let packDone = $state<ModpackInstallReport | null>(null);
   let packError = $state("");
+  let expandedMajors = $state<Set<string>>(new Set());
+  let showSnapshots = $state(false);
+  let showOldVersions = $state(false);
 
-  const visibleVersions = $derived(
-    (catalog?.versions ?? [])
-      .filter((version) => version.releaseType === "release")
-      .slice(0, showOlderVersions ? 24 : 3),
+  /** 大版本号：1.21.4 → 1.21；26.2 → 26.2（两段及以下保持原样）。 */
+  function majorOf(id: string): string {
+    const parts = id.split(".");
+    return parts.length >= 3 ? `${parts[0]}.${parts[1]}` : id;
+  }
+
+  const releaseGroups = $derived.by(() => {
+    const groups = new Map<string, GameVersionSummary[]>();
+    for (const version of (catalog?.versions ?? []).filter(
+      (candidate) => candidate.releaseType === "release",
+    )) {
+      const major = majorOf(version.id);
+      if (!groups.has(major)) groups.set(major, []);
+      groups.get(major)?.push(version);
+    }
+    return [...groups.entries()].map(([major, versions]) => ({ major, versions }));
+  });
+  const snapshotVersions = $derived(
+    (catalog?.versions ?? []).filter((version) => version.releaseType === "snapshot"),
   );
+  const oldVersions = $derived(
+    (catalog?.versions ?? []).filter(
+      (version) =>
+        version.releaseType === "oldBeta" ||
+        version.releaseType === "oldAlpha" ||
+        version.releaseType === "unknown",
+    ),
+  );
+
+  function toggleMajor(major: string): void {
+    const next = new Set(expandedMajors);
+    if (next.has(major)) {
+      next.delete(major);
+    } else {
+      next.add(major);
+    }
+    expandedMajors = next;
+  }
 
   $effect(() => {
     view;
@@ -109,6 +144,7 @@
       const recommended = recommendedVersion(catalog.versions);
       if (!recommended) throw new Error(t("install.error.noVersions"));
       selectedVersion = recommended;
+      expandedMajors = new Set([majorOf(recommended.id)]);
       await loadLoaders(recommended, true);
       view = "configure";
     } catch (error) {
@@ -446,27 +482,105 @@
             <div class="section-number">1</div>
             <div class="section-content">
               <h2 id="game-version-heading">{t("install.version.heading")}</h2>
-              <div class="install-choice-list" role="radiogroup" aria-label={t("install.version.heading")}>
-                {#each visibleVersions as version, index}
-                  <button
-                    class:selected={selectedVersion.id === version.id}
-                    class="install-choice-row"
-                    role="radio"
-                    aria-checked={selectedVersion.id === version.id}
-                    data-autofocus={index === 0 ? "true" : undefined}
-                    onclick={() => void selectVersion(version)}
-                  >
-                    <span class="radio-mark"></span>
-                    <span class="choice-copy">
-                      <strong>{version.id}{#if version.recommended}<em>{t("install.version.recommended")}</em>{/if}</strong>
-                      <small>{releaseDescription(version)}</small>
-                    </span>
-                  </button>
+              <div class="version-groups" role="radiogroup" aria-label={t("install.version.heading")}>
+                {#each releaseGroups as group}
+                  <div class="version-group">
+                    <button
+                      class="version-group-head"
+                      aria-expanded={expandedMajors.has(group.major)}
+                      onclick={() => toggleMajor(group.major)}
+                    >
+                      <span class="group-chevron" class:open={expandedMajors.has(group.major)}></span>
+                      <strong>Minecraft {group.major}</strong>
+                      <small>{t("install.version.groupCount").replace("{count}", String(group.versions.length))}</small>
+                    </button>
+                    {#if expandedMajors.has(group.major)}
+                      <div class="install-choice-list">
+                        {#each group.versions as version}
+                          <button
+                            class:selected={selectedVersion.id === version.id}
+                            class="install-choice-row"
+                            role="radio"
+                            aria-checked={selectedVersion.id === version.id}
+                            data-autofocus={selectedVersion.id === version.id ? "true" : undefined}
+                            onclick={() => void selectVersion(version)}
+                          >
+                            <span class="radio-mark"></span>
+                            <span class="choice-copy">
+                              <strong>{version.id}{#if version.recommended}<em>{t("install.version.recommended")}</em>{/if}</strong>
+                              <small>{releaseDescription(version)}</small>
+                            </span>
+                          </button>
+                        {/each}
+                      </div>
+                    {/if}
+                  </div>
                 {/each}
+                {#if snapshotVersions.length > 0}
+                  <div class="version-group">
+                    <button
+                      class="version-group-head"
+                      aria-expanded={showSnapshots}
+                      onclick={() => { showSnapshots = !showSnapshots; }}
+                    >
+                      <span class="group-chevron" class:open={showSnapshots}></span>
+                      <strong>{t("install.version.groupSnapshots")}</strong>
+                      <small>{t("install.version.groupCount").replace("{count}", String(snapshotVersions.length))}</small>
+                    </button>
+                    {#if showSnapshots}
+                      <div class="install-choice-list">
+                        {#each snapshotVersions as version}
+                          <button
+                            class:selected={selectedVersion.id === version.id}
+                            class="install-choice-row"
+                            role="radio"
+                            aria-checked={selectedVersion.id === version.id}
+                            onclick={() => void selectVersion(version)}
+                          >
+                            <span class="radio-mark"></span>
+                            <span class="choice-copy">
+                              <strong>{version.id}</strong>
+                              <small>{releaseDescription(version)}</small>
+                            </span>
+                          </button>
+                        {/each}
+                      </div>
+                    {/if}
+                  </div>
+                {/if}
+                {#if oldVersions.length > 0}
+                  <div class="version-group">
+                    <button
+                      class="version-group-head"
+                      aria-expanded={showOldVersions}
+                      onclick={() => { showOldVersions = !showOldVersions; }}
+                    >
+                      <span class="group-chevron" class:open={showOldVersions}></span>
+                      <strong>{t("install.version.groupOld")}</strong>
+                      <small>{t("install.version.groupCount").replace("{count}", String(oldVersions.length))}</small>
+                    </button>
+                    {#if showOldVersions}
+                      <div class="install-choice-list">
+                        {#each oldVersions as version}
+                          <button
+                            class:selected={selectedVersion.id === version.id}
+                            class="install-choice-row"
+                            role="radio"
+                            aria-checked={selectedVersion.id === version.id}
+                            onclick={() => void selectVersion(version)}
+                          >
+                            <span class="radio-mark"></span>
+                            <span class="choice-copy">
+                              <strong>{version.id}</strong>
+                              <small>{releaseDescription(version)}</small>
+                            </span>
+                          </button>
+                        {/each}
+                      </div>
+                    {/if}
+                  </div>
+                {/if}
               </div>
-              <button class="inline-link version-toggle" onclick={() => showOlderVersions = !showOlderVersions}>
-                {showOlderVersions ? t("install.version.showLess") : t("install.version.showMore")}
-              </button>
             </div>
           </section>
 

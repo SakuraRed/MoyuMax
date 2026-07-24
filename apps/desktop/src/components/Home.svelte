@@ -64,11 +64,18 @@
   let modpacks = $state<Record<string, InstalledModpack>>({});
   let updatingPack = $state<string | null>(null);
   let packReport = $state<ModpackUpdateReport | null>(null);
+  let defaultAccountName = $state("");
   let homeRoot: HTMLElement | undefined = $state();
 
   onMount(async () => {
     await tick();
     homeRoot?.querySelector<HTMLElement>("[data-autofocus]")?.focus();
+    try {
+      const accounts = await runtime.listAccounts();
+      defaultAccountName = accounts.find((account) => account.isDefault)?.username ?? "";
+    } catch {
+      defaultAccountName = "";
+    }
   });
 
   $effect(() => {
@@ -137,9 +144,17 @@
     return crashReports.find((report) => report.launchSessionId === session.id);
   }
 
+  const LOADER_DISPLAY: Record<string, string> = {
+    fabric: "Fabric",
+    quilt: "Quilt",
+    forge: "Forge",
+    neoforge: "NeoForge",
+  };
+
   function loaderLabel(instance: ManagedInstance): string {
-    if (instance.loaderKind === "fabric") {
-      return `Fabric${instance.loaderVersion ? ` ${instance.loaderVersion}` : ""}`;
+    const name = LOADER_DISPLAY[instance.loaderKind];
+    if (name) {
+      return `${name}${instance.loaderVersion ? ` ${instance.loaderVersion}` : ""}`;
     }
     return instance.loaderKind === "vanilla" ? t("home.loader.vanilla") : instance.loaderKind;
   }
@@ -309,8 +324,8 @@
             {@const latest = latestSession(instance.id)}
             {@const crashReport = crashReportForSession(latest)}
             {@const pack = modpacks[instance.id]}
-            <article class:running={active?.state === "running"} class:crashed={Boolean(crashReport)} class="instance-card">
-              <div class="instance-cover" aria-hidden="true">{instance.name.slice(0, 1)}</div>
+            <article class:running={active?.state === "running"} class:crashed={Boolean(crashReport)} class:instance-hero={index === 0} class="instance-card">
+              <div class="instance-cover" class:hero-cover={index === 0} aria-hidden="true">{instance.name.slice(0, 1)}</div>
               <div class="instance-copy">
                 <div class="instance-title-line">
                   <h2>{instance.name}</h2>
@@ -325,6 +340,9 @@
                 {#if latest && !active}
                   <small class="latest-session">{t("home.instance.latestSession")}<span>{sessionStateLabel(latest.state)}</span>{#if latest.exitCode !== null}{t("home.instance.exitCode").replace("{code}", String(latest.exitCode))}{/if}</small>
                   <small class="latest-backups">{t("home.instance.latestBackups").replace("{pre}", backupStateLabel(latest.preLaunchBackup)).replace("{post}", backupStateLabel(latest.postExitBackup))}</small>
+                {/if}
+                {#if index === 0}
+                  <small class="default-account">{t("home.instance.defaultAccount").replace("{name}", defaultAccountName || t("home.instance.localAccount"))}</small>
                 {/if}
               </div>
               <div class="instance-actions">

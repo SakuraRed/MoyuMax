@@ -47,7 +47,7 @@ test("UI-LAUNCH-001 首页可以启动和停止本地实例", async ({ page }) =
       left: Number.parseFloat(style.paddingLeft),
     };
   });
-  expect(cardPadding).toEqual({ top: 20, right: 24, bottom: 20, left: 24 });
+  expect(cardPadding).toEqual({ top: 24, right: 26, bottom: 24, left: 26 });
 
   const statePadding = await page.locator(".instance-state").evaluate((element) => {
     const style = getComputedStyle(element);

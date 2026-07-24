@@ -91,6 +91,11 @@
   let catalogSearching = $state(false);
   let catalogError = $state("");
   let catalogPage = $state<ModrinthSearchPage | null>(null);
+  let catalogHits = $state<ModrinthProjectSummary[]>([]);
+  let loadingMore = $state(false);
+  let sortIndex = $state<"relevance" | "downloads" | "updated">("downloads");
+  let filterVersion = $state("");
+  let filterLoader = $state("");
   let packPreview = $state<ModpackPreviewResponse | null>(null);
   let packPreviewing = $state("");
   let packInstalling = $state(false);
@@ -100,11 +105,20 @@
 
   onMount(() => {
     selectedInstanceId = eligibleInstances[0]?.id ?? "";
-    if (selectedInstanceId) void loadInstalled();
+    if (selectedInstanceId) {
+      const instance = eligibleInstances[0];
+      filterVersion = instance?.gameVersion ?? "";
+      filterLoader = instance?.loaderKind ?? "";
+      void loadInstalled();
+    }
+    void runCatalogSearch(true);
   });
 
   async function selectInstance(event: Event): Promise<void> {
     selectedInstanceId = (event.currentTarget as HTMLSelectElement).value;
+    const instance = selectedInstance();
+    filterVersion = instance?.gameVersion ?? filterVersion;
+    filterLoader = instance?.loaderKind ?? filterLoader;
     preview = null;
     queued = false;
     updates = null;
@@ -113,6 +127,7 @@
     datapackImportOpen = false;
     resourceError = "";
     await loadInstalled();
+    if (tab === "catalog") void runCatalogSearch(true);
   }
 
   async function loadInstalled(): Promise<void> {
@@ -240,45 +255,84 @@
   function selectCatalogType(type: ModrinthProjectType): void {
     catalogType = type;
     catalogPage = null;
+    catalogHits = [];
     catalogError = "";
     packPreview = null;
     packDone = "";
     resourceInstallDone = "";
     preview = null;
     queued = false;
+    void runCatalogSearch(true);
   }
 
   function selectedInstance(): ManagedInstance | undefined {
     return eligibleInstances.find((candidate) => candidate.id === selectedInstanceId);
   }
 
-  async function searchCatalog(event?: SubmitEvent): Promise<void> {
-    event?.preventDefault();
-    if (!catalogQuery.trim()) return;
-    catalogSearching = true;
+  const CATALOG_PAGE_SIZE = 20;
+
+  /** 目录查询：browse=true 为重载（搜索词可为空 = 热门浏览），false 为加载更多。 */
+  async function runCatalogSearch(fresh: boolean): Promise<void> {
+    if (fresh) {
+      catalogSearching = true;
+      catalogPage = null;
+      catalogHits = [];
+      packPreview = null;
+      packDone = "";
+      resourceInstallDone = "";
+      preview = null;
+      queued = false;
+    } else {
+      loadingMore = true;
+    }
     catalogError = "";
-    catalogPage = null;
-    packPreview = null;
-    packDone = "";
-    resourceInstallDone = "";
-    preview = null;
-    queued = false;
     const instance = selectedInstance();
+    const gameVersion =
+      filterVersion.trim() ||
+      (catalogType === "modpack" ? "" : (instance?.gameVersion ?? ""));
+    const loader =
+      filterLoader || (catalogType === "mod" ? (instance?.loaderKind ?? "") : "");
     try {
-      catalogPage = await runtime.searchModrinthMods({
+      const page = await runtime.searchModrinthMods({
         query: catalogQuery.trim(),
-        gameVersion: catalogType === "modpack" ? "" : (instance?.gameVersion ?? ""),
-        loader: catalogType === "mod" ? (instance?.loaderKind ?? "") : "",
-        index: "relevance",
-        offset: 0,
-        limit: 20,
+        gameVersion: catalogType === "modpack" ? "" : gameVersion,
+        loader: catalogType === "mod" ? loader : "",
+        index: catalogQuery.trim() ? "relevance" : sortIndex,
+        offset: fresh ? 0 : catalogHits.length,
+        limit: CATALOG_PAGE_SIZE,
         projectType: catalogType,
       });
+      catalogPage = page;
+      catalogHits = fresh ? page.hits : [...catalogHits, ...page.hits];
     } catch (error) {
       catalogError = error instanceof Error ? error.message : String(error);
     } finally {
       catalogSearching = false;
+      loadingMore = false;
     }
+  }
+
+  function searchCatalog(event?: SubmitEvent): void {
+    event?.preventDefault();
+    void runCatalogSearch(true);
+  }
+
+  function applyFilters(): void {
+    void runCatalogSearch(true);
+  }
+
+  function formatDownloads(value: number): string {
+    if (value >= 1_000_000) return `${(value / 1_000_000).toFixed(1)}M`;
+    if (value >= 1_000) return `${(value / 1_000).toFixed(1)}K`;
+    return String(value);
+  }
+
+  function formatDate(value: string | null): string {
+    return value ? value.slice(0, 10) : "";
+  }
+
+  function latestVersion(versions: string[]): string {
+    return versions.length > 0 ? versions[versions.length - 1] ?? "" : "";
   }
 
   async function createPreview(project: ModrinthProjectSummary): Promise<void> {
@@ -423,44 +477,81 @@
         {#each CATALOG_TYPES as catalogTypeOption}
           <button
             class:active={catalogType === catalogTypeOption.key}
+            aria-pressed={catalogType === catalogTypeOption.key}
             onclick={() => selectCatalogType(catalogTypeOption.key)}
           >{t(catalogTypeOption.labelKey)}</button>
         {/each}
       </div>
 
-      {#if catalogType !== "modpack"}
-        {#if eligibleInstances.length === 0}
-          <div class="catalog-instance-hint">
-            <span>{t("resources.catalog.needInstance")}</span>
-            <button class="inline-link" onclick={() => onNavigate("instances")}>{t("resources.catalog.createInstance")}</button>
-          </div>
-        {:else}
-          <label class="resource-instance-field">
+      {#if catalogType !== "modpack" && eligibleInstances.length === 0}
+        <div class="catalog-instance-hint">
+          <span>{t("resources.catalog.needInstance")}</span>
+          <button class="inline-link" onclick={() => onNavigate("instances")}>{t("resources.catalog.createInstance")}</button>
+        </div>
+      {/if}
+
+      <form class="catalog-searchbar" onsubmit={(event) => searchCatalog(event)}>
+        <label class="catalog-searchbox">
+          <span class="sr-live">{t("resources.catalog.searchLabel")}</span>
+          <Icon name="search" size={15} />
+          <input bind:value={catalogQuery} type="search" aria-label={t("resources.catalog.searchLabel")} placeholder={t("resources.catalog.searchPlaceholder")} oninput={() => { if (!catalogQuery.trim()) applyFilters(); }} />
+        </label>
+        <button class="button primary" disabled={catalogSearching || (catalogType === "mod" && eligibleInstances.length === 0)}>{catalogSearching ? t("resources.catalog.searching") : t("resources.catalog.searchSubmit")}</button>
+      </form>
+
+      <div class="catalog-filters" role="group" aria-label={t("resources.catalog.filtersAria")}>
+        {#if catalogType !== "modpack" && eligibleInstances.length > 0}
+          <label class="catalog-filter">
             <span>{t("resources.instanceLabel")}</span>
-            <select value={selectedInstanceId} onchange={(event) => void selectInstance(event)}>
+            <select value={selectedInstanceId} onchange={(event) => void selectInstance(event)} aria-label={t("resources.instanceLabel")}>
               {#each eligibleInstances as instance}
-                <option value={instance.id}>{t("resources.instanceOption").replace("{name}", instance.name).replace("{version}", instance.gameVersion).replace("{loader}", loaderName(instance.loaderKind)).replace("{loaderVersion}", instance.loaderVersion ?? "")}</option>
+                <option value={instance.id}>{instance.name}</option>
+              {/each}
+            </select>
+          </label>
+          <label class="catalog-filter">
+            <span>{t("resources.catalog.filterVersion")}</span>
+            <input
+              value={filterVersion}
+              oninput={(event) => { filterVersion = (event.currentTarget as HTMLInputElement).value; }}
+              onchange={() => applyFilters()}
+              list="catalog-version-options"
+              aria-label={t("resources.catalog.filterVersion")}
+              placeholder={t("resources.catalog.filterVersionAll")}
+            />
+            <datalist id="catalog-version-options">
+              {#each [...new Set(instances.map((instance) => instance.gameVersion))] as version}
+                <option value={version}></option>
+              {/each}
+            </datalist>
+          </label>
+        {/if}
+        {#if catalogType === "mod"}
+          <label class="catalog-filter">
+            <span>{t("resources.catalog.filterLoader")}</span>
+            <select value={filterLoader} onchange={(event) => { filterLoader = (event.currentTarget as HTMLSelectElement).value; applyFilters(); }} aria-label={t("resources.catalog.filterLoader")}>
+              <option value="">{t("resources.catalog.filterLoaderAll")}</option>
+              {#each Object.entries(LOADER_NAMES) as [kind, name]}
+                <option value={kind}>{name}</option>
               {/each}
             </select>
           </label>
         {/if}
-      {/if}
-
-      <form class="content-search" onsubmit={(event) => void searchCatalog(event)}>
-        <label>
-          <span class="sr-live">{t("resources.catalog.searchLabel")}</span>
-          <Icon name="search" size={15} />
-          <input bind:value={catalogQuery} type="search" aria-label={t("resources.catalog.searchLabel")} placeholder={t("resources.catalog.searchPlaceholder")} />
+        <label class="catalog-filter">
+          <span>{t("resources.catalog.filterSort")}</span>
+          <select value={sortIndex} onchange={(event) => { sortIndex = (event.currentTarget as HTMLSelectElement).value as typeof sortIndex; applyFilters(); }} aria-label={t("resources.catalog.filterSort")}>
+            <option value="downloads">{t("resources.catalog.sortDownloads")}</option>
+            <option value="updated">{t("resources.catalog.sortUpdated")}</option>
+            <option value="relevance">{t("resources.catalog.sortRelevance")}</option>
+          </select>
         </label>
-        <button class="button primary" disabled={catalogSearching || !catalogQuery.trim() || (catalogType === "mod" && eligibleInstances.length === 0)}>{catalogSearching ? t("resources.catalog.searching") : t("resources.catalog.searchSubmit")}</button>
-      </form>
-
-      {#if catalogType === "modpack"}
-        <p class="catalog-cf-hint">
-          {t("resources.catalog.cfHint")}
-          <button class="inline-link" onclick={() => onNavigate("instances")}>{t("resources.catalog.cfImport")}</button>
-        </p>
-      {/if}
+        {#if catalogType === "modpack"}
+          <span class="catalog-cf-inline">
+            {t("resources.catalog.cfHint")}
+            <button class="inline-link" onclick={() => onNavigate("instances")}>{t("resources.catalog.cfImport")}</button>
+          </span>
+        {/if}
+      </div>
 
       {#if catalogError}
         <div class="error-block content-search-error" role="alert">
@@ -499,33 +590,58 @@
         </section>
       {/if}
 
-      {#if catalogPage && catalogPage.hits.length === 0}
+      {#if catalogSearching && catalogHits.length === 0}
+        <div class="content-loading" aria-live="polite"><span>{t("resources.catalog.searching")}</span></div>
+      {:else if catalogPage && catalogHits.length === 0}
         <div class="content-search-empty">{t("resources.catalog.noResults")}</div>
-      {:else if catalogPage}
+      {:else if catalogHits.length > 0}
         <div class="content-result-list" aria-label={t("resources.catalog.resultAria")}>
-          {#each catalogPage.hits as project}
+          {#each catalogHits as project}
             <article class="content-result-card">
-              <div>
-                <strong>{project.title}</strong>
-                <p>{project.description}</p>
-                <small>{t("resources.catalog.downloads").replace("{count}", project.downloads.toLocaleString())}</small>
+              <div class="result-icon" aria-hidden="true">
+                {#if project.iconUrl}
+                  <img src={project.iconUrl} alt="" loading="lazy" />
+                {:else}
+                  <span>{project.title.slice(0, 1)}</span>
+                {/if}
               </div>
-              {#if catalogType === "mod"}
-                <button class="button" disabled={Boolean(previewingProject)} onclick={() => void createPreview(project)}>
-                  {previewingProject === project.projectId ? t("resources.catalog.parsing") : t("resources.catalog.viewPlan")}
-                </button>
-              {:else if catalogType === "modpack"}
-                <button class="button" disabled={Boolean(packPreviewing) || packInstalling} onclick={() => void previewPack(project)}>
-                  {packPreviewing === project.projectId ? t("resources.catalog.parsing") : t("resources.catalog.install")}
-                </button>
-              {:else}
-                <button class="button" disabled={Boolean(resourceInstalling) || !selectedInstanceId} onclick={() => void installResourceToInstance(project)}>
-                  {resourceInstalling === project.projectId ? t("resources.catalog.installing") : t("resources.catalog.install")}
-                </button>
-              {/if}
+              <div class="result-main">
+                <div class="result-title-line">
+                  <strong>{project.title}</strong>
+                  {#if project.author}<span class="result-author">by {project.author}</span>{/if}
+                  {#if latestVersion(project.versions)}
+                    <span class="result-version-badge">{latestVersion(project.versions)}</span>
+                  {/if}
+                </div>
+                <p>{project.description}</p>
+              </div>
+              <div class="result-side">
+                <span class="result-downloads">{t("resources.catalog.downloads").replace("{count}", formatDownloads(project.downloads))}</span>
+                {#if project.dateModified}<span class="result-date">{formatDate(project.dateModified)}</span>{/if}
+                {#if catalogType === "mod"}
+                  <button class="button compact" disabled={Boolean(previewingProject)} onclick={() => void createPreview(project)}>
+                    {previewingProject === project.projectId ? t("resources.catalog.parsing") : t("resources.catalog.viewPlan")}
+                  </button>
+                {:else if catalogType === "modpack"}
+                  <button class="button compact" disabled={Boolean(packPreviewing) || packInstalling} onclick={() => void previewPack(project)}>
+                    {packPreviewing === project.projectId ? t("resources.catalog.parsing") : t("resources.catalog.install")}
+                  </button>
+                {:else}
+                  <button class="button compact" disabled={Boolean(resourceInstalling) || !selectedInstanceId} onclick={() => void installResourceToInstance(project)}>
+                    {resourceInstalling === project.projectId ? t("resources.catalog.installing") : t("resources.catalog.install")}
+                  </button>
+                {/if}
+              </div>
             </article>
           {/each}
         </div>
+        {#if catalogPage && catalogHits.length < catalogPage.totalHits}
+          <div class="catalog-loadmore">
+            <button class="button ghost" disabled={loadingMore} onclick={() => void runCatalogSearch(false)}>
+              {loadingMore ? t("resources.catalog.loadingMore") : t("resources.catalog.loadMore").replace("{count}", String(catalogPage.totalHits - catalogHits.length))}
+            </button>
+          </div>
+        {/if}
       {/if}
 
       {#if preview}
