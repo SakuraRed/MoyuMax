@@ -34,7 +34,14 @@
 /docs/plans/
 /docs/review/
 /docs/research/
+/docs/architecture/
+/docs/UI-UX-REQUIREMENTS.md
 /features/
+/AGENTS.md
+/scripts/release-smoke.mjs
+/scripts/generate-tray-icon.mjs
+/apps/desktop/scripts/
+/apps/desktop/src-tauri/app-icon.svg
 
 # IDE and OS
 .idea/

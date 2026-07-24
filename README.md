@@ -28,8 +28,8 @@ corepack pnpm --filter @moyumax/desktop tauri dev
 
 ## 文档
 
-- [UI/UX 需求书](docs/UI-UX-REQUIREMENTS.md)
-- [技术栈决策](docs/architecture/ADR-0001-DESKTOP-STACK.md)
+- [SBOM 与第三方许可](docs/SBOM.json)
+- [第三方许可声明](docs/THIRD-PARTY-LICENSES.md)
 
 ## CI 与验证门
 
