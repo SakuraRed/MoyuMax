@@ -41,6 +41,21 @@
   登录 → 账户入库成功。若再失败，错误条含 AADSTS 详情，请原文发我。
 - [人工] 登录成功后：刷新会话、设为默认、启动实例进正版服务器。
 
+**2026-07-24 更新（Mojang 允许名单审批）**：登录链已全部打通（设备码 → MSA →
+Xbox Live → XSTS），最后一步 Minecraft Services 返回「Invalid app registration」。
+这不是缺陷：Mojang 自 2023 年起要求**新的第三方应用人工审查加入 API 允许名单**
+（官方说明 [help.minecraft.net/hc/en-us/articles/16254801392141](https://help.minecraft.net/hc/en-us/articles/16254801392141)）。
+需要项目负责人（你）执行：
+
+1. 打开申请表单 **https://aka.ms/mce-reviewappid**（Microsoft Forms，需登录
+   Microsoft 帐户）
+2. 按要求填写应用信息：Azure Client ID `7f00149b-8b23-4ac4-86ef-d982a58c07a3`、
+   应用名称 MoyuMax、用途（Minecraft 启动器，设备码登录）
+3. 等待 Mojang 审查通过（社区反馈通常数天到数周）
+4. 获批后重试 Microsoft 登录；届时应用内错误提示已含审批指引文案
+
+获批前，M30 的登录功能代码与自动化测试完整，真实链路只待名单批准。
+
 ## 6. 版本选择分级折叠
 
 - [自动] 新建实例版本区：正式版按大版本折叠组（Minecraft 1.21 ▾ 2 个版本），

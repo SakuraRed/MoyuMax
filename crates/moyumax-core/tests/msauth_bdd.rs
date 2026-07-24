@@ -342,6 +342,33 @@ async fn m30_acct_011_device_code_error_surfaces_service_detail() {
     drop(server);
 }
 
+#[tokio::test]
+async fn m30_acct_012_invalid_app_registration_maps_to_review_guidance() {
+    let server = FixtureMicrosoft::with_mc_login_response((
+        403,
+        serde_json::json!({
+            "path": "/authentication/login_with_xbox",
+            "errorMessage": "Invalid app registration, see https://aka.ms/AppRegInfo for more information"
+        })
+        .to_string(),
+    ));
+    let fixture = MsAccountFixture::new(&server);
+    let client = server.client();
+    let grant = client.begin_device_code().await.unwrap();
+
+    let error = fixture
+        .service
+        .complete_microsoft_device_login(&client, &grant, &MicrosoftLoginCancel::new())
+        .await
+        .expect_err("未获 Mojang 允许名单的应用必须失败");
+
+    assert!(
+        error.to_string().contains("Mojang") && error.to_string().contains("允许名单"),
+        "必须给出审批指引：{error}"
+    );
+    assert!(fixture.service.list_accounts().unwrap().is_empty());
+}
+
 struct MsAccountFixture {
     _directory: TempDir,
     database_path: std::path::PathBuf,
@@ -394,7 +421,7 @@ impl FixtureMicrosoft {
                 )
             })
             .collect();
-        Self::new(script, vec![], xsts_ok(), profile_ok())
+        Self::new(script, vec![], xsts_ok(), profile_ok(), None)
     }
 
     fn never_authorized() -> Self {
@@ -409,23 +436,28 @@ impl FixtureMicrosoft {
             vec![],
             xsts_ok(),
             profile_ok(),
+            None,
         )
     }
 
     fn with_device_polls(script: Vec<(u16, String)>) -> Self {
-        Self::new(script, vec![], xsts_ok(), profile_ok())
+        Self::new(script, vec![], xsts_ok(), profile_ok(), None)
     }
 
     fn with_refresh_script(script: Vec<(u16, String)>) -> Self {
-        Self::new(vec![], script, xsts_ok(), profile_ok())
+        Self::new(vec![], script, xsts_ok(), profile_ok(), None)
     }
 
     fn with_xsts_response(response: (u16, String)) -> Self {
-        Self::new(vec![], vec![], response, profile_ok())
+        Self::new(vec![], vec![], response, profile_ok(), None)
     }
 
     fn with_profile_response(response: (u16, String)) -> Self {
-        Self::new(vec![], vec![], xsts_ok(), response)
+        Self::new(vec![], vec![], xsts_ok(), response, None)
+    }
+
+    fn with_mc_login_response(response: (u16, String)) -> Self {
+        Self::new(vec![], vec![], xsts_ok(), profile_ok(), Some(response))
     }
 
     fn msa_success_body() -> String {
@@ -442,6 +474,7 @@ impl FixtureMicrosoft {
         refresh_script: Vec<(u16, String)>,
         xsts_response: (u16, String),
         profile_response: (u16, String),
+        mc_login_response: Option<(u16, String)>,
     ) -> Self {
         let device_poll_times: Arc<Mutex<Vec<Instant>>> = Arc::new(Mutex::new(Vec::new()));
         let device_polls: Script = Arc::new(Mutex::new(VecDeque::from(device_poll_script)));
@@ -510,6 +543,9 @@ impl FixtureMicrosoft {
             let mc_counter = Arc::clone(&mc_counter);
             spawn_server(move |_method, path, _body| {
                 if path == "/authentication/login_with_xbox" {
+                    if let Some(response) = &mc_login_response {
+                        return response.clone();
+                    }
                     let count = mc_counter.fetch_add(1, Ordering::SeqCst) + 1;
                     return (
                         200,

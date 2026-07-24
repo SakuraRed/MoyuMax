@@ -405,6 +405,13 @@ impl MicrosoftAuthClient {
         if !response.status().is_success() {
             let status = response.status();
             let detail = read_service_error(response).await;
+            if let Some(detail) = &detail
+                && detail.contains("Invalid app registration")
+            {
+                return Err(CoreError::Account(
+                    "Minecraft 要求新启动器应用先通过 Mojang 的 API 允许名单审查；该应用尚未获批，请等待审批通过后重试".to_owned(),
+                ));
+            }
             return Err(CoreError::Account(match detail {
                 Some(detail) => format!("Minecraft Services 登录失败：{detail}"),
                 None => format!("Minecraft Services 登录失败（HTTP {status}），请稍后重试"),
