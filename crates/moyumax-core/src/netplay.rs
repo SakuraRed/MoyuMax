@@ -134,10 +134,13 @@ pub async fn ensure_easytier_binary(
     let binary = install_dir.join("easytier-core.exe");
     let marker = install_dir.join(".verified");
     let wintun = install_dir.join("wintun.dll");
-    // 复用条件：二进制与 wintun 都在,且标记摘要与发布摘要一致。
-    // (此前误用 zip 摘要直接比对 exe,必然失配导致每次重下。)
+    let packet = install_dir.join("Packet.dll");
+    // 复用条件：core、wintun 与 Packet.dll 都在,且标记摘要与发布摘要一致。
+    // (此前误用 zip 摘要直接比对 exe,必然失配导致每次重下;
+    //  解包名单曾漏掉包内自带的 Packet.dll,导致运行时缺失报错。)
     if binary.is_file()
         && wintun.is_file()
+        && packet.is_file()
         && fs::read_to_string(&marker)
             .map(|content| content.trim() == asset.sha256)
             .unwrap_or(false)
@@ -166,6 +169,7 @@ pub async fn ensure_easytier_binary(
 }
 
 /// 下载 wintun.dll（固定版本 + 官方公布 SHA-256）到 EasyTier 同目录。
+/// EasyTier 官方包已自带 wintun.dll 时跳过（优先用包内配套版本）。
 async fn ensure_wintun_dll(client: &Client, install_dir: &Path) -> Result<PathBuf> {
     let target = install_dir.join("wintun.dll");
     if target.is_file() {
@@ -277,7 +281,12 @@ fn extract_easytier(archive: &Path, target: &Path) -> Result<()> {
             .file_name()
             .and_then(|value| value.to_str())
             .unwrap_or("");
-        if !matches!(file_name, "easytier-core.exe" | "easytier-cli.exe") {
+        // EasyTier 官方包自带 Packet.dll 与 wintun.dll,必须一并解出,
+        // 否则运行时动态加载 packet.dll 失败。
+        if !matches!(
+            file_name,
+            "easytier-core.exe" | "easytier-cli.exe" | "Packet.dll" | "wintun.dll"
+        ) {
             continue;
         }
         let mut data = Vec::with_capacity(entry.size() as usize);

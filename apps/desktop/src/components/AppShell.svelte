@@ -78,7 +78,7 @@
   data-background={uiBackground().type}
   style={backgroundStyle}
 >
-  <header class="titlebar" data-tauri-drag-region>
+  <header class="titlebar" data-tauri-drag-region="deep">
     <span class="brand-mark">M</span>
     <span class="titlebar-name">
       <strong>MoyuMax</strong>{#if titleSuffix} — {titleSuffix}{/if}
