@@ -26,6 +26,7 @@ fn search_query(project_type: ModrinthProjectType) -> ModrinthSearchQuery {
         offset: 0,
         limit: 20,
         project_type,
+        category: String::new(),
     }
 }
 

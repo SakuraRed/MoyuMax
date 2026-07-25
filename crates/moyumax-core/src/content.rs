@@ -78,6 +78,9 @@ pub struct ModrinthSearchQuery {
     /// 搜索的项目类型；缺省为模组（兼容 M5 调用方）。
     #[serde(default)]
     pub project_type: ModrinthProjectType,
+    /// Modrinth 内容分类（optimization/technology/magic 等）；空为全部。
+    #[serde(default)]
+    pub category: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -363,6 +366,9 @@ impl ModrinthClient {
             ]);
         } else if !query.game_version.trim().is_empty() {
             facet_groups.push(vec![format!("versions:{}", query.game_version)]);
+        }
+        if !query.category.trim().is_empty() {
+            facet_groups.push(vec![format!("categories:{}", query.category)]);
         }
         let facets = serde_json::to_string(&facet_groups)?;
         let mut url = self.endpoint("search")?;
@@ -2169,6 +2175,9 @@ fn validate_search_query(query: &ModrinthSearchQuery) -> Result<()> {
         return Err(CoreError::Content(
             "Modrinth 单页结果数量必须在 1 到 100 之间".to_owned(),
         ));
+    }
+    if !query.category.trim().is_empty() {
+        validate_instance_term(&query.category, "内容分类")?;
     }
     Ok(())
 }

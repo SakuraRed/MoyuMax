@@ -45,6 +45,7 @@ async fn m5_search_001_filters_for_the_target_client_instance() {
             offset: 0,
             limit: 20,
             project_type: ModrinthProjectType::Mod,
+            category: String::new(),
         })
         .await
         .unwrap();
@@ -460,6 +461,7 @@ fn search_query() -> ModrinthSearchQuery {
         offset: 0,
         limit: 20,
         project_type: ModrinthProjectType::Mod,
+        category: String::new(),
     }
 }
 

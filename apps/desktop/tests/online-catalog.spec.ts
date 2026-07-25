@@ -57,7 +57,7 @@ test("M31-CAT-UI-001 在线目录默认显示并可按类型搜索模组", async
 
   await page.getByRole("searchbox", { name: "搜索在线资源" }).fill("continuity");
   await page.getByRole("button", { name: "搜索", exact: true }).click();
-  await expect(page.getByText("Continuity")).toBeVisible();
+  await expect(page.getByText("Continuity", { exact: true })).toBeVisible();
   await page.getByRole("button", { name: "查看安装计划" }).click();
   await expect(page.getByRole("heading", { name: "安装计划预览" })).toBeVisible();
 });
@@ -94,7 +94,7 @@ test("UI-CAT-001 在线目录在 960x600 和 200% 放大下不溢出", async ({ 
   await page.setViewportSize({ width: 960, height: 600 });
   await page.getByRole("searchbox", { name: "搜索在线资源" }).fill("continuity");
   await page.getByRole("button", { name: "搜索", exact: true }).click();
-  await expect(page.getByText("Continuity")).toBeVisible();
+  await expect(page.getByText("Continuity", { exact: true })).toBeVisible();
   await page.evaluate(() => {
     document.documentElement.style.zoom = "2";
   });

@@ -36,13 +36,11 @@
   import { LITTLESKIN_YGGDRASIL_URL } from "../runtime";
   import AppShell from "./AppShell.svelte";
   import Icon from "./Icon.svelte";
-  import SettingsNetwork from "./SettingsNetwork.svelte";
 
   type SettingsPage =
     | "general"
     | "appearance"
     | "java"
-    | "network"
     | "accounts"
     | "backups"
     | "updates"
@@ -61,7 +59,6 @@
       groupKey: "settings.nav.groupGame",
       items: [
         { key: "java", labelKey: "settings.nav.java" },
-        { key: "network", labelKey: "settings.nav.network" },
         { key: "accounts", labelKey: "settings.nav.accounts" },
         { key: "backups", labelKey: "settings.nav.backups" },
       ],
@@ -1053,10 +1050,6 @@
         </label>
       </div>
     </section>
-        {/if}
-
-        {#if subPage === "network"}
-          <SettingsNetwork {runtime} />
         {/if}
 
         {#if subPage === "java"}

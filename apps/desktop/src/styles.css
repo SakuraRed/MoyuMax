@@ -4831,3 +4831,89 @@ summary:focus-visible {
   margin-right: auto;
   margin-left: auto;
 }
+
+/* ---------- 联机下载进度与端口检测 ---------- */
+.netplay-progress {
+  position: relative;
+  display: flex;
+  align-items: center;
+  height: 22px;
+  border-radius: 999px;
+  background: var(--surface-2);
+  overflow: hidden;
+}
+
+.netplay-progress-bar {
+  position: absolute;
+  inset: 0 auto 0 0;
+  background: var(--accent-dim);
+  border-right: 2px solid var(--accent);
+  transition: width 200ms ease;
+}
+
+.netplay-progress span {
+  position: relative;
+  padding: 0 10px;
+  color: var(--text-2);
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+}
+
+.netplay-detect-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.netplay-detect-result {
+  color: var(--accent);
+  font-size: 12.5px;
+  font-weight: 600;
+}
+
+/* 设置子导航分组强化 */
+.sn-group {
+  margin-top: 12px;
+  padding: 10px 10px 6px;
+  color: var(--text-3);
+  font-size: 10.5px;
+  font-weight: 800;
+  letter-spacing: 1px;
+  text-transform: uppercase;
+  border-top: 1px solid var(--border);
+}
+
+.sn-group:first-child {
+  margin-top: 0;
+  padding-top: 0;
+  border-top: 0;
+}
+
+/* ---------- 结果卡 MCMOD 中文行 ---------- */
+.result-mcmod {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin-top: 6px;
+  padding: 6px 10px;
+  border-left: 2px solid var(--accent);
+  background: var(--accent-dim);
+  border-radius: 0 var(--r-sm) var(--r-sm) 0;
+  font-size: 12.5px;
+}
+
+.result-mcmod strong {
+  color: var(--accent);
+  white-space: nowrap;
+}
+
+.result-mcmod span {
+  color: var(--text-2);
+}
+
+.mcmod-link {
+  margin-left: auto;
+  font-size: 12px;
+}

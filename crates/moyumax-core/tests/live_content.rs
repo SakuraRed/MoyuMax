@@ -70,6 +70,7 @@ async fn current_continuity_dependency_closure_installs_and_launches_from_a_clon
             offset: 0,
             limit: 20,
             project_type: ModrinthProjectType::Mod,
+            category: String::new(),
         })
         .await
         .unwrap();

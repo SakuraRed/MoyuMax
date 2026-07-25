@@ -15,6 +15,7 @@
     OnboardingSelection,
     WorldBackupSummary,
   } from "../runtime";
+  import { shellAccount } from "../accounts.svelte";
   import AppShell from "./AppShell.svelte";
   import Icon from "./Icon.svelte";
 
@@ -196,13 +197,26 @@
     actionError = "";
     try {
       await runtime.startInstance(instance.id);
-      actionMessage = t("home.action.starting").replace("{name}", instance.name);
+      actionMessage = t("home.action.starting")
+        .replace("{name}", instance.name)
+        .replace("{identity}", identityLabel());
       await onStateChanged();
     } catch (error) {
       actionError = error instanceof Error ? error.message : String(error);
     } finally {
       changingInstance = null;
     }
+  }
+
+  function identityLabel(): string {
+    const account = shellAccount();
+    if (account.kind === "microsoft") {
+      return t("home.action.identityMicrosoft").replace("{name}", account.name);
+    }
+    if (account.kind === "authlib") {
+      return t("home.action.identityAuthlib").replace("{name}", account.name);
+    }
+    return t("home.action.identityOffline");
   }
 
   async function stop(instance: ManagedInstance): Promise<void> {

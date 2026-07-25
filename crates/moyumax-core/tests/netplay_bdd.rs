@@ -167,7 +167,7 @@ async fn net_006_easytier_download_verifies_sha256_before_install() {
         size: zip_bytes.len() as u64,
     };
     let staging = tools.path().join("pack.part");
-    moyumax_core::download_and_verify(&client, &asset, &staging)
+    moyumax_core::download_and_verify(&client, &asset, &staging, &|_, _| {})
         .await
         .unwrap();
     assert_eq!(std::fs::read(&staging).unwrap(), zip_bytes);
@@ -177,7 +177,7 @@ async fn net_006_easytier_download_verifies_sha256_before_install() {
         ..asset
     };
     let staging2 = tools.path().join("pack2.part");
-    let error = moyumax_core::download_and_verify(&client, &tampered, &staging2)
+    let error = moyumax_core::download_and_verify(&client, &tampered, &staging2, &|_, _| {})
         .await
         .expect_err("摘要不符必须拒绝");
     assert!(error.to_string().contains("SHA-256"), "{error}");

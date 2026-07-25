@@ -13,6 +13,7 @@ use std::{
     time::Duration,
 };
 
+use futures_util::StreamExt;
 use reqwest::Client;
 use sha2::{Digest, Sha256};
 
@@ -28,6 +29,70 @@ const EASYTIER_ASSET_PREFIX: &str = "easytier-windows-x86_64-";
 /// STUN 服务器（Google 公共 STUN）。
 const STUN_SERVER: &str = "stun.l.google.com:19302";
 const STUN_TIMEOUT: Duration = Duration::from_secs(3);
+
+/// Minecraft「对局域网开放」的组播发现地址与端口（游戏内每 1.5 秒广播一次）。
+pub const LAN_BROADCAST_GROUP: Ipv4Addr = Ipv4Addr::new(224, 0, 2, 60);
+pub const LAN_BROADCAST_PORT: u16 = 4445;
+
+/// 一条游戏局域网开放广播（MOTD、游戏端口、来源地址）。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LanBroadcast {
+    pub motd: String,
+    pub port: u16,
+    pub from: SocketAddr,
+}
+
+/// 解析 [MOTD]...[/MOTD][AD]port[/AD] 组播报文；非该格式返回 None。
+pub fn parse_lan_broadcast(data: &[u8], from: SocketAddr) -> Option<LanBroadcast> {
+    let text = std::str::from_utf8(data).ok()?;
+    let motd = text
+        .strip_prefix("[MOTD]")?
+        .split("[/MOTD]")
+        .next()?
+        .to_owned();
+    let port: u16 = text
+        .split("[AD]")
+        .nth(1)?
+        .split("[/AD]")
+        .next()?
+        .trim()
+        .parse()
+        .ok()?;
+    if port == 0 {
+        return None;
+    }
+    Some(LanBroadcast { motd, port, from })
+}
+
+/// 监听游戏局域网开放广播，等待至多 timeout，返回最新一条（无则 None）。
+pub fn listen_lan_broadcast(timeout: Duration) -> Result<Option<LanBroadcast>> {
+    let socket = UdpSocket::bind(("0.0.0.0", LAN_BROADCAST_PORT))?;
+    socket
+        .join_multicast_v4(&LAN_BROADCAST_GROUP, &Ipv4Addr::UNSPECIFIED)
+        .map_err(|error| CoreError::Content(format!("无法加入局域网组播：{error}")))?;
+    socket.set_read_timeout(Some(Duration::from_millis(500)))?;
+    let deadline = std::time::Instant::now() + timeout;
+    let mut latest: Option<LanBroadcast> = None;
+    let mut buffer = [0_u8; 1024];
+    loop {
+        match socket.recv_from(&mut buffer) {
+            Ok((received, from)) => {
+                if let Some(broadcast) = parse_lan_broadcast(&buffer[..received], from) {
+                    latest = Some(broadcast);
+                }
+            }
+            Err(_) => {
+                if std::time::Instant::now() >= deadline {
+                    break;
+                }
+            }
+        }
+        if std::time::Instant::now() >= deadline {
+            break;
+        }
+    }
+    Ok(latest)
+}
 
 /// EasyTier Windows 资产（URL、SHA-256、大小、版本）。
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -109,8 +174,12 @@ pub fn parse_easytier_release(payload: &serde_json::Value) -> Result<EasyTierAss
 }
 
 /// 下载 EasyTier 并解包到受管工具目录，返回 easytier-core.exe 路径。
-/// 已存在且 SHA-256 匹配时直接复用。
-pub async fn ensure_easytier_binary(client: &Client, tools_dir: &Path) -> Result<PathBuf> {
+/// 已存在且 SHA-256 匹配时直接复用；下载进度经回调上报（已下载字节、总字节）。
+pub async fn ensure_easytier_binary(
+    client: &Client,
+    tools_dir: &Path,
+    progress: &(dyn Fn(u64, u64) + Send + Sync),
+) -> Result<PathBuf> {
     let release: serde_json::Value = client
         .get(EASYTIER_RELEASE_API)
         .send()
@@ -127,7 +196,7 @@ pub async fn ensure_easytier_binary(client: &Client, tools_dir: &Path) -> Result
     }
     let staging = install_dir.join("download.zip.part");
     fs::create_dir_all(&install_dir)?;
-    let download_result = download_and_verify(client, &asset, &staging).await;
+    let download_result = download_and_verify(client, &asset, &staging, progress).await;
     if let Err(error) = download_result {
         let _ = fs::remove_file(&staging);
         return Err(error);
@@ -139,12 +208,8 @@ pub async fn ensure_easytier_binary(client: &Client, tools_dir: &Path) -> Result
             "EasyTier 包内缺少 easytier-core.exe".to_owned(),
         ));
     }
-    if sha256_file(&binary)? != asset.sha256 {
-        let _ = fs::remove_dir_all(&install_dir);
-        return Err(CoreError::Content(
-            "EasyTier 解包后校验失败，已删除".to_owned(),
-        ));
-    }
+    // zip 包的 SHA-256 已在下载时校验；解包出的 exe 与包摘要不同属正常,
+    // 不再二次比较（此前的"解包后校验"误用了 zip 摘要,必然失败)。
     Ok(binary)
 }
 
@@ -162,10 +227,12 @@ pub fn netplay_http_client() -> Result<Client> {
 }
 
 /// 下载资产到暂存文件并强制 SHA-256 校验；失败即拒绝且调用方负责清理。
+/// 进度回调（已下载字节、总字节，总量未知时为 0）。
 pub async fn download_and_verify(
     client: &Client,
     asset: &EasyTierAsset,
     staging: &Path,
+    progress: &(dyn Fn(u64, u64) + Send + Sync),
 ) -> Result<()> {
     let response = client
         .get(&asset.url)
@@ -178,17 +245,27 @@ pub async fn download_and_verify(
             response.status()
         )));
     }
-    let bytes = response
-        .bytes()
-        .await
-        .map_err(|error| CoreError::Content(format!("EasyTier 下载中断：{error}")))?;
-    let digest = encode_hex(Sha256::digest(&bytes));
+    let total = response.content_length().unwrap_or(asset.size);
+    let mut hasher = Sha256::new();
+    let mut writer = std::io::BufWriter::new(fs::File::create(staging)?);
+    let mut stream = response.bytes_stream();
+    let mut received = 0_u64;
+    progress(0, total);
+    while let Some(chunk) = stream.next().await {
+        let chunk =
+            chunk.map_err(|error| CoreError::Content(format!("EasyTier 下载中断：{error}")))?;
+        hasher.update(&chunk);
+        std::io::Write::write_all(&mut writer, &chunk)?;
+        received += chunk.len() as u64;
+        progress(received, total);
+    }
+    std::io::Write::flush(&mut writer)?;
+    let digest = encode_hex(hasher.finalize());
     if !digest.eq_ignore_ascii_case(&asset.sha256) {
         return Err(CoreError::Content(
             "EasyTier 下载 SHA-256 校验失败，已拒绝使用".to_owned(),
         ));
     }
-    fs::write(staging, &bytes)?;
     Ok(())
 }
 

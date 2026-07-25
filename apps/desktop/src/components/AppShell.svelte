@@ -42,6 +42,7 @@
     { key: "home" as const, name: "home" as const, labelKey: "nav.home" },
     { key: "instances" as const, name: "box" as const, labelKey: "nav.instances" },
     { key: "resources" as const, name: "compass" as const, labelKey: "nav.resources" },
+    { key: "netplay" as const, name: "wifi" as const, labelKey: "nav.netplay" },
     { key: "tasks" as const, name: "task" as const, labelKey: "nav.tasks" },
     { key: "data" as const, name: "database" as const, labelKey: "nav.data" },
     { key: "settings" as const, name: "settings" as const, labelKey: "nav.settings" },

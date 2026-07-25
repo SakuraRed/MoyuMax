@@ -116,6 +116,14 @@ struct NatReportView {
     impact: String,
 }
 
+/// `netplay-download-progress` 事件负载（EasyTier 首次下载进度）。
+#[derive(Debug, Clone, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct NetplayDownloadProgress {
+    current: u64,
+    total: u64,
+}
+
 #[derive(Debug, Clone)]
 struct TaskCoordinator {
     install_executor: InstallExecutor,
@@ -1127,6 +1135,7 @@ fn open_external_url(url: String) -> Result<(), String> {
 /// 创建或加入 EasyTier 联机房间；首次使用先下载校验 EasyTier。
 #[tauri::command]
 async fn start_netplay_room(
+    app: tauri::AppHandle,
     service: State<'_, AppService>,
     coordinator: State<'_, NetplayCoordinator>,
     network_name: String,
@@ -1154,9 +1163,15 @@ async fn start_netplay_room(
         .map_err(|error| error.to_string())?
         .join("tools");
     let http = moyumax_core::netplay_http_client().map_err(|error| error.to_string())?;
-    let binary = moyumax_core::ensure_easytier_binary(&http, &tools_dir)
-        .await
-        .map_err(|error| error.to_string())?;
+    let progress_app = app.clone();
+    let binary = moyumax_core::ensure_easytier_binary(&http, &tools_dir, &move |current, total| {
+        let _ = progress_app.emit(
+            "netplay-download-progress",
+            NetplayDownloadProgress { current, total },
+        );
+    })
+    .await
+    .map_err(|error| error.to_string())?;
     let args = moyumax_core::easytier_args(&config);
     let child = std::process::Command::new(&binary)
         .args(&args)
@@ -1308,6 +1323,31 @@ fn get_port_forward(
         listen: process.listen.clone(),
         target: process.target.clone(),
         public_bind: process.public_bind,
+    }))
+}
+
+/// 游戏「对局域网开放」广播视图。
+#[derive(Debug, Clone, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct LanBroadcastView {
+    motd: String,
+    port: u16,
+    from: String,
+}
+
+/// 自动检测游戏内「对局域网开放」的端口（组播监听，最多等待 4 秒）。
+#[tauri::command]
+async fn detect_lan_game() -> Result<Option<LanBroadcastView>, String> {
+    let broadcast = tokio::task::spawn_blocking(|| {
+        moyumax_core::listen_lan_broadcast(std::time::Duration::from_secs(4))
+    })
+    .await
+    .map_err(|error| error.to_string())?
+    .map_err(|error| error.to_string())?;
+    Ok(broadcast.map(|item| LanBroadcastView {
+        motd: item.motd,
+        port: item.port,
+        from: item.from.ip().to_string(),
     }))
 }
 
@@ -2449,6 +2489,7 @@ pub fn run() {
             start_port_forward,
             stop_port_forward,
             get_port_forward,
+            detect_lan_game,
             get_ui_preferences,
             set_ui_theme,
             set_ui_language,

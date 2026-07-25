@@ -206,6 +206,8 @@ export interface ModrinthSearchQuery {
   limit: number;
   /** 搜索的项目类型；缺省为模组。 */
   projectType?: ModrinthProjectType;
+  /** Modrinth 内容分类（optimization/technology 等）；空为全部。 */
+  category?: string;
 }
 
 export interface ModrinthProjectSummary {
@@ -378,7 +380,7 @@ export interface WorldBackupSettings {
   keepCount: number;
 }
 
-export type NavigationKey = "home" | "instances" | "resources" | "tasks" | "data" | "settings";
+export type NavigationKey = "home" | "instances" | "resources" | "netplay" | "tasks" | "data" | "settings";
 
 export type AccountKind = "offline" | "authlib" | "microsoft";
 export type AccountSessionState = "valid" | "expired";
@@ -414,6 +416,13 @@ export interface NatReportView {
   mappedAddress: string;
   behindNat: boolean;
   impact: string;
+}
+
+/** 游戏「对局域网开放」广播视图。 */
+export interface LanBroadcastView {
+  motd: string;
+  port: number;
+  from: string;
 }
 
 /** Microsoft 设备码登录的展示信息（用户码与验证地址）。 */
@@ -769,6 +778,10 @@ export interface MoyuRuntime {
   stopPortForward(): Promise<void>;
   /** 当前端口转发状态。 */
   getPortForward(): Promise<PortForwardView | null>;
+  /** 订阅 EasyTier 首次下载进度事件，返回取消订阅函数。 */
+  onNetplayDownloadProgress(handler: (event: { current: number; total: number }) => void): () => void;
+  /** 自动检测游戏内「对局域网开放」的端口（组播监听约 4 秒）。 */
+  detectLanGame(): Promise<LanBroadcastView | null>;
   getUiPreferences(): Promise<UiPreferences>;
   setUiTheme(theme: string): Promise<void>;
   setUiLanguage(language: string): Promise<void>;
@@ -877,6 +890,13 @@ const BROWSER_MODPACKS_KEY = "moyumax.browser.modpacks";
 const browserModpackProgressHandlers = new Set<(event: ModpackProgressEvent) => void>();
 const browserMicrosoftLoginHandlers = new Set<(event: MicrosoftLoginEvent) => void>();
 let browserMicrosoftLoginTimer: number | undefined;
+const browserNetplayProgressHandlers = new Set<(event: { current: number; total: number }) => void>();
+
+function browserEmitNetplayProgress(event: { current: number; total: number }): void {
+  for (const handler of browserNetplayProgressHandlers) {
+    handler(event);
+  }
+}
 
 function browserEmitMicrosoftLogin(event: MicrosoftLoginEvent): void {
   for (const handler of browserMicrosoftLoginHandlers) {
@@ -1080,6 +1100,17 @@ function createTauriRuntime(): MoyuRuntime {
       invoke<PortForwardView>("start_port_forward", { listen, target, publicBind }),
     stopPortForward: () => invoke<void>("stop_port_forward"),
     getPortForward: () => invoke<PortForwardView | null>("get_port_forward"),
+    detectLanGame: () => invoke<LanBroadcastView | null>("detect_lan_game"),
+    onNetplayDownloadProgress: (handler) => {
+      let unlisten: (() => void) | undefined;
+      void listen<{ current: number; total: number }>(
+        "netplay-download-progress",
+        (event) => handler(event.payload),
+      ).then((release) => {
+        unlisten = release;
+      });
+      return () => unlisten?.();
+    },
     getUiPreferences: () => invoke<UiPreferences>("get_ui_preferences"),
     setUiTheme: (theme) => invoke<void>("set_ui_theme", { theme }),
     setUiLanguage: (language) => invoke<void>("set_ui_language", { language }),
@@ -1964,6 +1995,11 @@ function createBrowserRuntime(): MoyuRuntime {
       if (!/^[!-~]{8,64}$/.test(networkSecret)) {
         throw new Error("房间密码必须是 8-64 位可见字符（不含空格）");
       }
+      if (window.localStorage.getItem("moyumax.browser.easytierNeedsDownload") === "true") {
+        for (const [current, total] of [[6_000_000, 21_000_000], [14_000_000, 21_000_000], [21_000_000, 21_000_000]] as const) {
+          browserEmitNetplayProgress({ current, total });
+        }
+      }
       const view: NetplayRoomView = {
         networkName,
         virtualIp: isHost ? "10.144.144.1" : "自动分配（DHCP）",
@@ -2003,6 +2039,17 @@ function createBrowserRuntime(): MoyuRuntime {
     async getPortForward() {
       const serialized = window.localStorage.getItem("moyumax.browser.portForward");
       return serialized ? (JSON.parse(serialized) as PortForwardView) : null;
+    },
+    async detectLanGame() {
+      const serialized = window.localStorage.getItem("moyumax.browser.lanGame");
+      if (!serialized) return null;
+      return JSON.parse(serialized) as LanBroadcastView;
+    },
+    onNetplayDownloadProgress(handler) {
+      browserNetplayProgressHandlers.add(handler);
+      return () => {
+        browserNetplayProgressHandlers.delete(handler);
+      };
     },
     async getUiPreferences() {
       const serialized = window.localStorage.getItem("moyumax.browser.uiPreferences");

@@ -9,6 +9,7 @@
   import DataCenter from "./components/DataCenter.svelte";
   import GameInstall from "./components/GameInstall.svelte";
   import Home from "./components/Home.svelte";
+  import NetplayCenter from "./components/NetplayCenter.svelte";
   import Onboarding from "./components/Onboarding.svelte";
   import ResourceCenter from "./components/ResourceCenter.svelte";
   import SettingsCenter from "./components/SettingsCenter.svelte";
@@ -32,7 +33,7 @@
   } from "./runtime";
   import { isRestorablePage, sanitizeShellState } from "./shell-state";
 
-  type Phase = "loading" | "onboarding" | "home" | "install" | "resources" | "tasks" | "data" | "backups" | "crash" | "settings" | "fatal";
+  type Phase = "loading" | "onboarding" | "home" | "install" | "resources" | "netplay" | "tasks" | "data" | "backups" | "crash" | "settings" | "fatal";
 
   const runtime = createRuntime();
   let phase = $state<Phase>("loading");
@@ -442,6 +443,15 @@
     {instances}
     onOpenTasks={() => phase = "tasks"}
     onTasksChanged={refreshTasks}
+    onNavigate={navigate}
+    onMinimize={() => runtime.minimizeWindow()}
+    onToggleMaximize={() => runtime.toggleMaximizeWindow()}
+    onClose={() => runtime.closeWindow()}
+  />
+{:else if phase === "netplay" && settings}
+  <NetplayCenter
+    {runtime}
+    {settings}
     onNavigate={navigate}
     onMinimize={() => runtime.minimizeWindow()}
     onToggleMaximize={() => runtime.toggleMaximizeWindow()}

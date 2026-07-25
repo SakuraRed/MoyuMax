@@ -1,7 +1,8 @@
 <script lang="ts">
   import { onMount } from "svelte";
 
-  import { t } from "../i18n.svelte";
+  import { t, uiLanguage } from "../i18n.svelte";
+  import { mcmodEntryFor } from "../mcmod-zh";
   import type {
     ContentInstallPreview,
     ContentUpdateInfo,
@@ -56,6 +57,20 @@
     { key: "shader", labelKey: "resources.catalog.type.shader" },
     { key: "resourcepack", labelKey: "resources.catalog.type.resourcepack" },
   ];
+  const CATALOG_CATEGORIES: { value: string; labelKey: string }[] = [
+    { value: "optimization", labelKey: "resources.catalog.category.optimization" },
+    { value: "technology", labelKey: "resources.catalog.category.technology" },
+    { value: "magic", labelKey: "resources.catalog.category.magic" },
+    { value: "adventure", labelKey: "resources.catalog.category.adventure" },
+    { value: "decoration", labelKey: "resources.catalog.category.decoration" },
+    { value: "utility", labelKey: "resources.catalog.category.utility" },
+    { value: "worldgen", labelKey: "resources.catalog.category.worldgen" },
+    { value: "food", labelKey: "resources.catalog.category.food" },
+    { value: "storage", labelKey: "resources.catalog.category.storage" },
+    { value: "equipment", labelKey: "resources.catalog.category.equipment" },
+    { value: "library", labelKey: "resources.catalog.category.library" },
+    { value: "mobs", labelKey: "resources.catalog.category.mobs" },
+  ];
   const eligibleInstances = $derived(
     instances.filter(
       (instance) => instance.state === "ready" && instance.loaderKind in LOADER_NAMES,
@@ -96,6 +111,7 @@
   let sortIndex = $state<"relevance" | "downloads" | "updated">("downloads");
   let filterVersion = $state("");
   let filterLoader = $state("");
+  let filterCategory = $state("");
   let packPreview = $state<ModpackPreviewResponse | null>(null);
   let packPreviewing = $state("");
   let packInstalling = $state(false);
@@ -301,6 +317,7 @@
         offset: fresh ? 0 : catalogHits.length,
         limit: CATALOG_PAGE_SIZE,
         projectType: catalogType,
+        category: filterCategory,
       });
       catalogPage = page;
       catalogHits = fresh ? page.hits : [...catalogHits, ...page.hits];
@@ -538,6 +555,15 @@
           </label>
         {/if}
         <label class="catalog-filter">
+          <span>{t("resources.catalog.filterCategory")}</span>
+          <select value={filterCategory} onchange={(event) => { filterCategory = (event.currentTarget as HTMLSelectElement).value; applyFilters(); }} aria-label={t("resources.catalog.filterCategory")}>
+            <option value="">{t("resources.catalog.filterCategoryAll")}</option>
+            {#each CATALOG_CATEGORIES as category}
+              <option value={category.value}>{t(category.labelKey)}</option>
+            {/each}
+          </select>
+        </label>
+        <label class="catalog-filter">
           <span>{t("resources.catalog.filterSort")}</span>
           <select value={sortIndex} onchange={(event) => { sortIndex = (event.currentTarget as HTMLSelectElement).value as typeof sortIndex; applyFilters(); }} aria-label={t("resources.catalog.filterSort")}>
             <option value="downloads">{t("resources.catalog.sortDownloads")}</option>
@@ -614,6 +640,14 @@
                   {/if}
                 </div>
                 <p>{project.description}</p>
+                {#if (uiLanguage() === "zh-CN" || uiLanguage() === "zh-TW") && mcmodEntryFor(project.slug)}
+                  {@const mcmod = mcmodEntryFor(project.slug)!}
+                  <div class="result-mcmod">
+                    <strong>{mcmod.zhName}</strong>
+                    <span>{mcmod.zhDescription}</span>
+                    <button class="inline-link mcmod-link" onclick={() => void runtime.openExternalUrl(mcmod.mcmodUrl)}>{t("resources.catalog.mcmodLink")}</button>
+                  </div>
+                {/if}
               </div>
               <div class="result-side">
                 <span class="result-downloads">{t("resources.catalog.downloads").replace("{count}", formatDownloads(project.downloads))}</span>
