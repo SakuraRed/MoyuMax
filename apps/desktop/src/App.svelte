@@ -4,6 +4,7 @@
   import AppShell from "./components/AppShell.svelte";
   import CloseDialog from "./components/CloseDialog.svelte";
   import CrashCenter from "./components/CrashCenter.svelte";
+  import FishtankLoader from "./components/FishtankLoader.svelte";
   import DataCenter from "./components/DataCenter.svelte";
   import GameInstall from "./components/GameInstall.svelte";
   import Home from "./components/Home.svelte";
@@ -12,6 +13,7 @@
   import SettingsCenter from "./components/SettingsCenter.svelte";
   import TaskCenter from "./components/TaskCenter.svelte";
   import { impactRequiresConfirmation, routeCloseRequest } from "./close-flow";
+  import { refreshShellAccount } from "./accounts.svelte";
   import { applyUiPreferences, refreshBackgroundImage } from "./i18n.svelte";
   import { createRuntime } from "./runtime";
   import type {
@@ -36,6 +38,7 @@
   let bootstrap = $state<BootstrapState | null>(null);
   let settings = $state<OnboardingSelection | null>(null);
   let fatalMessage = $state("");
+  let startupLeaping = $state(false);
   let notice = $state("");
   let tasks = $state<InstallTask[]>([]);
   let contentTasks = $state<ContentInstallTask[]>([]);
@@ -125,6 +128,9 @@
         background: await runtime.getUiBackground(),
       });
       await refreshBackgroundImage(runtime);
+      void refreshShellAccount(runtime);
+      startupLeaping = true;
+      await new Promise((resolve) => setTimeout(resolve, 700));
       if (bootstrap.requiresOnboarding) {
         phase = "onboarding";
       } else if (startupKind === "wake") {
@@ -386,9 +392,7 @@
     onClose={() => runtime.closeWindow()}
   >
     <main class="content loading-state" aria-live="polite">
-      <div class="loading-line wide"></div>
-      <div class="loading-line"></div>
-      <span>正在读取本地状态…</span>
+      <FishtankLoader leaping={startupLeaping} message="正在读取本地状态…" />
     </main>
   </AppShell>
 {:else if phase === "onboarding" && bootstrap}

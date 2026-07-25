@@ -1751,13 +1751,14 @@ function createBrowserRuntime(): MoyuRuntime {
         throw new Error("用户名和密码不能为空");
       }
       const accounts = browserAccounts();
+      for (const candidate of accounts) candidate.isDefault = false;
       const account: AccountSummary = {
         id: crypto.randomUUID(),
         kind: "authlib",
         username: username.split("@")[0] ?? username,
         playerUuid: crypto.randomUUID(),
         serverUrl,
-        isDefault: accounts.every((candidate) => !candidate.isDefault),
+        isDefault: true,
         sessionState: "valid",
         createdAtUnixSeconds: Math.floor(Date.now() / 1000),
         lastValidatedAtUnixSeconds: Math.floor(Date.now() / 1000),
@@ -1829,6 +1830,7 @@ function createBrowserRuntime(): MoyuRuntime {
           return;
         }
         const accounts = browserAccounts();
+        for (const candidate of accounts) candidate.isDefault = false;
         const now = Math.floor(Date.now() / 1000);
         const account: AccountSummary = {
           id: crypto.randomUUID(),
@@ -1836,7 +1838,7 @@ function createBrowserRuntime(): MoyuRuntime {
           username: "Steve",
           playerUuid: crypto.randomUUID(),
           serverUrl: null,
-          isDefault: accounts.every((candidate) => !candidate.isDefault),
+          isDefault: true,
           sessionState: "valid",
           createdAtUnixSeconds: now,
           lastValidatedAtUnixSeconds: now,

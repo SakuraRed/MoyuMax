@@ -25,6 +25,7 @@
     VersionCatalog,
   } from "../runtime";
   import AppShell from "./AppShell.svelte";
+  import FishtankLoader from "./FishtankLoader.svelte";
   import Icon from "./Icon.svelte";
 
   interface Props {
@@ -50,6 +51,7 @@
   }: Props = $props();
 
   let view = $state<InstallView>("loading");
+  let installLeaping = $state(false);
   let catalog = $state<VersionCatalog | null>(null);
   let selectedVersion = $state<GameVersionSummary | null>(null);
   let fabricLoaders = $state<FabricLoaderSummary[]>([]);
@@ -146,7 +148,10 @@
       selectedVersion = recommended;
       expandedMajors = new Set([majorOf(recommended.id)]);
       await loadLoaders(recommended, true);
-      view = "configure";
+      installLeaping = true;
+      setTimeout(() => {
+        view = "configure";
+      }, 700);
     } catch (error) {
       errorMessage = error instanceof Error ? error.message : String(error);
       view = "configure";
@@ -403,10 +408,7 @@
   <main class="content install-content" bind:this={pageRoot}>
     {#if view === "loading"}
       <section class="install-loading" aria-live="polite">
-        <div class="loading-line wide"></div>
-        <div class="loading-line"></div>
-        <strong>{t("install.loading.title")}</strong>
-        <span>{t("install.loading.description")}</span>
+        <FishtankLoader leaping={installLeaping} message={t("install.loading.title")} />
       </section>
     {:else if view === "configure"}
       <div class="install-scroll" data-scroll-region="main">

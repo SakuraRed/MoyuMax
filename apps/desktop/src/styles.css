@@ -318,6 +318,13 @@ summary:focus-visible {
   font-weight: 700;
 }
 
+.avatar-img {
+  padding: 0;
+  object-fit: cover;
+  background: var(--surface-2);
+  image-rendering: pixelated;
+}
+
 .account strong,
 .account small {
   display: block;
@@ -1256,6 +1263,71 @@ summary:focus-visible {
 .window[data-motion="reduce"] .fish-bubble {
   animation: none;
   opacity: 0.85;
+}
+
+/* 鱼游加载页:鱼在水中往返游,完成时(leaping)跳出水面并淡出。 */
+.fishtank-loader {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 14px;
+}
+
+.fishtank-loader-svg {
+  width: 160px;
+  height: 110px;
+}
+
+.fishtank-loader-text {
+  color: var(--text-2);
+  font-size: 13px;
+}
+
+.loader-fish {
+  animation: loader-swim 6s ease-in-out infinite;
+}
+
+.loader-bubble {
+  animation: fish-bubble-rise 3.6s ease-in infinite;
+  opacity: 0;
+}
+
+@keyframes loader-swim {
+  0%, 100% { transform: translateX(-18px); }
+  50% { transform: translateX(18px); }
+}
+
+.fishtank-loader.leaping .loader-fish {
+  animation: loader-leap 0.7s cubic-bezier(0.25, 0.6, 0.35, 1) forwards;
+}
+
+.fishtank-loader.leaping .fishtank-loader-svg,
+.fishtank-loader.leaping .fishtank-loader-text {
+  animation: loader-tank-fade 0.6s ease 0.25s forwards;
+}
+
+@keyframes loader-leap {
+  0% { transform: translateX(0) translateY(0) rotate(0deg); opacity: 1; }
+  45% { transform: translateX(6px) translateY(-36px) rotate(-18deg); opacity: 1; }
+  100% { transform: translateX(12px) translateY(-62px) rotate(-32deg); opacity: 0; }
+}
+
+@keyframes loader-tank-fade {
+  to { opacity: 0; transform: translateY(10px); }
+}
+
+.window[data-motion="reduce"] .loader-fish,
+.window[data-motion="reduce"] .loader-bubble {
+  animation: none;
+  opacity: 0.85;
+}
+
+.window[data-motion="reduce"] .fishtank-loader.leaping .loader-fish,
+.window[data-motion="reduce"] .fishtank-loader.leaping .fishtank-loader-svg,
+.window[data-motion="reduce"] .fishtank-loader.leaping .fishtank-loader-text {
+  animation: none;
+  opacity: 0;
 }
 
 .toast {

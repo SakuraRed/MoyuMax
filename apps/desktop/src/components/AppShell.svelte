@@ -1,6 +1,7 @@
 <script lang="ts">
   import type { Snippet } from "svelte";
 
+  import { markAvatarFailed, shellAccount, skinAvatarUrl } from "../accounts.svelte";
   import { t, uiBackground, uiBackgroundImageUrl, uiContrast, uiMotion, uiTheme } from "../i18n.svelte";
   import type { NavigationKey } from "../runtime";
   import Icon from "./Icon.svelte";
@@ -106,15 +107,36 @@
         </button>
       {/each}
       <span class="nav-spacer"></span>
-      <button
-        class="account"
-        aria-label={t("shell.account.aria")}
-        disabled={navigationDisabled}
-        onclick={() => onNavigate?.("settings")}
-      >
-        <span class="avatar">?</span>
-        <span><strong>{t("shell.account.notLoggedIn")}</strong><small>{t("shell.account.addHint")}</small></span>
-      </button>
+      {#if shellAccount().loaded && shellAccount().kind !== null}
+        {@const account = shellAccount()}
+        {@const avatarUrl = account.avatarFailed ? "" : skinAvatarUrl(account.playerUuid, account.kind)}
+        <button
+          class="account"
+          aria-label={t("shell.account.aria")}
+          disabled={navigationDisabled}
+          onclick={() => onNavigate?.("settings")}
+        >
+          {#if avatarUrl}
+            <img class="avatar avatar-img" src={avatarUrl} alt="" onerror={() => markAvatarFailed()} />
+          {:else}
+            <span class="avatar">{account.name.slice(0, 1) || "?"}</span>
+          {/if}
+          <span>
+            <strong>{account.name}</strong>
+            <small>{account.kind === "microsoft" ? t("shell.account.microsoft") : account.kind === "authlib" ? t("shell.account.authlib") : t("shell.account.offline")}</small>
+          </span>
+        </button>
+      {:else}
+        <button
+          class="account"
+          aria-label={t("shell.account.aria")}
+          disabled={navigationDisabled}
+          onclick={() => onNavigate?.("settings")}
+        >
+          <span class="avatar">?</span>
+          <span><strong>{t("shell.account.notLoggedIn")}</strong><small>{t("shell.account.addHint")}</small></span>
+        </button>
+      {/if}
     </nav>
 
     <section class="main-area">

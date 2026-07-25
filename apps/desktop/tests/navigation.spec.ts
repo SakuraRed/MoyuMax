@@ -44,7 +44,7 @@ test("NAV-001 所有主导航按钮在任意页面都可点击", async ({ page }
 });
 
 test("NAV-002 导航账户按钮进入设置页账户区", async ({ page }) => {
-  await page.getByRole("button", { name: "添加账户" }).click();
+  await page.getByRole("button", { name: "账户", exact: true }).click();
   await expect(page.getByRole("heading", { name: "账户" })).toBeVisible();
   await expect(page.getByRole("button", { name: "添加离线账户" })).toBeVisible();
 });

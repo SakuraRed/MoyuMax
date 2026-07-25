@@ -69,6 +69,7 @@ test("M23-A11Y-002 高对比手动开关立即生效并持久化", async ({ page
 });
 
 test("M23-A11Y-003 首页主操作全部可键盘到达且焦点可见", async ({ page }) => {
+  await expect(page.getByRole("button", { name: "启动游戏" })).toBeVisible();
   const focused: { role: string; name: string }[] = [];
   for (let index = 0; index < 24; index += 1) {
     await page.keyboard.press("Tab");

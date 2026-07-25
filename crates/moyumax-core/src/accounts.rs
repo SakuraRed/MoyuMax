@@ -439,21 +439,18 @@ impl AppService {
                 summary.last_validated_at_unix_seconds,
             ],
         )?;
-        let has_default: bool = transaction.query_row(
-            "SELECT EXISTS(SELECT 1 FROM accounts WHERE is_default = 1 AND id != ?1)",
-            params![summary.id],
-            |row| row.get(0),
+        // 新登录的外置账户直接成为默认：刚登录的账户显然是接下来要使用的。
+        transaction.execute(
+            "UPDATE accounts SET is_default = 0 WHERE is_default = 1",
+            [],
         )?;
-        let is_default = !has_default;
-        if is_default {
-            transaction.execute(
-                "UPDATE accounts SET is_default = 1 WHERE id = ?1",
-                params![summary.id],
-            )?;
-        }
+        transaction.execute(
+            "UPDATE accounts SET is_default = 1 WHERE id = ?1",
+            params![summary.id],
+        )?;
         transaction.commit()?;
         Ok(AccountSummary {
-            is_default,
+            is_default: true,
             ..summary
         })
     }
@@ -626,21 +623,25 @@ impl AppService {
                     ",
                     params![id, profile.player_name, profile.player_uuid, now],
                 )?;
-                let has_default: bool = transaction.query_row(
-                    "SELECT EXISTS(SELECT 1 FROM accounts WHERE is_default = 1 AND id != ?1)",
-                    params![id],
-                    |row| row.get(0),
-                )?;
-                if !has_default {
-                    transaction.execute(
-                        "UPDATE accounts SET is_default = 1 WHERE id = ?1",
-                        params![id],
-                    )?;
-                }
                 transaction.commit()?;
                 id
             }
         };
+        // 新登录（或重新登录）的 Microsoft 账户直接成为默认。
+        {
+            let mut connection = self.connection()?;
+            let transaction =
+                connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
+            transaction.execute(
+                "UPDATE accounts SET is_default = 0 WHERE is_default = 1",
+                [],
+            )?;
+            transaction.execute(
+                "UPDATE accounts SET is_default = 1 WHERE id = ?1",
+                params![account_id],
+            )?;
+            transaction.commit()?;
+        }
         self.persist_microsoft_profile(&account_id, &profile)?;
         self.account_summary(&account_id)
     }

@@ -1,6 +1,7 @@
 <script lang="ts">
   import { onMount } from "svelte";
 
+  import { refreshShellAccount } from "../accounts.svelte";
   import {
     applyUiPreferences,
     refreshBackgroundImage,
@@ -97,6 +98,7 @@
         msCodeCopied = false;
         notice = t("settings.accounts.loggedIn");
         void runtime.listAccounts().then((list) => { accounts = list; });
+        void refreshShellAccount(runtime);
       } else if (event.state === "failed") {
         msLogin = null;
         errorMessage = event.message ?? t("settings.accounts.deviceCode.failed");
@@ -384,6 +386,7 @@
       offlineName = "";
       addForm = "";
       accounts = await runtime.listAccounts();
+      void refreshShellAccount(runtime);
       notice = t("settings.accounts.created");
     } catch (error) {
       errorMessage = error instanceof Error ? error.message : String(error);
@@ -404,6 +407,7 @@
       authlibUrl = "";
       addForm = "";
       accounts = await runtime.listAccounts();
+      void refreshShellAccount(runtime);
       notice = t("settings.accounts.loggedIn");
     } catch (error) {
       errorMessage = error instanceof Error ? error.message : String(error);
@@ -418,6 +422,7 @@
     try {
       await runtime.setDefaultAccount(account.id);
       accounts = await runtime.listAccounts();
+      void refreshShellAccount(runtime);
       notice = t("settings.accounts.defaultSwitched").replace("{name}", account.username);
     } catch (error) {
       errorMessage = error instanceof Error ? error.message : String(error);
@@ -431,10 +436,12 @@
     try {
       await runtime.refreshAccountSession(account.id);
       accounts = await runtime.listAccounts();
+      void refreshShellAccount(runtime);
       notice = t("settings.accounts.sessionRefreshed").replace("{name}", account.username);
     } catch (error) {
       errorMessage = error instanceof Error ? error.message : String(error);
       accounts = await runtime.listAccounts();
+      void refreshShellAccount(runtime);
     } finally {
       busy = "";
     }
@@ -448,6 +455,7 @@
       await runtime.removeAccount(account.id);
       pendingAccountRemove = null;
       accounts = await runtime.listAccounts();
+      void refreshShellAccount(runtime);
       notice = t("settings.accounts.removed").replace("{name}", account.username);
     } catch (error) {
       errorMessage = error instanceof Error ? error.message : String(error);
