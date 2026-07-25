@@ -178,3 +178,23 @@ fn spawn_zip_server(zip: Vec<u8>) -> String {
     });
     format!("http://{address}")
 }
+
+#[tokio::test]
+#[ignore = "live:真实下载 EasyTier 与 wintun 验证完整链路"]
+async fn live_easytier_download_and_wintun() {
+    let client = moyumax_core::netplay_http_client().unwrap();
+    let tools = TempDir::new().unwrap();
+    let binary = moyumax_core::ensure_easytier_binary(&client, tools.path(), &|current, total| {
+        eprintln!("progress {current}/{total}");
+    })
+    .await
+    .unwrap();
+    assert!(binary.is_file());
+    assert!(binary.with_file_name("wintun.dll").is_file());
+    assert!(binary.with_file_name(".verified").is_file());
+    // 第二次调用必须复用,不再下载。
+    let again = moyumax_core::ensure_easytier_binary(&client, tools.path(), &|_, _| {})
+        .await
+        .unwrap();
+    assert_eq!(again, binary);
+}

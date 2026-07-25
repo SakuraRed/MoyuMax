@@ -25,7 +25,7 @@ pub const EASYTIER_RELEASE_API: &str =
 /// EasyTier 官方共享公共节点（无公网 IP 组网）。
 pub const EASYTIER_PUBLIC_PEER: &str = "tcp://public.easytier.top:11010";
 /// wintun 官方预编译包（签名 DLL，官方许可允许随软件分发）。
-pub const WINTUN_URL: &str = "https://download.wireguard.com/wintun/wintun-0.14.1.zip";
+pub const WINTUN_URL: &str = "https://www.wintun.net/builds/wintun-0.14.1.zip";
 /// wintun 0.14.1 官方页面公布的 SHA-256（https://www.wintun.net/）。
 pub const WINTUN_SHA256: &str = "07c256185d6ee3652e09fa55c0b673e2624b565e02c4b9091c79ca7d2f24ef51";
 /// Windows x86_64 资产名前缀。
