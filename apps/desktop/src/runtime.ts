@@ -397,6 +397,16 @@ export interface AccountSummary {
   lastValidatedAtUnixSeconds: number | null;
 }
 
+/** 项目版本摘要（自由下载的版本选择列表）。 */
+export interface ModrinthVersionSummary {
+  id: string;
+  versionNumber: string;
+  versionType: string;
+  datePublished: string;
+  gameVersions: string[];
+  loaders: string[];
+}
+
 /** 联机房间的非敏感视图（不携带密码）。 */
 export interface NetplayRoomView {
   networkName: string;
@@ -404,25 +414,11 @@ export interface NetplayRoomView {
   isHost: boolean;
 }
 
-/** 端口转发规则视图。 */
-export interface PortForwardView {
-  listen: string;
-  target: string;
-  publicBind: boolean;
-}
-
 /** 简化 NAT 检测报告。 */
 export interface NatReportView {
   mappedAddress: string;
   behindNat: boolean;
   impact: string;
-}
-
-/** 游戏「对局域网开放」广播视图。 */
-export interface LanBroadcastView {
-  motd: string;
-  port: number;
-  from: string;
 }
 
 /** Microsoft 设备码登录的展示信息（用户码与验证地址）。 */
@@ -772,16 +768,8 @@ export interface MoyuRuntime {
   getNetplayStatus(): Promise<NetplayRoomView | null>;
   /** 简化 NAT 检测（STUN，仅手动触发）。 */
   detectNatType(): Promise<NatReportView>;
-  /** 启动本机端口转发；绑定非回环地址需 publicBind 风险确认。 */
-  startPortForward(listen: string, target: string, publicBind: boolean): Promise<PortForwardView>;
-  /** 停止本机端口转发。 */
-  stopPortForward(): Promise<void>;
-  /** 当前端口转发状态。 */
-  getPortForward(): Promise<PortForwardView | null>;
   /** 订阅 EasyTier 首次下载进度事件，返回取消订阅函数。 */
   onNetplayDownloadProgress(handler: (event: { current: number; total: number }) => void): () => void;
-  /** 自动检测游戏内「对局域网开放」的端口（组播监听约 4 秒）。 */
-  detectLanGame(): Promise<LanBroadcastView | null>;
   getUiPreferences(): Promise<UiPreferences>;
   setUiTheme(theme: string): Promise<void>;
   setUiLanguage(language: string): Promise<void>;
@@ -803,6 +791,16 @@ export interface MoyuRuntime {
   pickBackgroundImage(): Promise<string | null>;
   /** 打开原生文件选择器挑选主题包 JSON；用户取消时返回 null。 */
   pickThemePackFile(): Promise<string | null>;
+  /** 打开原生目录选择器；用户取消时返回 null。 */
+  pickDirectory(): Promise<string | null>;
+  /** 项目版本列表（自由下载对话框的版本选择）。 */
+  listModrinthVersions(
+    projectId: string,
+    gameVersion?: string,
+    loader?: string,
+  ): Promise<ModrinthVersionSummary[]>;
+  /** 自由下载：指定版本主文件下载到目标目录并按自定义文件名保存。 */
+  downloadModrinthFile(versionId: string, targetDir: string, fileName: string): Promise<string>;
   /** 打开原生文件选择器挑选整合包（.mrpack/.zip）；用户取消时返回 null。 */
   pickModpackFile(): Promise<string | null>;
   importModpackPreview(sourcePath: string): Promise<ModpackPreviewResponse>;
@@ -1009,6 +1007,19 @@ function createTauriRuntime(): MoyuRuntime {
         sourcePath,
         worldName: worldName ?? null,
       }),
+    pickDirectory: async () => {
+      const { open } = await import("@tauri-apps/plugin-dialog");
+      const selected = await open({ directory: true, multiple: false });
+      return typeof selected === "string" ? selected : null;
+    },
+    listModrinthVersions: (projectId, gameVersion, loader) =>
+      invoke<ModrinthVersionSummary[]>("list_modrinth_versions", {
+        projectId,
+        gameVersion: gameVersion ?? null,
+        loader: loader ?? null,
+      }),
+    downloadModrinthFile: (versionId, targetDir, fileName) =>
+      invoke<string>("download_modrinth_file", { versionId, targetDir, fileName }),
     setInstanceResourceEnabled: (resourceId, enabled) =>
       invoke<InstanceResource>("set_instance_resource_enabled", { resourceId, enabled }),
     listInstanceWorldDetails: (instanceId) =>
@@ -1096,11 +1107,6 @@ function createTauriRuntime(): MoyuRuntime {
     stopNetplayRoom: () => invoke<void>("stop_netplay_room"),
     getNetplayStatus: () => invoke<NetplayRoomView | null>("get_netplay_status"),
     detectNatType: () => invoke<NatReportView>("detect_nat_type"),
-    startPortForward: (listen, target, publicBind) =>
-      invoke<PortForwardView>("start_port_forward", { listen, target, publicBind }),
-    stopPortForward: () => invoke<void>("stop_port_forward"),
-    getPortForward: () => invoke<PortForwardView | null>("get_port_forward"),
-    detectLanGame: () => invoke<LanBroadcastView | null>("detect_lan_game"),
     onNetplayDownloadProgress: (handler) => {
       let unlisten: (() => void) | undefined;
       void listen<{ current: number; total: number }>(
@@ -2025,26 +2031,6 @@ function createBrowserRuntime(): MoyuRuntime {
         impact: "你在 NAT 之后，直连入站通常不可达；建议使用联机房间组网",
       };
     },
-    async startPortForward(listen, target, publicBind) {
-      if (publicBind && window.localStorage.getItem("moyumax.browser.forwardAuthorized") !== "true") {
-        throw new Error("绑定非回环地址必须经风险确认");
-      }
-      const view: PortForwardView = { listen, target, publicBind };
-      window.localStorage.setItem("moyumax.browser.portForward", JSON.stringify(view));
-      return view;
-    },
-    async stopPortForward() {
-      window.localStorage.removeItem("moyumax.browser.portForward");
-    },
-    async getPortForward() {
-      const serialized = window.localStorage.getItem("moyumax.browser.portForward");
-      return serialized ? (JSON.parse(serialized) as PortForwardView) : null;
-    },
-    async detectLanGame() {
-      const serialized = window.localStorage.getItem("moyumax.browser.lanGame");
-      if (!serialized) return null;
-      return JSON.parse(serialized) as LanBroadcastView;
-    },
     onNetplayDownloadProgress(handler) {
       browserNetplayProgressHandlers.add(handler);
       return () => {
@@ -2193,9 +2179,51 @@ function createBrowserRuntime(): MoyuRuntime {
       const preview = JSON.parse(serialized) as ModpackPreview;
       return { id: crypto.randomUUID(), preview };
     },
-    async installOnlineResource(instanceId, kind, projectId) {
+    async pickDirectory() {
+      return window.localStorage.getItem("moyumax.browser.pickedDirectory");
+    },
+    async listModrinthVersions(projectId) {
       if (!projectId) throw new Error("Modrinth 项目 ID 格式无效");
-      if (kind !== "resourcepack" && kind !== "shader") {
+      const serialized = window.localStorage.getItem("moyumax.browser.modVersions");
+      if (serialized) return JSON.parse(serialized) as ModrinthVersionSummary[];
+      return [
+        {
+          id: "VER00002",
+          versionNumber: "3.0.2+26.2",
+          versionType: "release",
+          datePublished: "2026-06-18T10:00:00Z",
+          gameVersions: ["26.2"],
+          loaders: ["fabric"],
+        },
+        {
+          id: "VER00001",
+          versionNumber: "3.0.1+26.2",
+          versionType: "release",
+          datePublished: "2026-05-30T10:00:00Z",
+          gameVersions: ["26.1", "26.2"],
+          loaders: ["fabric"],
+        },
+      ];
+    },
+    async downloadModrinthFile(versionId, targetDir, fileName) {
+      if (!versionId) throw new Error("Modrinth 版本 ID 格式无效");
+      const trimmed = fileName.trim();
+      if (!trimmed || trimmed.includes("/") || trimmed.includes("\\")) {
+        throw new Error("保存文件名无效");
+      }
+      const downloaded = JSON.parse(
+        window.localStorage.getItem("moyumax.browser.downloadedFiles") ?? "[]",
+      ) as { path: string; versionId: string }[];
+      if (downloaded.some((entry) => entry.path === `${targetDir}/${trimmed}`)) {
+        throw new Error(`同名文件 ${trimmed} 已存在，已拒绝下载且未覆盖`);
+      }
+      const path = `${targetDir}/${trimmed}`;
+      downloaded.push({ path, versionId });
+      window.localStorage.setItem("moyumax.browser.downloadedFiles", JSON.stringify(downloaded));
+      return path;
+    },
+    async installOnlineResource(instanceId, kind, projectId) {
+      if (!projectId) throw new Error("Modrinth 项目 ID 格式无效");      if (kind !== "resourcepack" && kind !== "shader") {
         throw new Error("在线安装仅支持资源包与光影");
       }
       const instance = browserInstances().find((candidate) => candidate.id === instanceId);

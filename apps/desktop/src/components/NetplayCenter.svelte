@@ -3,13 +3,11 @@
 
   import { t } from "../i18n.svelte";
   import type {
-    LanBroadcastView,
     MoyuRuntime,
     NatReportView,
     NavigationKey,
     NetplayRoomView,
     OnboardingSelection,
-    PortForwardView,
   } from "../runtime";
   import AppShell from "./AppShell.svelte";
 
@@ -31,11 +29,10 @@
     onClose,
   }: Props = $props();
 
-  type NetplayTab = "room" | "forward" | "nat";
+  type NetplayTab = "room" | "nat";
 
   const NETPLAY_TABS: { key: NetplayTab; labelKey: string }[] = [
     { key: "room", labelKey: "settings.network.room.title" },
-    { key: "forward", labelKey: "settings.network.forward.title" },
     { key: "nat", labelKey: "settings.network.nat.title" },
   ];
 
@@ -46,13 +43,6 @@
   let roomBusy = $state(false);
   let roomCopied = $state(false);
   let downloadProgress = $state<{ current: number; total: number } | null>(null);
-  let forward = $state<PortForwardView | null>(null);
-  let lanGame = $state<LanBroadcastView | null>(null);
-  let detectingGame = $state(false);
-  let forwardLocalPort = $state("25565");
-  let forwardPublic = $state(true);
-  let forwardConfirmOpen = $state(false);
-  let forwardBusy = $state(false);
   let natReport = $state<NatReportView | null>(null);
   let natBusy = $state(false);
   let errorMessage = $state("");
@@ -61,10 +51,7 @@
   onMount(() => {
     void (async () => {
       try {
-        [room, forward] = await Promise.all([
-          runtime.getNetplayStatus(),
-          runtime.getPortForward(),
-        ]);
+        room = await runtime.getNetplayStatus();
       } catch {
         // 状态读取失败不阻塞页面
       }
@@ -125,66 +112,6 @@
       setTimeout(() => { roomCopied = false; }, 1600);
     } catch {
       errorMessage = t("settings.network.room.copyFailed");
-    }
-  }
-
-  async function detectGame(): Promise<void> {
-    detectingGame = true;
-    errorMessage = "";
-    notice = "";
-    try {
-      lanGame = await runtime.detectLanGame();
-      if (lanGame) {
-        forwardLocalPort = String(lanGame.port);
-        notice = t("settings.network.forward.detected").replace("{port}", String(lanGame.port));
-      } else {
-        errorMessage = t("settings.network.forward.notDetected");
-      }
-    } catch (error) {
-      errorMessage = error instanceof Error ? error.message : String(error);
-    } finally {
-      detectingGame = false;
-    }
-  }
-
-  async function submitForward(): Promise<void> {
-    if (forwardPublic && !forwardConfirmOpen) {
-      forwardConfirmOpen = true;
-      return;
-    }
-    if (!lanGame) {
-      errorMessage = t("settings.network.forward.needDetect");
-      return;
-    }
-    forwardBusy = true;
-    errorMessage = "";
-    notice = "";
-    try {
-      forward = await runtime.startPortForward(
-        `0.0.0.0:${forwardLocalPort.trim()}`,
-        `127.0.0.1:${lanGame.port}`,
-        forwardPublic,
-      );
-      forwardConfirmOpen = false;
-      notice = t("settings.network.forward.started");
-    } catch (error) {
-      errorMessage = error instanceof Error ? error.message : String(error);
-    } finally {
-      forwardBusy = false;
-    }
-  }
-
-  async function stopForward(): Promise<void> {
-    forwardBusy = true;
-    errorMessage = "";
-    try {
-      await runtime.stopPortForward();
-      forward = null;
-      notice = t("settings.network.forward.stopped");
-    } catch (error) {
-      errorMessage = error instanceof Error ? error.message : String(error);
-    } finally {
-      forwardBusy = false;
     }
   }
 
@@ -287,65 +214,6 @@
                   <small class="netplay-note" role="status">{t("settings.network.room.preparing")}</small>
                 {/if}
                 <small class="netplay-note">{t("settings.network.room.note")}</small>
-              </div>
-            {/if}
-          </section>
-        {:else if tab === "forward"}
-          <section class="backup-settings" aria-labelledby="forward-title">
-            <header>
-              <div>
-                <h2 id="forward-title">{t("settings.network.forward.title")}</h2>
-                <p>{t("settings.network.forward.description")}</p>
-              </div>
-            </header>
-            {#if forward}
-              <article class="netplay-room-card">
-                <div class="netplay-room-info">
-                  <div class="netplay-room-line">
-                    <strong><code>{forward.listen}</code> → <code>{forward.target}</code></strong>
-                    {#if forward.publicBind}<span class="netplay-badge warn">{t("settings.network.forward.publicBadge")}</span>{/if}
-                  </div>
-                  <small>{t("settings.network.forward.running")}</small>
-                </div>
-                <div class="task-buttons">
-                  <button class="button danger-subtle compact" disabled={forwardBusy} onclick={() => void stopForward()}>{t("settings.network.forward.stop")}</button>
-                </div>
-              </article>
-            {:else}
-              <div class="account-form" role="group" aria-label={t("settings.network.forward.title")}>
-                <div class="netplay-detect-row">
-                  <button class="button ghost compact" disabled={detectingGame} onclick={() => void detectGame()}>{detectingGame ? t("settings.network.forward.detecting") : t("settings.network.forward.detect")}</button>
-                  {#if lanGame}
-                    <span class="netplay-detect-result">{t("settings.network.forward.detectResult").replace("{port}", String(lanGame.port)).replace("{motd}", lanGame.motd)}</span>
-                  {:else}
-                    <span class="netplay-note">{t("settings.network.forward.detectHint")}</span>
-                  {/if}
-                </div>
-                <label>
-                  <span>{t("settings.network.forward.localPortLabel")}</span>
-                  <input bind:value={forwardLocalPort} type="text" inputmode="numeric" aria-label={t("settings.network.forward.localPortAria")} />
-                </label>
-                <label class="auto-update-toggle">
-                  <input type="checkbox" checked={forwardPublic} aria-label={t("settings.network.forward.publicLabel")} onchange={(event) => { forwardPublic = (event.currentTarget as HTMLInputElement).checked; }} />
-                  <span>
-                    <strong>{t("settings.network.forward.publicLabel")}</strong>
-                    <small>{t("settings.network.forward.publicHint")}</small>
-                  </span>
-                </label>
-                {#if forwardConfirmOpen}
-                  <div class="warning-panel" role="alert">
-                    <strong>{t("settings.network.forward.confirmTitle")}</strong>
-                    <span>{t("settings.network.forward.confirmBody")}</span>
-                  </div>
-                {/if}
-                <div class="local-content-actions">
-                  <button class="button primary compact" disabled={forwardBusy || !lanGame || !forwardLocalPort.trim()} onclick={() => void submitForward()}>
-                    {forwardConfirmOpen ? t("settings.network.forward.confirmStart") : t("settings.network.forward.start")}
-                  </button>
-                  {#if forwardConfirmOpen}
-                    <button class="button ghost compact" onclick={() => { forwardConfirmOpen = false; }}>{t("common.cancel")}</button>
-                  {/if}
-                </div>
               </div>
             {/if}
           </section>

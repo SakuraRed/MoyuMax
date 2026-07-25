@@ -131,6 +131,18 @@ pub struct ModrinthVersionFile {
     pub size: u64,
 }
 
+/// 项目版本摘要（自由下载的版本选择列表）。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ModrinthVersionSummary {
+    pub id: String,
+    pub version_number: String,
+    pub version_type: String,
+    pub date_published: String,
+    pub game_versions: Vec<String>,
+    pub loaders: Vec<String>,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub enum ContentDependencyKind {
@@ -672,6 +684,103 @@ impl ModrinthClient {
         validate_identifier(version_id, "Modrinth 版本 ID")?;
         self.get_json(self.endpoint(&format!("version/{version_id}"))?)
             .await
+    }
+
+    /// 项目版本列表（安装器外的自由下载用；可选按游戏版本/加载器过滤）。
+    pub async fn project_versions(
+        &self,
+        project_id: &str,
+        game_version: Option<&str>,
+        loader: Option<&str>,
+    ) -> Result<Vec<ModrinthVersionSummary>> {
+        validate_identifier(project_id, "Modrinth 项目 ID")?;
+        let mut url = self.endpoint(&format!("project/{project_id}/version"))?;
+        {
+            let mut pairs = url.query_pairs_mut();
+            if let Some(game_version) = game_version.filter(|value| !value.trim().is_empty()) {
+                pairs.append_pair(
+                    "game_versions",
+                    &serde_json::to_string(&vec![game_version])?,
+                );
+            }
+            if let Some(loader) = loader.filter(|value| !value.trim().is_empty()) {
+                pairs.append_pair("loaders", &serde_json::to_string(&vec![loader])?);
+            }
+        }
+        let versions: Vec<ModrinthVersion> = self.get_json(url).await?;
+        Ok(versions
+            .into_iter()
+            .filter(|version| version.status == ModrinthVersionStatus::Listed)
+            .map(|version| ModrinthVersionSummary {
+                id: version.id,
+                version_number: version.version_number,
+                version_type: match version.version_type {
+                    ModrinthVersionType::Release => "release".to_owned(),
+                    ModrinthVersionType::Beta => "beta".to_owned(),
+                    ModrinthVersionType::Alpha => "alpha".to_owned(),
+                },
+                date_published: version.date_published,
+                game_versions: version.game_versions,
+                loaders: version.loaders,
+            })
+            .collect())
+    }
+
+    /// 自由下载：把指定版本的主文件下载到目标目录并按给定文件名保存。
+    /// 文件名可自定义（PCL 式重命名）；同名已存在拒绝，不覆盖。
+    pub async fn download_version_file(
+        &self,
+        version_id: &str,
+        target_dir: &Path,
+        file_name: &str,
+    ) -> Result<PathBuf> {
+        let trimmed = file_name.trim();
+        if trimmed.is_empty()
+            || trimmed.contains(['/', '\\'])
+            || trimmed == "."
+            || trimmed == ".."
+            || trimmed.bytes().any(|byte| byte < 0x20)
+        {
+            return Err(CoreError::Content("保存文件名无效".to_owned()));
+        }
+        let version = self.get_version(version_id).await?;
+        let plan = select_primary_file(&version)?;
+        let file = ModrinthVersionFile {
+            url: plan.url,
+            filename: plan.filename,
+            sha1: plan.sha1,
+            sha512: plan.sha512,
+            size: plan.size,
+        };
+        let target = target_dir.join(trimmed);
+        if target.exists() {
+            return Err(CoreError::Content(format!(
+                "同名文件 {trimmed} 已存在，已拒绝下载且未覆盖"
+            )));
+        }
+        let staging_dir = target_dir.join(format!(".moyumax-dl-{}", Uuid::new_v4().simple()));
+        let download_outcome = async {
+            fs::create_dir_all(&staging_dir)?;
+            self.download_project_file(&file, &staging_dir).await
+        }
+        .await;
+        let downloaded = match download_outcome {
+            Ok(path) => path,
+            Err(error) => {
+                let _ = fs::remove_dir_all(&staging_dir);
+                return Err(error);
+            }
+        };
+        // 下载完成到重命名提交之间再次检查同名,缩小竞争窗口。
+        if target.exists() {
+            let _ = fs::remove_dir_all(&staging_dir);
+            return Err(CoreError::Content(format!(
+                "同名文件 {trimmed} 已存在，已拒绝下载且未覆盖"
+            )));
+        }
+        fs::rename(&downloaded, &target)?;
+        let _ = fs::remove_dir_all(&staging_dir);
+        Ok(target)
     }
 
     async fn dependency_request(

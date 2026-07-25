@@ -1,12 +1,8 @@
-use std::{
-    io::{Read, Write},
-    net::{TcpListener, TcpStream},
-    thread,
-};
+use std::{io::Write, net::TcpListener, thread};
 
 use moyumax_core::{
     NetplayRoomConfig, easytier_args, parse_easytier_release, parse_stun_mapped_address,
-    spawn_port_forward, validate_room_name, validate_room_secret,
+    validate_room_name, validate_room_secret,
 };
 use sha2::{Digest, Sha256};
 use tempfile::TempDir;
@@ -104,43 +100,6 @@ fn net_004_stun_xor_mapped_address_parsing() {
     let wrong_id = [9_u8; 12];
     assert!(parse_stun_mapped_address(&wrong_id, &response).is_err());
     assert!(parse_stun_mapped_address(&request_id, &[0u8; 4]).is_err());
-}
-
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn net_005_port_forward_bridges_tcp_traffic() {
-    // 回环 echo 服务器
-    let echo = TcpListener::bind("127.0.0.1:0").unwrap();
-    let echo_addr = echo.local_addr().unwrap();
-    thread::spawn(move || {
-        for stream in echo.incoming() {
-            let Ok(mut stream) = stream else { break };
-            thread::spawn(move || {
-                let mut buffer = [0_u8; 256];
-                while let Ok(read) = stream.read(&mut buffer) {
-                    if read == 0 {
-                        break;
-                    }
-                    if stream.write_all(&buffer[..read]).is_err() {
-                        break;
-                    }
-                }
-            });
-        }
-    });
-    // 取一个空闲端口作为转发监听(避免固定端口与历史进程冲突)
-    let forward_addr = TcpListener::bind("127.0.0.1:0")
-        .unwrap()
-        .local_addr()
-        .unwrap();
-    let handle = spawn_port_forward(forward_addr, echo_addr).await.unwrap();
-    tokio::time::sleep(std::time::Duration::from_millis(100)).await;
-    let mut client = TcpStream::connect(forward_addr).unwrap();
-    client.write_all(b"ping-easytier").unwrap();
-    let mut buffer = [0_u8; 32];
-    let read = client.read(&mut buffer).unwrap();
-
-    assert_eq!(&buffer[..read], b"ping-easytier");
-    handle.abort();
 }
 
 #[tokio::test]

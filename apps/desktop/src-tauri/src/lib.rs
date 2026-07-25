@@ -17,10 +17,11 @@ use moyumax_core::{
     JavaEnvironmentSummary, LaunchExecution, LaunchOptions, LaunchSessionSummary, LoaderChoice,
     ManagedInstanceSummary, MciMirrorClient, MetadataClient, MicrosoftAuthClient,
     MicrosoftLoginCancel, ModpackInstallReport, ModpackUpdateReport, ModrinthClient,
-    ModrinthSearchPage, ModrinthSearchQuery, OnboardingSelection, RecoveryDecision, RecycleBinItem,
-    RecyclePurgeResult, ReleaseInfo, ResolvedInstallRequest, ResolvedLoader, ShellState,
-    SourcePolicy, ThemePack, UiBackground, UpdateClient, VersionCatalog, WindowCloseBehavior,
-    WorldBackupSummary, YggdrasilClient, min_version_block, run_launch_execution,
+    ModrinthSearchPage, ModrinthSearchQuery, ModrinthVersionSummary, OnboardingSelection,
+    RecoveryDecision, RecycleBinItem, RecyclePurgeResult, ReleaseInfo, ResolvedInstallRequest,
+    ResolvedLoader, ShellState, SourcePolicy, ThemePack, UiBackground, UpdateClient,
+    VersionCatalog, WindowCloseBehavior, WorldBackupSummary, YggdrasilClient, min_version_block,
+    run_launch_execution,
 };
 use serde::Serialize;
 use tauri::{Emitter, Manager, State};
@@ -67,11 +68,10 @@ struct MicrosoftLoginState {
     cancel: MicrosoftLoginCancel,
 }
 
-/// 联机协调器：EasyTier 子进程与本机端口转发的生命周期。
+/// 联机协调器：EasyTier 子进程的生命周期。
 #[derive(Debug, Default)]
 struct NetplayCoordinator {
     room: Mutex<Option<NetplayRoomProcess>>,
-    forward: Mutex<Option<PortForwardProcess>>,
 }
 
 #[derive(Debug)]
@@ -81,14 +81,6 @@ struct NetplayRoomProcess {
     child: std::process::Child,
 }
 
-#[derive(Debug)]
-struct PortForwardProcess {
-    listen: String,
-    target: String,
-    public_bind: bool,
-    task: tokio::task::JoinHandle<()>,
-}
-
 /// 联机房间的非敏感视图（不携带密码）。
 #[derive(Debug, Clone, serde::Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -96,15 +88,6 @@ struct NetplayRoomView {
     network_name: String,
     virtual_ip: String,
     is_host: bool,
-}
-
-/// 端口转发规则的非敏感视图。
-#[derive(Debug, Clone, serde::Serialize)]
-#[serde(rename_all = "camelCase")]
-struct PortForwardView {
-    listen: String,
-    target: String,
-    public_bind: bool,
 }
 
 /// NAT 检测报告视图。
@@ -1253,104 +1236,6 @@ async fn detect_nat_type() -> Result<NatReportView, String> {
     })
 }
 
-/// 启动本机端口转发；绑定非回环地址属风险操作（前端须已确认）。
-#[tauri::command]
-async fn start_port_forward(
-    coordinator: State<'_, NetplayCoordinator>,
-    listen: String,
-    target: String,
-    public_bind: bool,
-) -> Result<PortForwardView, String> {
-    let listen_addr: std::net::SocketAddr = listen
-        .parse()
-        .map_err(|_| "监听地址格式无效（应为 地址:端口）".to_owned())?;
-    let target_addr: std::net::SocketAddr = target
-        .parse()
-        .map_err(|_| "目标地址格式无效（应为 地址:端口）".to_owned())?;
-    if listen_addr.ip().is_loopback() && public_bind {
-        return Err("回环监听无需公网绑定标记".to_owned());
-    }
-    if !listen_addr.ip().is_loopback() && !public_bind {
-        return Err("绑定非回环地址必须经风险确认".to_owned());
-    }
-    let task = moyumax_core::spawn_port_forward(listen_addr, target_addr)
-        .await
-        .map_err(|error| error.to_string())?;
-    let view = PortForwardView {
-        listen: listen.clone(),
-        target: target.clone(),
-        public_bind,
-    };
-    let mut forward = coordinator
-        .forward
-        .lock()
-        .map_err(|_| "转发状态不可用".to_owned())?;
-    if let Some(old) = forward.take() {
-        old.task.abort();
-    }
-    *forward = Some(PortForwardProcess {
-        listen,
-        target,
-        public_bind,
-        task,
-    });
-    Ok(view)
-}
-
-/// 停止本机端口转发。
-#[tauri::command]
-fn stop_port_forward(coordinator: State<'_, NetplayCoordinator>) -> Result<(), String> {
-    let mut forward = coordinator
-        .forward
-        .lock()
-        .map_err(|_| "转发状态不可用".to_owned())?;
-    if let Some(old) = forward.take() {
-        old.task.abort();
-    }
-    Ok(())
-}
-
-/// 当前端口转发状态。
-#[tauri::command]
-fn get_port_forward(
-    coordinator: State<'_, NetplayCoordinator>,
-) -> Result<Option<PortForwardView>, String> {
-    let forward = coordinator
-        .forward
-        .lock()
-        .map_err(|_| "转发状态不可用".to_owned())?;
-    Ok(forward.as_ref().map(|process| PortForwardView {
-        listen: process.listen.clone(),
-        target: process.target.clone(),
-        public_bind: process.public_bind,
-    }))
-}
-
-/// 游戏「对局域网开放」广播视图。
-#[derive(Debug, Clone, serde::Serialize)]
-#[serde(rename_all = "camelCase")]
-struct LanBroadcastView {
-    motd: String,
-    port: u16,
-    from: String,
-}
-
-/// 自动检测游戏内「对局域网开放」的端口（组播监听，最多等待 4 秒）。
-#[tauri::command]
-async fn detect_lan_game() -> Result<Option<LanBroadcastView>, String> {
-    let broadcast = tokio::task::spawn_blocking(|| {
-        moyumax_core::listen_lan_broadcast(std::time::Duration::from_secs(4))
-    })
-    .await
-    .map_err(|error| error.to_string())?
-    .map_err(|error| error.to_string())?;
-    Ok(broadcast.map(|item| LanBroadcastView {
-        motd: item.motd,
-        port: item.port,
-        from: item.from.ip().to_string(),
-    }))
-}
-
 #[tauri::command]
 fn get_ui_preferences(service: State<'_, AppService>) -> Result<UiPreferences, String> {
     Ok(UiPreferences {
@@ -1676,6 +1561,39 @@ async fn preview_online_modpack(
     }
     store.insert(id.clone(), (plan, archive_path));
     Ok(ModpackPreviewResponse { id, preview })
+}
+
+/// 项目版本列表（自由下载对话框的版本选择）。
+#[tauri::command]
+async fn list_modrinth_versions(
+    project_id: String,
+    game_version: Option<String>,
+    loader: Option<String>,
+) -> Result<Vec<ModrinthVersionSummary>, String> {
+    let client = ModrinthClient::new().map_err(|error| error.to_string())?;
+    client
+        .project_versions(&project_id, game_version.as_deref(), loader.as_deref())
+        .await
+        .map_err(|error| error.to_string())
+}
+
+/// 自由下载：指定版本主文件下载到目标目录并按自定义文件名保存。
+#[tauri::command]
+async fn download_modrinth_file(
+    version_id: String,
+    target_dir: String,
+    file_name: String,
+) -> Result<String, String> {
+    let target = PathBuf::from(&target_dir);
+    if target_dir.trim().is_empty() || !target.is_dir() {
+        return Err("保存目录不存在".to_owned());
+    }
+    let client = ModrinthClient::new().map_err(|error| error.to_string())?;
+    let path = client
+        .download_version_file(&version_id, &target, &file_name)
+        .await
+        .map_err(|error| error.to_string())?;
+    Ok(path.to_string_lossy().into_owned())
 }
 
 /// 在线光影/资源包安装：按实例游戏版本解析最新文件，下载校验后走
@@ -2486,10 +2404,6 @@ pub fn run() {
             stop_netplay_room,
             get_netplay_status,
             detect_nat_type,
-            start_port_forward,
-            stop_port_forward,
-            get_port_forward,
-            detect_lan_game,
             get_ui_preferences,
             set_ui_theme,
             set_ui_language,
@@ -2513,6 +2427,8 @@ pub fn run() {
             get_instance_modpack,
             preview_online_modpack,
             install_online_resource,
+            list_modrinth_versions,
+            download_modrinth_file,
             retry_content_task,
             resolve_content_task_recovery,
             list_instances,

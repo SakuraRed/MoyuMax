@@ -4917,3 +4917,68 @@ summary:focus-visible {
   margin-left: auto;
   font-size: 12px;
 }
+
+/* ---------- 模组自由下载对话框 ---------- */
+.result-actions {
+  display: flex;
+  gap: 6px;
+}
+
+.download-dialog {
+  width: min(560px, 100%);
+}
+
+.download-form {
+  display: grid;
+  gap: 12px;
+}
+
+.download-form label > span {
+  display: block;
+  margin-bottom: 4px;
+  color: var(--text-2);
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.download-form select,
+.download-form input[type="text"] {
+  width: 100%;
+  height: 34px;
+  padding: 0 var(--field-content-inset-inline);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--r-sm);
+  color: var(--text);
+  background: var(--bg-app);
+  font: inherit;
+}
+
+.download-dest {
+  display: grid;
+  gap: 8px;
+}
+
+.download-dest-option {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+}
+
+.download-dir-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-left: 26px;
+}
+
+.download-dir {
+  color: var(--text-3);
+  font-size: 12px;
+  overflow-wrap: anywhere;
+}
+
+.mcmod-fallback {
+  margin-left: 0;
+  color: var(--text-3);
+}

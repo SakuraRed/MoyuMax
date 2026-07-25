@@ -90,6 +90,24 @@ test("M31-CAT-UI-004 实例内容标签保留本地管理", async ({ page }) => 
   await expect(page.getByRole("heading", { name: "资源内容" })).toBeVisible();
 });
 
+test("M31-CAT-UI-005 自由下载选择版本、文件名与路径", async ({ page }) => {
+  await page.getByRole("searchbox", { name: "搜索在线资源" }).fill("continuity");
+  await page.getByRole("button", { name: "搜索", exact: true }).click();
+  await page.getByRole("button", { name: "下载", exact: true }).first().click();
+
+  const dialog = page.getByRole("dialog");
+  await expect(dialog.getByRole("heading", { name: "下载 Continuity" })).toBeVisible();
+  await expect(dialog.getByRole("combobox", { name: "下载版本" })).toBeVisible();
+  await expect(dialog.getByRole("textbox", { name: "保存文件名" })).toHaveValue("continuity-3.0.2+26.2.jar");
+
+  await dialog.getByRole("textbox", { name: "保存文件名" }).fill("continuity-custom.jar");
+  await dialog.getByRole("button", { name: "下载", exact: true }).click();
+
+  await expect(dialog).toHaveCount(0);
+  await expect(page.getByText("已下载到：", { exact: false })).toBeVisible();
+  await expect(page.getByText("continuity-custom.jar", { exact: false })).toBeVisible();
+});
+
 test("UI-CAT-001 在线目录在 960x600 和 200% 放大下不溢出", async ({ page }) => {
   await page.setViewportSize({ width: 960, height: 600 });
   await page.getByRole("searchbox", { name: "搜索在线资源" }).fill("continuity");

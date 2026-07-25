@@ -2,7 +2,7 @@
   import { onMount } from "svelte";
 
   import { t, uiLanguage } from "../i18n.svelte";
-  import { mcmodEntryFor } from "../mcmod-zh";
+  import { mcmodEntryFor, mcmodSearchUrl } from "../mcmod-zh";
   import type {
     ContentInstallPreview,
     ContentUpdateInfo,
@@ -14,6 +14,7 @@
     ModrinthProjectSummary,
     ModrinthProjectType,
     ModrinthSearchPage,
+    ModrinthVersionSummary,
     MoyuRuntime,
     NavigationKey,
     OnboardingSelection,
@@ -118,6 +119,15 @@
   let packDone = $state("");
   let resourceInstalling = $state("");
   let resourceInstallDone = $state("");
+  let downloadTarget = $state<ModrinthProjectSummary | null>(null);
+  let downloadVersions = $state<ModrinthVersionSummary[]>([]);
+  let downloadVersionId = $state("");
+  let downloadFileName = $state("");
+  let downloadDest = $state<"instance" | "custom">("instance");
+  let downloadCustomDir = $state("");
+  let downloadLoadingVersions = $state(false);
+  let downloading = $state(false);
+  let downloadDone = $state("");
 
   onMount(() => {
     selectedInstanceId = eligibleInstances[0]?.id ?? "";
@@ -461,6 +471,83 @@
     return LOADER_NAMES[kind] ?? kind;
   }
 
+  function defaultFileExtension(): string {
+    return catalogType === "modpack" ? ".mrpack" : catalogType === "mod" ? ".jar" : ".zip";
+  }
+
+  async function openDownloadDialog(project: ModrinthProjectSummary): Promise<void> {
+    downloadTarget = project;
+    downloadVersions = [];
+    downloadVersionId = "";
+    downloadFileName = "";
+    downloadLoadingVersions = true;
+    catalogError = "";
+    downloadDone = "";
+    const instance = selectedInstance();
+    downloadDest = instance ? "instance" : "custom";
+    try {
+      const versions = await runtime.listModrinthVersions(
+        project.projectId,
+        catalogType === "modpack" ? undefined : filterVersion || undefined,
+        catalogType === "mod" ? filterLoader || undefined : undefined,
+      );
+      if (versions.length === 0) {
+        catalogError = t("resources.download.noVersions");
+        downloadTarget = null;
+        return;
+      }
+      downloadVersions = versions;
+      selectDownloadVersion(versions[0]?.id ?? "");
+    } catch (error) {
+      catalogError = error instanceof Error ? error.message : String(error);
+      downloadTarget = null;
+    } finally {
+      downloadLoadingVersions = false;
+    }
+  }
+
+  function selectDownloadVersion(versionId: string): void {
+    downloadVersionId = versionId;
+    const version = downloadVersions.find((candidate) => candidate.id === versionId);
+    const slug = downloadTarget?.slug ?? "download";
+    downloadFileName = `${slug}-${version?.versionNumber ?? ""}${defaultFileExtension()}`;
+  }
+
+  function downloadTargetDir(): string {
+    const instance = selectedInstance();
+    if (downloadDest === "instance" && instance) {
+      const sub = catalogType === "mod" ? "mods" : catalogType === "shader" ? "shaderpacks" : catalogType === "resourcepack" ? "resourcepacks" : "modpacks";
+      return `${instance.rootDirectory}\\${sub}`;
+    }
+    return downloadCustomDir;
+  }
+
+  async function pickDownloadDir(): Promise<void> {
+    const selected = await runtime.pickDirectory();
+    if (selected) downloadCustomDir = selected;
+  }
+
+  async function confirmDownload(): Promise<void> {
+    const targetDir = downloadTargetDir();
+    if (!downloadVersionId || !targetDir || !downloadFileName.trim()) return;
+    downloading = true;
+    catalogError = "";
+    downloadDone = "";
+    try {
+      const path = await runtime.downloadModrinthFile(
+        downloadVersionId,
+        targetDir,
+        downloadFileName.trim(),
+      );
+      downloadDone = path;
+      downloadTarget = null;
+    } catch (error) {
+      catalogError = error instanceof Error ? error.message : String(error);
+    } finally {
+      downloading = false;
+    }
+  }
+
   function bytes(value: number): string {
     if (value >= 1024 * 1024) return `${(value / 1024 / 1024).toFixed(1)} MiB`;
     if (value >= 1024) return `${(value / 1024).toFixed(1)} KiB`;
@@ -616,6 +703,12 @@
         </section>
       {/if}
 
+      {#if downloadDone}
+        <div class="content-queued" role="status">
+          <div><strong>{t("resources.download.done")}</strong><span>{downloadDone}</span></div>
+        </div>
+      {/if}
+
       {#if catalogSearching && catalogHits.length === 0}
         <div class="content-loading" aria-live="polite"><span>{t("resources.catalog.searching")}</span></div>
       {:else if catalogPage && catalogHits.length === 0}
@@ -640,31 +733,38 @@
                   {/if}
                 </div>
                 <p>{project.description}</p>
-                {#if (uiLanguage() === "zh-CN" || uiLanguage() === "zh-TW") && mcmodEntryFor(project.slug)}
-                  {@const mcmod = mcmodEntryFor(project.slug)!}
+                {#if uiLanguage() === "zh-CN" || uiLanguage() === "zh-TW"}
+                  {@const mcmod = mcmodEntryFor(project.slug)}
                   <div class="result-mcmod">
-                    <strong>{mcmod.zhName}</strong>
-                    <span>{mcmod.zhDescription}</span>
-                    <button class="inline-link mcmod-link" onclick={() => void runtime.openExternalUrl(mcmod.mcmodUrl)}>{t("resources.catalog.mcmodLink")}</button>
+                    {#if mcmod}
+                      <strong>{mcmod.zhName}</strong>
+                      <span>{mcmod.zhDescription}</span>
+                      <button class="inline-link mcmod-link" onclick={() => void runtime.openExternalUrl(mcmod.mcmodUrl)}>{t("resources.catalog.mcmodLink")}</button>
+                    {:else}
+                      <button class="inline-link mcmod-link mcmod-fallback" onclick={() => void runtime.openExternalUrl(mcmodSearchUrl(project.title))}>{t("resources.catalog.mcmodSearch")}</button>
+                    {/if}
                   </div>
                 {/if}
               </div>
               <div class="result-side">
                 <span class="result-downloads">{t("resources.catalog.downloads").replace("{count}", formatDownloads(project.downloads))}</span>
                 {#if project.dateModified}<span class="result-date">{formatDate(project.dateModified)}</span>{/if}
-                {#if catalogType === "mod"}
-                  <button class="button compact" disabled={Boolean(previewingProject)} onclick={() => void createPreview(project)}>
-                    {previewingProject === project.projectId ? t("resources.catalog.parsing") : t("resources.catalog.viewPlan")}
-                  </button>
-                {:else if catalogType === "modpack"}
-                  <button class="button compact" disabled={Boolean(packPreviewing) || packInstalling} onclick={() => void previewPack(project)}>
-                    {packPreviewing === project.projectId ? t("resources.catalog.parsing") : t("resources.catalog.install")}
-                  </button>
-                {:else}
-                  <button class="button compact" disabled={Boolean(resourceInstalling) || !selectedInstanceId} onclick={() => void installResourceToInstance(project)}>
-                    {resourceInstalling === project.projectId ? t("resources.catalog.installing") : t("resources.catalog.install")}
-                  </button>
-                {/if}
+                <div class="result-actions">
+                  {#if catalogType === "mod"}
+                    <button class="button compact" disabled={Boolean(previewingProject)} onclick={() => void createPreview(project)}>
+                      {previewingProject === project.projectId ? t("resources.catalog.parsing") : t("resources.catalog.viewPlan")}
+                    </button>
+                  {:else if catalogType === "modpack"}
+                    <button class="button compact" disabled={Boolean(packPreviewing) || packInstalling} onclick={() => void previewPack(project)}>
+                      {packPreviewing === project.projectId ? t("resources.catalog.parsing") : t("resources.catalog.install")}
+                    </button>
+                  {:else}
+                    <button class="button compact" disabled={Boolean(resourceInstalling) || !selectedInstanceId} onclick={() => void installResourceToInstance(project)}>
+                      {resourceInstalling === project.projectId ? t("resources.catalog.installing") : t("resources.catalog.install")}
+                    </button>
+                  {/if}
+                  <button class="button ghost compact" disabled={downloading} onclick={() => void openDownloadDialog(project)}>{t("resources.download.button")}</button>
+                </div>
               </div>
             </article>
           {/each}
@@ -870,4 +970,55 @@
       {/if}
     {/if}
   </main>
+
+  {#if downloadTarget}
+    <div class="modal-backdrop" role="presentation">
+      <div class="confirmation-dialog download-dialog" role="dialog" aria-modal="true" aria-labelledby="download-dialog-title" tabindex="-1" onkeydown={(event) => { if (event.key === "Escape" && !downloading) downloadTarget = null; }}>
+        <header>
+          <h2 id="download-dialog-title">{t("resources.download.title").replace("{name}", downloadTarget.title)}</h2>
+          <p>{t("resources.download.description")}</p>
+        </header>
+        {#if downloadLoadingVersions}
+          <div class="content-loading" aria-live="polite"><span>{t("resources.download.loadingVersions")}</span></div>
+        {:else}
+          <div class="download-form">
+            <label>
+              <span>{t("resources.download.versionLabel")}</span>
+              <select value={downloadVersionId} onchange={(event) => selectDownloadVersion((event.currentTarget as HTMLSelectElement).value)} aria-label={t("resources.download.versionAria")}>
+                {#each downloadVersions as version}
+                  <option value={version.id}>{version.versionNumber}{version.versionType !== "release" ? ` (${version.versionType})` : ""}</option>
+                {/each}
+              </select>
+            </label>
+            <label>
+              <span>{t("resources.download.fileNameLabel")}</span>
+              <input bind:value={downloadFileName} type="text" aria-label={t("resources.download.fileNameAria")} />
+            </label>
+            <div class="download-dest" role="radiogroup" aria-label={t("resources.download.destAria")}>
+              {#if selectedInstance()}
+                <label class="download-dest-option">
+                  <input type="radio" name="download-dest" checked={downloadDest === "instance"} onchange={() => { downloadDest = "instance"; }} />
+                  <span>{t("resources.download.destInstance").replace("{name}", selectedInstance()?.name ?? "")}</span>
+                </label>
+              {/if}
+              <label class="download-dest-option">
+                <input type="radio" name="download-dest" checked={downloadDest === "custom"} onchange={() => { downloadDest = "custom"; }} />
+                <span>{t("resources.download.destCustom")}</span>
+              </label>
+              {#if downloadDest === "custom"}
+                <div class="download-dir-row">
+                  <button class="button ghost compact" onclick={() => void pickDownloadDir()}>{t("resources.download.pickDir")}</button>
+                  <span class="download-dir">{downloadCustomDir || t("resources.download.noDir")}</span>
+                </div>
+              {/if}
+            </div>
+          </div>
+          <div class="confirmation-actions">
+            <button class="button" data-dialog-autofocus disabled={downloading} onclick={() => { downloadTarget = null; }}>{t("common.cancel")}</button>
+            <button class="button primary" disabled={downloading || !downloadVersionId || !downloadFileName.trim() || (downloadDest === "custom" && !downloadCustomDir)} onclick={() => void confirmDownload()}>{downloading ? t("resources.download.running") : t("resources.download.confirm")}</button>
+          </div>
+        {/if}
+      </div>
+    </div>
+  {/if}
 </AppShell>

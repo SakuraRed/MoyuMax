@@ -24,75 +24,15 @@ pub const EASYTIER_RELEASE_API: &str =
     "https://api.github.com/repos/EasyTier/EasyTier/releases/latest";
 /// EasyTier 官方共享公共节点（无公网 IP 组网）。
 pub const EASYTIER_PUBLIC_PEER: &str = "tcp://public.easytier.top:11010";
+/// wintun 官方预编译包（签名 DLL，官方许可允许随软件分发）。
+pub const WINTUN_URL: &str = "https://download.wireguard.com/wintun/wintun-0.14.1.zip";
+/// wintun 0.14.1 官方页面公布的 SHA-256（https://www.wintun.net/）。
+pub const WINTUN_SHA256: &str = "07c256185d6ee3652e09fa55c0b673e2624b565e02c4b9091c79ca7d2f24ef51";
 /// Windows x86_64 资产名前缀。
 const EASYTIER_ASSET_PREFIX: &str = "easytier-windows-x86_64-";
 /// STUN 服务器（Google 公共 STUN）。
 const STUN_SERVER: &str = "stun.l.google.com:19302";
 const STUN_TIMEOUT: Duration = Duration::from_secs(3);
-
-/// Minecraft「对局域网开放」的组播发现地址与端口（游戏内每 1.5 秒广播一次）。
-pub const LAN_BROADCAST_GROUP: Ipv4Addr = Ipv4Addr::new(224, 0, 2, 60);
-pub const LAN_BROADCAST_PORT: u16 = 4445;
-
-/// 一条游戏局域网开放广播（MOTD、游戏端口、来源地址）。
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct LanBroadcast {
-    pub motd: String,
-    pub port: u16,
-    pub from: SocketAddr,
-}
-
-/// 解析 [MOTD]...[/MOTD][AD]port[/AD] 组播报文；非该格式返回 None。
-pub fn parse_lan_broadcast(data: &[u8], from: SocketAddr) -> Option<LanBroadcast> {
-    let text = std::str::from_utf8(data).ok()?;
-    let motd = text
-        .strip_prefix("[MOTD]")?
-        .split("[/MOTD]")
-        .next()?
-        .to_owned();
-    let port: u16 = text
-        .split("[AD]")
-        .nth(1)?
-        .split("[/AD]")
-        .next()?
-        .trim()
-        .parse()
-        .ok()?;
-    if port == 0 {
-        return None;
-    }
-    Some(LanBroadcast { motd, port, from })
-}
-
-/// 监听游戏局域网开放广播，等待至多 timeout，返回最新一条（无则 None）。
-pub fn listen_lan_broadcast(timeout: Duration) -> Result<Option<LanBroadcast>> {
-    let socket = UdpSocket::bind(("0.0.0.0", LAN_BROADCAST_PORT))?;
-    socket
-        .join_multicast_v4(&LAN_BROADCAST_GROUP, &Ipv4Addr::UNSPECIFIED)
-        .map_err(|error| CoreError::Content(format!("无法加入局域网组播：{error}")))?;
-    socket.set_read_timeout(Some(Duration::from_millis(500)))?;
-    let deadline = std::time::Instant::now() + timeout;
-    let mut latest: Option<LanBroadcast> = None;
-    let mut buffer = [0_u8; 1024];
-    loop {
-        match socket.recv_from(&mut buffer) {
-            Ok((received, from)) => {
-                if let Some(broadcast) = parse_lan_broadcast(&buffer[..received], from) {
-                    latest = Some(broadcast);
-                }
-            }
-            Err(_) => {
-                if std::time::Instant::now() >= deadline {
-                    break;
-                }
-            }
-        }
-        if std::time::Instant::now() >= deadline {
-            break;
-        }
-    }
-    Ok(latest)
-}
 
 /// EasyTier Windows 资产（URL、SHA-256、大小、版本）。
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -174,7 +114,8 @@ pub fn parse_easytier_release(payload: &serde_json::Value) -> Result<EasyTierAss
 }
 
 /// 下载 EasyTier 并解包到受管工具目录，返回 easytier-core.exe 路径。
-/// 已存在且 SHA-256 匹配时直接复用；下载进度经回调上报（已下载字节、总字节）。
+/// 同时放置 wintun.dll（EasyTier 优先加载同目录 wintun，免装 Npcap、免管理员）。
+/// 已安装且标记摘要匹配时直接复用；下载进度经回调上报（已下载字节、总字节）。
 pub async fn ensure_easytier_binary(
     client: &Client,
     tools_dir: &Path,
@@ -191,7 +132,16 @@ pub async fn ensure_easytier_binary(
     let asset = parse_easytier_release(&release)?;
     let install_dir = tools_dir.join("easytier").join(&asset.version);
     let binary = install_dir.join("easytier-core.exe");
-    if binary.is_file() && sha256_file(&binary)? == asset.sha256 {
+    let marker = install_dir.join(".verified");
+    let wintun = install_dir.join("wintun.dll");
+    // 复用条件：二进制与 wintun 都在,且标记摘要与发布摘要一致。
+    // (此前误用 zip 摘要直接比对 exe,必然失配导致每次重下。)
+    if binary.is_file()
+        && wintun.is_file()
+        && fs::read_to_string(&marker)
+            .map(|content| content.trim() == asset.sha256)
+            .unwrap_or(false)
+    {
         return Ok(binary);
     }
     let staging = install_dir.join("download.zip.part");
@@ -208,9 +158,55 @@ pub async fn ensure_easytier_binary(
             "EasyTier 包内缺少 easytier-core.exe".to_owned(),
         ));
     }
+    ensure_wintun_dll(client, &install_dir).await?;
+    fs::write(&marker, format!("{}\n", asset.sha256))?;
     // zip 包的 SHA-256 已在下载时校验；解包出的 exe 与包摘要不同属正常,
     // 不再二次比较（此前的"解包后校验"误用了 zip 摘要,必然失败)。
     Ok(binary)
+}
+
+/// 下载 wintun.dll（固定版本 + 官方公布 SHA-256）到 EasyTier 同目录。
+async fn ensure_wintun_dll(client: &Client, install_dir: &Path) -> Result<PathBuf> {
+    let target = install_dir.join("wintun.dll");
+    if target.is_file() {
+        return Ok(target);
+    }
+    let staging = install_dir.join("wintun.zip.part");
+    let asset = EasyTierAsset {
+        version: "0.14.1".to_owned(),
+        url: WINTUN_URL.to_owned(),
+        sha256: WINTUN_SHA256.to_owned(),
+        size: 0,
+    };
+    let outcome = download_and_verify(client, &asset, &staging, &|_, _| {}).await;
+    if let Err(error) = outcome {
+        let _ = fs::remove_file(&staging);
+        return Err(error);
+    }
+    let file = fs::File::open(&staging)?;
+    let mut zip = zip::ZipArchive::new(file).map_err(zip_error)?;
+    let mut found = false;
+    for index in 0..zip.len() {
+        let mut entry = zip.by_index(index).map_err(zip_error)?;
+        let Some(name) = entry.enclosed_name() else {
+            continue;
+        };
+        if name.to_string_lossy().replace('\\', "/") != "wintun/bin/amd64/wintun.dll" {
+            continue;
+        }
+        let mut data = Vec::with_capacity(entry.size() as usize);
+        entry.read_to_end(&mut data)?;
+        fs::write(&target, &data)?;
+        found = true;
+        break;
+    }
+    let _ = fs::remove_file(&staging);
+    if !found {
+        return Err(CoreError::Content(
+            "wintun 包内缺少 amd64/wintun.dll".to_owned(),
+        ));
+    }
+    Ok(target)
 }
 
 /// 联机下载用的 HTTP 客户端（带项目 UA 与超时）。
@@ -289,20 +285,6 @@ fn extract_easytier(archive: &Path, target: &Path) -> Result<()> {
         fs::write(target.join(file_name), &data)?;
     }
     Ok(())
-}
-
-fn sha256_file(path: &Path) -> Result<String> {
-    let mut hasher = Sha256::new();
-    let mut file = fs::File::open(path)?;
-    let mut buffer = [0_u8; 65536];
-    loop {
-        let read = file.read(&mut buffer)?;
-        if read == 0 {
-            break;
-        }
-        hasher.update(&buffer[..read]);
-    }
-    Ok(encode_hex(hasher.finalize()))
 }
 
 fn encode_hex(bytes: impl AsRef<[u8]>) -> String {
@@ -440,35 +422,4 @@ pub fn detect_nat() -> Result<NatReport> {
             "你的公网映射地址与本机一致，具备直连条件（防火墙仍需放行）"
         },
     })
-}
-
-/// 本机 TCP 端口转发：接受 listen 上的连接并桥接到 target。
-/// 返回 JoinHandle，由桌面层持有生命周期。
-pub async fn spawn_port_forward(
-    listen: SocketAddr,
-    target: SocketAddr,
-) -> Result<tokio::task::JoinHandle<()>> {
-    if target.ip().is_unspecified() {
-        return Err(CoreError::Content("转发目标必须指定具体地址".to_owned()));
-    }
-    let listener = tokio::net::TcpListener::bind(listen)
-        .await
-        .map_err(|error| CoreError::Content(format!("无法监听 {listen}：{error}")))?;
-    let handle = tokio::spawn(async move {
-        loop {
-            let Ok((inbound, _)) = listener.accept().await else {
-                break;
-            };
-            tokio::spawn(async move {
-                if let Ok(outbound) = tokio::net::TcpStream::connect(target).await {
-                    let (mut inbound_read, mut inbound_write) = inbound.into_split();
-                    let (mut outbound_read, mut outbound_write) = outbound.into_split();
-                    let client_to_server = tokio::io::copy(&mut inbound_read, &mut outbound_write);
-                    let server_to_client = tokio::io::copy(&mut outbound_read, &mut inbound_write);
-                    let _ = tokio::join!(client_to_server, server_to_client);
-                }
-            });
-        }
-    });
-    Ok(handle)
 }
