@@ -76,6 +76,11 @@ summary:focus-visible {
   --surface: #25252a;
   --surface-2: #2d2d33;
   --surface-3: #36363d;
+  --surface-glass: rgb(37 37 42 / 82%);
+  --surface-glass-strong: rgb(37 37 42 / 92%);
+  --r-lg: 12px;
+  --r-md: 9px;
+  --r-sm: 7px;
   --border: #38383f;
   --border-strong: #4b4b55;
   --text: #f2f2ef;
@@ -320,9 +325,10 @@ summary:focus-visible {
 
 .avatar-img {
   padding: 0;
-  object-fit: cover;
-  background: var(--surface-2);
+  object-fit: contain;
+  background: transparent;
   image-rendering: pixelated;
+  filter: drop-shadow(0 2px 3px rgb(0 0 0 / 45%));
 }
 
 .account strong,
@@ -3816,6 +3822,7 @@ summary:focus-visible {
   justify-content: space-between;
   gap: 12px;
   min-width: 0;
+  flex-wrap: wrap;
 }
 
 .device-code-row [role="status"] {
@@ -4134,6 +4141,8 @@ summary:focus-visible {
     --warn-dim: rgb(154 106 20 / 10%);
     --info: #2d6fbb;
     --focus-ring: #2f6626;
+    --surface-glass: rgb(255 255 255 / 82%);
+    --surface-glass-strong: rgb(255 255 255 / 92%);
   }
 }
 
@@ -4145,6 +4154,8 @@ summary:focus-visible {
   --surface: #fff;
   --surface-2: #f1f0ec;
   --surface-3: #e6e5df;
+  --surface-glass: rgb(255 255 255 / 82%);
+  --surface-glass-strong: rgb(255 255 255 / 92%);
   --border: #dcdad2;
   --border-strong: #c4c2b8;
   --text: #1d1d1f;
@@ -4516,4 +4527,307 @@ summary:focus-visible {
 
 .window[data-contrast="high"] :is(button, input, select, summary):focus-visible {
   outline-width: 3px;
+}
+
+/* ---------- 毛玻璃卡片(高对比模式回退不透明) ---------- */
+.instance-card,
+.content-result-card,
+.content-preview,
+.backup-settings,
+.task-card,
+.device-code-panel,
+.version-group-head,
+.install-choice-list,
+.content-queued,
+.datapack-import-form,
+.catalog-searchbox,
+.update-result {
+  background: var(--surface-glass);
+  backdrop-filter: blur(14px) saturate(1.15);
+  -webkit-backdrop-filter: blur(14px) saturate(1.15);
+}
+
+.confirmation-dialog,
+.toast,
+.update-dialog {
+  background: var(--surface-glass-strong);
+  backdrop-filter: blur(22px) saturate(1.2);
+  -webkit-backdrop-filter: blur(22px) saturate(1.2);
+}
+
+.window[data-contrast="high"] :is(
+  .instance-card,
+  .content-result-card,
+  .content-preview,
+  .backup-settings,
+  .task-card,
+  .device-code-panel,
+  .version-group-head,
+  .install-choice-list,
+  .content-queued,
+  .datapack-import-form,
+  .catalog-searchbox,
+  .update-result,
+  .confirmation-dialog,
+  .toast,
+  .update-dialog
+) {
+  background: var(--surface);
+  backdrop-filter: none;
+  -webkit-backdrop-filter: none;
+}
+
+/* ---------- 设置中心子导航与网络页 ---------- */
+.settings-content {
+  overflow: hidden;
+  padding: 0;
+}
+
+.settings-layout {
+  height: 100%;
+  display: flex;
+  min-height: 0;
+}
+
+.settings-nav {
+  width: 172px;
+  flex: none;
+  padding: 18px 10px;
+  overflow-y: auto;
+  border-right: 1px solid var(--border);
+  background: var(--bg-nav);
+}
+
+.sn-group {
+  padding: 10px 10px 5px;
+  color: var(--text-3);
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.4px;
+}
+
+.sn-group:first-child {
+  padding-top: 0;
+}
+
+.sn-item {
+  width: 100%;
+  display: block;
+  padding: 8px 10px;
+  border: 0;
+  border-radius: var(--r-sm);
+  color: var(--text-2);
+  background: transparent;
+  font: inherit;
+  font-size: 13px;
+  text-align: left;
+  cursor: pointer;
+}
+
+.sn-item:hover {
+  background: var(--surface);
+  color: var(--text);
+}
+
+.sn-item.active {
+  background: var(--accent-dim);
+  color: var(--accent);
+  font-weight: 600;
+}
+
+.settings-main {
+  flex: 1;
+  min-width: 0;
+  padding: 22px 26px 32px;
+  overflow-x: hidden;
+  overflow-y: auto;
+}
+
+.settings-main > * {
+  max-width: 860px;
+}
+
+.settings-network {
+  display: grid;
+  gap: 16px;
+}
+
+.netplay-room-card {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+  padding: var(--frame-row-inset-block) var(--frame-row-inset-inline);
+  border: 1px solid var(--border);
+  border-radius: var(--r-md);
+  background: var(--surface-glass);
+}
+
+.netplay-room-info {
+  min-width: 0;
+  display: grid;
+  gap: 4px;
+}
+
+.netplay-room-line {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.netplay-room-name {
+  font-size: 17px;
+  letter-spacing: 0.5px;
+}
+
+.netplay-badge {
+  padding: 2px 8px;
+  border-radius: 999px;
+  background: var(--accent-dim);
+  color: var(--accent);
+  font-size: 11px;
+  font-weight: 600;
+}
+
+.netplay-badge.warn {
+  background: var(--warn-dim);
+  color: var(--warn);
+}
+
+.netplay-name-row {
+  display: flex;
+  gap: 8px;
+}
+
+.netplay-name-row input {
+  flex: 1;
+  min-width: 0;
+}
+
+.netplay-note {
+  color: var(--text-3);
+  font-size: 12px;
+}
+
+.nat-report {
+  display: grid;
+  gap: 8px;
+}
+
+.nat-row {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 8px 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--r-sm);
+  background: var(--bg-app);
+}
+
+.nat-row span {
+  color: var(--text-2);
+  font-size: 13px;
+}
+
+.nat-impact {
+  margin: 0;
+  color: var(--text-2);
+  font-size: 12.5px;
+}
+
+@media (max-width: 1050px) {
+  .settings-nav {
+    width: 132px;
+  }
+}
+
+/* ---------- Java 环境表格 ---------- */
+.java-table-wrap {
+  overflow-x: auto;
+  border: 1px solid var(--border);
+  border-radius: var(--r-md);
+  background: var(--surface-glass);
+}
+
+.java-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 13px;
+}
+
+.java-table th {
+  padding: 10px 12px;
+  color: var(--text-3);
+  font-size: 11px;
+  font-weight: 700;
+  text-align: left;
+  border-bottom: 1px solid var(--border);
+  white-space: nowrap;
+}
+
+.java-table td {
+  padding: 12px;
+  border-bottom: 1px solid var(--border);
+  vertical-align: top;
+}
+
+.java-table tr:last-child td {
+  border-bottom: 0;
+}
+
+.java-row-missing td {
+  background: var(--warn-dim);
+}
+
+.java-cell-main {
+  display: grid;
+  gap: 3px;
+  min-width: 150px;
+}
+
+.java-cell-path {
+  max-width: 220px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--text-3);
+  font-size: 11.5px;
+}
+
+.java-refs-badge {
+  padding: 2px 8px;
+  border-radius: 999px;
+  background: var(--accent-dim);
+  color: var(--accent);
+  font-size: 11px;
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.java-refs-none {
+  color: var(--text-3);
+  font-size: 12px;
+}
+
+.java-table .task-buttons {
+  flex-wrap: wrap;
+}
+
+.java-table .java-assign {
+  margin-top: 8px;
+}
+
+/* ---------- 备份管理页 ---------- */
+.backup-scroll {
+  height: 100%;
+  padding: 24px 28px 36px;
+  overflow-x: hidden;
+  overflow-y: auto;
+}
+
+.backup-scroll > * {
+  max-width: 900px;
+  margin-right: auto;
+  margin-left: auto;
 }

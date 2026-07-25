@@ -42,8 +42,23 @@ export async function refreshShellAccount(runtime: MoyuRuntime): Promise<void> {
   loaded = true;
 }
 
-/** Minotar 皮肤头像（正版 UUID）；离线账户返回空串由调用方回退字母头像。 */
+/** Minotar 皮肤头像（正版 UUID,helm 变体含双层皮肤外层,透明背景);
+ * 离线账户返回空串由调用方回退字母头像。 */
 export function skinAvatarUrl(uuid: string, accountKind: AccountKind | null): string {
   if (!uuid || accountKind !== "microsoft") return "";
-  return `https://minotar.net/avatar/${uuid.replaceAll("-", "")}/64.png`;
+  return `https://minotar.net/helm/${uuid.replaceAll("-", "")}/64.png`;
+}
+
+let requestedSettingsPage = $state<string | null>(null);
+
+/** 请求设置页打开指定子页（如左下角账户按钮直达账户子页）。 */
+export function requestSettingsPage(page: string): void {
+  requestedSettingsPage = page;
+}
+
+/** 设置页挂载时消费一次性的子页请求。 */
+export function consumeSettingsPage(): string | null {
+  const page = requestedSettingsPage;
+  requestedSettingsPage = null;
+  return page;
 }

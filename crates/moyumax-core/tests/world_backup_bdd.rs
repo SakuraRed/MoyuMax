@@ -238,6 +238,65 @@ fn m8_backup_004_default_retention_keeps_only_twenty_successful_archives() {
     assert!(fixture.data_directory.join("store").is_dir());
 }
 
+#[test]
+fn m8_backup_004_manual_delete_removes_record_and_archive() {
+    let fixture = Fixture::new(true);
+    let backup = fixture
+        .service
+        .create_world_backup(
+            "instance-backup",
+            BackupTrigger::Manual,
+            Some("session-delete"),
+        )
+        .unwrap();
+    let archive = backup.archive_path.clone().unwrap();
+    assert!(Path::new(&archive).is_file());
+
+    fixture.service.delete_world_backup(&backup.id).unwrap();
+
+    assert!(
+        fixture
+            .service
+            .list_world_backups(Some("instance-backup"))
+            .unwrap()
+            .is_empty(),
+        "删除后列表必须为空"
+    );
+    assert!(!Path::new(&archive).exists(), "删除后归档必须移除");
+    assert!(!Path::new(&format!("{archive}.deleting")).exists());
+    assert!(
+        fixture.service.delete_world_backup(&backup.id).is_err(),
+        "重复删除必须报错"
+    );
+}
+
+#[test]
+fn m8_backup_005_reopen_converges_interrupted_deletions() {
+    let fixture = Fixture::new(true);
+    let backup = fixture
+        .service
+        .create_world_backup(
+            "instance-backup",
+            BackupTrigger::Manual,
+            Some("session-converge"),
+        )
+        .unwrap();
+    let archive = backup.archive_path.clone().unwrap();
+
+    // 场景一：记录在、归档已改名 .deleting → 重启还原文件名。
+    let deleting = format!("{archive}.deleting");
+    fs::rename(&archive, &deleting).unwrap();
+    let reopened = fixture.reopen();
+    assert!(Path::new(&archive).is_file(), "记录在时必须还原归档");
+    assert!(!Path::new(&deleting).exists());
+
+    // 场景二：记录已删、.deleting 残留 → 重启清理文件。
+    reopened.delete_world_backup(&backup.id).unwrap();
+    fs::write(&deleting, b"orphan").unwrap();
+    let _ = fixture.reopen();
+    assert!(!Path::new(&deleting).exists(), "孤儿 .deleting 必须清理");
+}
+
 fn zip_text(path: &str, name: &str) -> Vec<u8> {
     let file = fs::File::open(path).unwrap();
     let mut archive = ZipArchive::new(file).unwrap();

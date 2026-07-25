@@ -67,6 +67,55 @@ struct MicrosoftLoginState {
     cancel: MicrosoftLoginCancel,
 }
 
+/// 联机协调器：EasyTier 子进程与本机端口转发的生命周期。
+#[derive(Debug, Default)]
+struct NetplayCoordinator {
+    room: Mutex<Option<NetplayRoomProcess>>,
+    forward: Mutex<Option<PortForwardProcess>>,
+}
+
+#[derive(Debug)]
+struct NetplayRoomProcess {
+    config: moyumax_core::NetplayRoomConfig,
+    virtual_ip: String,
+    child: std::process::Child,
+}
+
+#[derive(Debug)]
+struct PortForwardProcess {
+    listen: String,
+    target: String,
+    public_bind: bool,
+    task: tokio::task::JoinHandle<()>,
+}
+
+/// 联机房间的非敏感视图（不携带密码）。
+#[derive(Debug, Clone, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct NetplayRoomView {
+    network_name: String,
+    virtual_ip: String,
+    is_host: bool,
+}
+
+/// 端口转发规则的非敏感视图。
+#[derive(Debug, Clone, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct PortForwardView {
+    listen: String,
+    target: String,
+    public_bind: bool,
+}
+
+/// NAT 检测报告视图。
+#[derive(Debug, Clone, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct NatReportView {
+    mapped_address: String,
+    behind_nat: bool,
+    impact: String,
+}
+
 #[derive(Debug, Clone)]
 struct TaskCoordinator {
     install_executor: InstallExecutor,
@@ -818,6 +867,25 @@ fn rollback_world_backup(
         .map_err(|error| error.to_string())
 }
 
+/// 手动创建一个备份（触发类型 manual）。
+#[tauri::command]
+fn create_manual_world_backup(
+    service: State<'_, AppService>,
+    instance_id: String,
+) -> Result<WorldBackupSummary, String> {
+    service
+        .create_world_backup(&instance_id, moyumax_core::BackupTrigger::Manual, None)
+        .map_err(|error| error.to_string())
+}
+
+/// 手动删除一个备份（记录与归档随事务删除）。
+#[tauri::command]
+fn delete_world_backup(service: State<'_, AppService>, backup_id: String) -> Result<(), String> {
+    service
+        .delete_world_backup(&backup_id)
+        .map_err(|error| error.to_string())
+}
+
 #[tauri::command]
 fn list_instance_screenshots(
     service: State<'_, AppService>,
@@ -1054,6 +1122,193 @@ fn open_external_url(url: String) -> Result<(), String> {
         .spawn()
         .map_err(|error| format!("无法打开系统浏览器：{error}"))?;
     Ok(())
+}
+
+/// 创建或加入 EasyTier 联机房间；首次使用先下载校验 EasyTier。
+#[tauri::command]
+async fn start_netplay_room(
+    service: State<'_, AppService>,
+    coordinator: State<'_, NetplayCoordinator>,
+    network_name: String,
+    network_secret: String,
+    is_host: bool,
+) -> Result<NetplayRoomView, String> {
+    let config = moyumax_core::NetplayRoomConfig {
+        network_name: moyumax_core::validate_room_name(&network_name)
+            .map_err(|error| error.to_string())?,
+        network_secret: moyumax_core::validate_room_secret(&network_secret)
+            .map_err(|error| error.to_string())?,
+        is_host,
+    };
+    {
+        let room = coordinator
+            .room
+            .lock()
+            .map_err(|_| "联机状态不可用".to_owned())?;
+        if room.is_some() {
+            return Err("已在联机房间中，请先离开当前房间".to_owned());
+        }
+    }
+    let tools_dir = service
+        .selected_data_directory()
+        .map_err(|error| error.to_string())?
+        .join("tools");
+    let http = moyumax_core::netplay_http_client().map_err(|error| error.to_string())?;
+    let binary = moyumax_core::ensure_easytier_binary(&http, &tools_dir)
+        .await
+        .map_err(|error| error.to_string())?;
+    let args = moyumax_core::easytier_args(&config);
+    let child = std::process::Command::new(&binary)
+        .args(&args)
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .spawn()
+        .map_err(|error| format!("无法启动 EasyTier：{error}"))?;
+    let virtual_ip = if is_host {
+        "10.144.144.1".to_owned()
+    } else {
+        "自动分配（DHCP）".to_owned()
+    };
+    let view = NetplayRoomView {
+        network_name: config.network_name.clone(),
+        virtual_ip: virtual_ip.clone(),
+        is_host,
+    };
+    let mut room = coordinator
+        .room
+        .lock()
+        .map_err(|_| "联机状态不可用".to_owned())?;
+    *room = Some(NetplayRoomProcess {
+        config,
+        virtual_ip,
+        child,
+    });
+    Ok(view)
+}
+
+/// 离开当前联机房间并终止 EasyTier 进程。
+#[tauri::command]
+fn stop_netplay_room(coordinator: State<'_, NetplayCoordinator>) -> Result<(), String> {
+    let mut room = coordinator
+        .room
+        .lock()
+        .map_err(|_| "联机状态不可用".to_owned())?;
+    if let Some(mut process) = room.take() {
+        let _ = process.child.kill();
+        let _ = process.child.wait();
+    }
+    Ok(())
+}
+
+/// 当前联机房间状态。
+#[tauri::command]
+fn get_netplay_status(
+    coordinator: State<'_, NetplayCoordinator>,
+) -> Result<Option<NetplayRoomView>, String> {
+    let mut room = coordinator
+        .room
+        .lock()
+        .map_err(|_| "联机状态不可用".to_owned())?;
+    if let Some(process) = room.as_mut() {
+        // 进程已退出时视为已离开房间。
+        if let Ok(Some(_)) = process.child.try_wait() {
+            *room = None;
+            return Ok(None);
+        }
+        return Ok(Some(NetplayRoomView {
+            network_name: process.config.network_name.clone(),
+            virtual_ip: process.virtual_ip.clone(),
+            is_host: process.config.is_host,
+        }));
+    }
+    Ok(None)
+}
+
+/// 简化 NAT 检测（STUN，仅手动触发）。
+#[tauri::command]
+async fn detect_nat_type() -> Result<NatReportView, String> {
+    let report = tokio::task::spawn_blocking(moyumax_core::detect_nat)
+        .await
+        .map_err(|error| error.to_string())?
+        .map_err(|error| error.to_string())?;
+    Ok(NatReportView {
+        mapped_address: report.mapped_address,
+        behind_nat: report.behind_nat,
+        impact: report.impact.to_owned(),
+    })
+}
+
+/// 启动本机端口转发；绑定非回环地址属风险操作（前端须已确认）。
+#[tauri::command]
+async fn start_port_forward(
+    coordinator: State<'_, NetplayCoordinator>,
+    listen: String,
+    target: String,
+    public_bind: bool,
+) -> Result<PortForwardView, String> {
+    let listen_addr: std::net::SocketAddr = listen
+        .parse()
+        .map_err(|_| "监听地址格式无效（应为 地址:端口）".to_owned())?;
+    let target_addr: std::net::SocketAddr = target
+        .parse()
+        .map_err(|_| "目标地址格式无效（应为 地址:端口）".to_owned())?;
+    if listen_addr.ip().is_loopback() && public_bind {
+        return Err("回环监听无需公网绑定标记".to_owned());
+    }
+    if !listen_addr.ip().is_loopback() && !public_bind {
+        return Err("绑定非回环地址必须经风险确认".to_owned());
+    }
+    let task = moyumax_core::spawn_port_forward(listen_addr, target_addr)
+        .await
+        .map_err(|error| error.to_string())?;
+    let view = PortForwardView {
+        listen: listen.clone(),
+        target: target.clone(),
+        public_bind,
+    };
+    let mut forward = coordinator
+        .forward
+        .lock()
+        .map_err(|_| "转发状态不可用".to_owned())?;
+    if let Some(old) = forward.take() {
+        old.task.abort();
+    }
+    *forward = Some(PortForwardProcess {
+        listen,
+        target,
+        public_bind,
+        task,
+    });
+    Ok(view)
+}
+
+/// 停止本机端口转发。
+#[tauri::command]
+fn stop_port_forward(coordinator: State<'_, NetplayCoordinator>) -> Result<(), String> {
+    let mut forward = coordinator
+        .forward
+        .lock()
+        .map_err(|_| "转发状态不可用".to_owned())?;
+    if let Some(old) = forward.take() {
+        old.task.abort();
+    }
+    Ok(())
+}
+
+/// 当前端口转发状态。
+#[tauri::command]
+fn get_port_forward(
+    coordinator: State<'_, NetplayCoordinator>,
+) -> Result<Option<PortForwardView>, String> {
+    let forward = coordinator
+        .forward
+        .lock()
+        .map_err(|_| "转发状态不可用".to_owned())?;
+    Ok(forward.as_ref().map(|process| PortForwardView {
+        listen: process.listen.clone(),
+        target: process.target.clone(),
+        public_bind: process.public_bind,
+    }))
 }
 
 #[tauri::command]
@@ -2107,6 +2362,7 @@ pub fn run() {
             app.manage(ModpackPreviewStore::default());
             app.manage(DiagnosticPreviewStore::default());
             app.manage(MicrosoftLoginState::default());
+            app.manage(NetplayCoordinator::default());
             app.manage(coordinator);
             app.manage(LaunchCoordinator::default());
             app.manage(Arc::clone(&shell));
@@ -2165,6 +2421,8 @@ pub fn run() {
             export_instance_world,
             import_instance_world,
             rollback_world_backup,
+            create_manual_world_backup,
+            delete_world_backup,
             list_instance_screenshots,
             read_instance_screenshot,
             open_screenshot_location,
@@ -2184,6 +2442,13 @@ pub fn run() {
             start_microsoft_device_login,
             cancel_microsoft_device_login,
             open_external_url,
+            start_netplay_room,
+            stop_netplay_room,
+            get_netplay_status,
+            detect_nat_type,
+            start_port_forward,
+            stop_port_forward,
+            get_port_forward,
             get_ui_preferences,
             set_ui_theme,
             set_ui_language,

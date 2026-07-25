@@ -35,6 +35,7 @@ test.beforeEach(async ({ page }) => {
 
 test("M26-ABOUT-001 关于区展示版本、许可与未签名声明", async ({ page }) => {
   await page.getByRole("button", { name: "设置" }).click();
+  await page.locator(".sn-item", { hasText: "关于" }).click();
   await expect(page.getByRole("heading", { name: "关于 MoyuMax" })).toBeVisible();
   const aboutSection = page.getByLabel("关于 MoyuMax");
   await expect(aboutSection.getByText("0.1.0-preview.1", { exact: true })).toBeVisible();
@@ -49,6 +50,7 @@ test("M26-ABOUT-001 关于区展示版本、许可与未签名声明", async ({ 
 test("UI-ABOUT-001 关于区在 960x600 和 200% 放大下不发生横向溢出", async ({ page }) => {
   await page.setViewportSize({ width: 960, height: 600 });
   await page.getByRole("button", { name: "设置" }).click();
+  await page.locator(".sn-item", { hasText: "关于" }).click();
   await expect(page.getByRole("heading", { name: "关于 MoyuMax" })).toBeVisible();
   await page.evaluate(() => {
     document.documentElement.style.zoom = "2";

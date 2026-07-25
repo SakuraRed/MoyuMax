@@ -119,19 +119,20 @@ test("M17-WORLD-004 回滚确认后创建恢复点并完成回滚", async ({ pag
   }, READY_BACKUP);
   await page.reload();
   await page.getByRole("button", { name: "数据" }).click();
+  await page.getByRole("button", { name: "管理备份" }).click();
 
-  const rollbackButton = page.getByRole("button", { name: "回滚实例“世界实例”到此备份" });
+  const rollbackButton = page.getByRole("button", { name: "恢复", exact: true }).first();
   await rollbackButton.click();
   const dialog = page.getByRole("dialog");
-  await expect(dialog.getByRole("heading", { name: "回滚“世界实例”的世界？" })).toBeVisible();
-  await expect(dialog.getByText("当前进度会先保存为恢复点备份", { exact: true })).toBeVisible();
+  await expect(dialog.getByRole("heading", { name: "恢复这个备份？" })).toBeVisible();
+  await expect(dialog.getByText("恢复前会先创建当前状态的恢复点", { exact: false })).toBeVisible();
   await expectElementPadding(page, ".confirmation-dialog", { block: 20, inline: 24 });
   await page.keyboard.press("Escape");
   await expect(page.getByRole("dialog")).toHaveCount(0);
 
   await rollbackButton.click();
-  await page.getByRole("button", { name: "创建恢复点并回滚" }).click();
-  await expect(page.getByRole("status").getByText("已回滚到所选备份，回滚前的进度保存在恢复点备份中", { exact: true })).toBeVisible();
+  await page.getByRole("button", { name: "确认恢复" }).click();
+  await expect(page.getByRole("status").getByText("已恢复到所选备份", { exact: true })).toBeVisible();
   await expect(page.getByRole("dialog")).toHaveCount(0);
   await expect(page.getByText("手动", { exact: true })).toBeVisible();
   const backups = await page.evaluate(() =>
@@ -155,7 +156,8 @@ test("UI-WORLD-001 世界存档区与回滚对话框在 960x600 和 200% 放大�
   await page.reload();
   await page.setViewportSize({ width: 960, height: 600 });
   await page.getByRole("button", { name: "数据" }).click();
-  await page.getByRole("button", { name: "回滚实例“世界实例”到此备份" }).click();
+  await page.getByRole("button", { name: "管理备份" }).click();
+  await page.getByRole("button", { name: "恢复", exact: true }).first().click();
   await expect(page.getByRole("dialog")).toBeVisible();
   await page.evaluate(() => {
     document.documentElement.style.zoom = "2";

@@ -23,6 +23,7 @@
     settings: OnboardingSelection;
     onInstancesChanged: () => Promise<void>;
     onNavigate: (target: NavigationKey) => void;
+    onOpenBackups: () => void;
     onMinimize: () => Promise<void>;
     onToggleMaximize: () => Promise<void>;
     onClose: () => Promise<void>;
@@ -33,6 +34,7 @@
     settings,
     onInstancesChanged,
     onNavigate,
+    onOpenBackups,
     onMinimize,
     onToggleMaximize,
     onClose,
@@ -52,8 +54,6 @@
   let screenshotFilter = $state<"all" | "week">("all");
   let selectedScreenshot = $state<string | null>(null);
   let pendingDelete = $state<string | null>(null);
-  let rollbackCandidate = $state<WorldBackupSummary | null>(null);
-  let rollbackDialog = $state<HTMLElement | null>(null);
   let message = $state("");
   let errorMessage = $state("");
   const totalBytes = $derived(items.reduce((sum, item) => sum + item.sizeBytes, 0));
@@ -202,41 +202,6 @@
     } finally {
       worldBusy = false;
     }
-  }
-
-  async function askRollback(backup: WorldBackupSummary): Promise<void> {
-    message = "";
-    errorMessage = "";
-    rollbackCandidate = backup;
-    await tick();
-    rollbackDialog?.querySelector<HTMLElement>("[data-dialog-autofocus]")?.focus();
-  }
-
-  function cancelRollback(): void {
-    if (changingItem === rollbackCandidate?.id) return;
-    rollbackCandidate = null;
-  }
-
-  async function confirmRollback(): Promise<void> {
-    const backup = rollbackCandidate;
-    if (!backup) return;
-    changingItem = backup.id;
-    message = "";
-    errorMessage = "";
-    try {
-      await runtime.rollbackWorldBackup(backup.id);
-      rollbackCandidate = null;
-      backups = await runtime.listWorldBackups();
-      message = t("data.msg.rollbackDone");
-    } catch (error) {
-      errorMessage = error instanceof Error ? error.message : String(error);
-    } finally {
-      changingItem = null;
-    }
-  }
-
-  function handleRollbackDialogKeydown(event: KeyboardEvent): void {
-    handleDialogKeydown(event, rollbackDialog, cancelRollback);
   }
 
   async function restore(item: RecycleBinItem): Promise<void> {
@@ -528,12 +493,15 @@
             <div>
               <h2 id="world-backups-title">{t("data.backups.title")}</h2>
             </div>
+            <div class="local-content-actions">
+              <button class="button ghost compact" onclick={onOpenBackups}>{t("data.backups.manage")}</button>
+            </div>
           </header>
           {#if backups.length === 0}
             <div class="backup-empty-row">{t("data.backups.empty")}</div>
           {:else}
             <div class="backup-list">
-              {#each backups as backup}
+              {#each backups.slice(0, 3) as backup}
                 <article class:failed={backup.state === "failed"} class="backup-row">
                   <div>
                     <div class="backup-title-line">
@@ -546,18 +514,13 @@
                   </div>
                   <div class="backup-side">
                     <strong>{backupStateLabel(backup.state)}</strong>
-                    {#if backup.state === "ready"}
-                      <button
-                        class="button ghost compact"
-                        aria-label={t("data.backups.rollbackAria").replace("{name}", backup.instanceName)}
-                        disabled={changingItem !== null}
-                        onclick={() => void askRollback(backup)}
-                      >{t("data.backups.rollback")}</button>
-                    {/if}
                   </div>
                 </article>
               {/each}
             </div>
+            {#if backups.length > 3}
+              <button class="inline-link" onclick={onOpenBackups}>{t("data.backups.viewAll").replace("{count}", String(backups.length))}</button>
+            {/if}
           {/if}
         </section>
 
@@ -621,35 +584,6 @@
     <div class="toast" role="status"><Icon name="info" size={16} /><span>{message}</span></div>
   {/if}
   <div class="sr-live" aria-live="polite">{message || errorMessage}</div>
-
-  {#if rollbackCandidate}
-    <div class="modal-backdrop">
-      <div
-        class="confirmation-dialog"
-        role="dialog"
-        aria-modal="true"
-        aria-labelledby="rollback-confirm-title"
-        tabindex="-1"
-        bind:this={rollbackDialog}
-        onkeydown={handleRollbackDialogKeydown}
-      >
-        <header>
-          <h2 id="rollback-confirm-title">{t("data.rollback.title").replace("{name}", rollbackCandidate.instanceName)}</h2>
-          <p>{t("data.rollback.description").replace("{time}", timestampLabel(rollbackCandidate.createdAtUnixSeconds)).replace("{count}", String(rollbackCandidate.worldCount))}</p>
-        </header>
-        <div class="confirmation-impact">
-          <strong>{t("data.rollback.impactTitle")}</strong>
-          <span>{t("data.rollback.impactBody")}</span>
-        </div>
-        <div class="confirmation-actions">
-          <button class="button" data-dialog-autofocus disabled={changingItem === rollbackCandidate.id} onclick={cancelRollback}>{t("common.cancel")}</button>
-          <button class="button primary" disabled={changingItem === rollbackCandidate.id} onclick={() => void confirmRollback()}>
-            {changingItem === rollbackCandidate.id ? t("data.rollback.rolling") : t("data.rollback.confirm")}
-          </button>
-        </div>
-      </div>
-    </div>
-  {/if}
 
   {#if purgeCandidate}
     <div class="modal-backdrop">

@@ -20,6 +20,7 @@ mod launch;
 mod loader_install;
 mod modpack;
 mod msauth;
+mod netplay;
 mod recycle;
 mod resources;
 mod screenshots;
@@ -41,6 +42,7 @@ pub use launch::*;
 pub use loader_install::*;
 pub use modpack::*;
 pub use msauth::*;
+pub use netplay::*;
 pub use recycle::*;
 pub use resources::*;
 pub use screenshots::*;
@@ -171,6 +173,7 @@ impl AppService {
         service.recover_interrupted_recycle_operations()?;
         service.recover_interrupted_world_rollbacks()?;
         service.recover_interrupted_modpack_ops()?;
+        service.recover_interrupted_backup_deletions()?;
         service.recover_java_deletions()?;
         service.generate_missing_crash_reports()?;
         Ok(service)

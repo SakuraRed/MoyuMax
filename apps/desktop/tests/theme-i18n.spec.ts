@@ -35,6 +35,7 @@ test.beforeEach(async ({ page }) => {
 
 test("M21-THEME-001 切换浅色主题立即生效并持久化", async ({ page }) => {
   await page.getByRole("button", { name: "设置" }).click();
+  await page.locator(".sn-item", { hasText: "外观与语言" }).click();
   await expect(page.getByRole("heading", { name: "外观与语言" })).toBeVisible();
   await expect(page.locator(".window")).toHaveAttribute("data-theme", "system");
 
@@ -48,12 +49,14 @@ test("M21-THEME-001 切换浅色主题立即生效并持久化", async ({ page }
   await page.reload();
   await expect(page.locator(".window")).toHaveAttribute("data-theme", "light");
   await page.getByRole("button", { name: "设置" }).click();
+  await page.locator(".sn-item", { hasText: "外观与语言" }).click();
   await page.getByRole("group", { name: "界面主题" }).getByRole("button", { name: "跟随系统", exact: true }).click();
   await expect(page.locator(".window")).toHaveAttribute("data-theme", "system");
 });
 
 test("M21-THEME-002 深色主题不依赖系统设置", async ({ page }) => {
   await page.getByRole("button", { name: "设置" }).click();
+  await page.locator(".sn-item", { hasText: "外观与语言" }).click();
   await page.getByRole("button", { name: "深色", exact: true }).click();
   await expect(page.locator(".window")).toHaveAttribute("data-theme", "dark");
   const background = await page.locator(".window").evaluate((element) =>
@@ -64,6 +67,7 @@ test("M21-THEME-002 深色主题不依赖系统设置", async ({ page }) => {
 
 test("M21-I18N-001 切换英文后界面文案立即变化并持久化", async ({ page }) => {
   await page.getByRole("button", { name: "设置" }).click();
+  await page.locator(".sn-item", { hasText: "外观与语言" }).click();
   await expect(page.getByRole("heading", { name: "外观与语言" })).toBeVisible();
 
   await page.getByRole("button", { name: "English", exact: true }).click();
@@ -76,11 +80,13 @@ test("M21-I18N-001 切换英文后界面文案立即变化并持久化", async (
   await page.reload();
   await expect(page.locator(".nav-item", { hasText: "Settings" })).toBeVisible();
   await page.getByRole("button", { name: "Settings" }).click();
+  await page.locator(".sn-item", { hasText: "Appearance & Language" }).click();
   await expect(page.getByRole("heading", { name: "Appearance & Language" })).toBeVisible();
 });
 
 test("M21-I18N-002 切换繁体中文后界面文案变化", async ({ page }) => {
   await page.getByRole("button", { name: "设置" }).click();
+  await page.locator(".sn-item", { hasText: "外观与语言" }).click();
   await page.getByRole("button", { name: "繁體中文", exact: true }).click();
   await expect(page.locator(".nav-item", { hasText: "首頁" })).toBeVisible();
   await expect(page.locator(".nav-item", { hasText: "任務" })).toBeVisible();
@@ -91,6 +97,7 @@ test("M21-I18N-002 切换繁体中文后界面文案变化", async ({ page }) =>
 test("UI-THEME-001 外观与语言设置区在 960x600 和 200% 放大下不溢出", async ({ page }) => {
   await page.setViewportSize({ width: 960, height: 600 });
   await page.getByRole("button", { name: "设置" }).click();
+  await page.locator(".sn-item", { hasText: "外观与语言" }).click();
   await expect(page.getByRole("heading", { name: "外观与语言" })).toBeVisible();
   await expectElementPadding(page, ".backup-settings", { block: 20, inline: 24 });
   await page.evaluate(() => {

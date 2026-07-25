@@ -35,6 +35,7 @@ test.beforeEach(async ({ page }) => {
 
 test("M23-A11Y-001 减少动画手动开关立即生效并持久化", async ({ page }) => {
   await page.getByRole("button", { name: "设置" }).click();
+  await page.locator(".sn-item", { hasText: "外观与语言" }).click();
   await expect(page.locator(".window")).toHaveAttribute("data-motion", "system");
 
   await page.getByRole("button", { name: "减少动画", exact: true }).click();
@@ -43,12 +44,14 @@ test("M23-A11Y-001 减少动画手动开关立即生效并持久化", async ({ p
   await page.reload();
   await expect(page.locator(".window")).toHaveAttribute("data-motion", "reduce");
   await page.getByRole("button", { name: "设置" }).click();
+  await page.locator(".sn-item", { hasText: "外观与语言" }).click();
   await page.getByRole("group", { name: "动画偏好" }).getByRole("button", { name: "跟随系统", exact: true }).click();
   await expect(page.locator(".window")).toHaveAttribute("data-motion", "system");
 });
 
 test("M23-A11Y-002 高对比手动开关立即生效并持久化", async ({ page }) => {
   await page.getByRole("button", { name: "设置" }).click();
+  await page.locator(".sn-item", { hasText: "外观与语言" }).click();
   await expect(page.locator(".window")).toHaveAttribute("data-contrast", "standard");
   const before = await page.locator(".window").evaluate((element) => {
     const style = getComputedStyle(element);

@@ -55,6 +55,7 @@ async function seed(page: Page, environments: unknown[]): Promise<void> {
   );
   await page.reload();
   await page.getByRole("button", { name: "设置" }).click();
+  await page.locator(".sn-item", { hasText: "Java 环境" }).click();
   await expect(page.getByRole("heading", { name: "Java 环境" })).toBeVisible();
 }
 
@@ -63,7 +64,7 @@ test("M13-JAVA-001 环境列表显示版本、大小、健康与引用实例", a
 
   await expect(page.getByText("Azul Zulu 21.0.12+8")).toBeVisible();
   await expect(page.getByText("已就绪", { exact: true })).toBeVisible();
-  await expect(page.getByText(/引用实例:实例甲/)).toBeVisible();
+  await expect(page.getByText("1 个实例", { exact: true })).toBeVisible();
   await expect(page.getByText(/188\.0 MiB|179 MiB|188 MiB/)).toBeVisible();
 
   await page.getByRole("button", { name: "验证" }).click();

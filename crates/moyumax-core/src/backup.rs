@@ -185,6 +185,98 @@ impl AppService {
             .map_err(CoreError::from)
     }
 
+    /// 手动删除一个备份：归档先改名标记删除，记录删除提交后再清文件；
+    /// 提交失败回滚文件名，中断由启动恢复收敛。
+    pub fn delete_world_backup(&self, backup_id: &str) -> Result<()> {
+        let backup = self
+            .list_world_backups(None)?
+            .into_iter()
+            .find(|candidate| candidate.id == backup_id)
+            .ok_or_else(|| CoreError::Backup("备份不存在或已被删除".to_owned()))?;
+        let archive = backup.archive_path.as_deref().map(PathBuf::from);
+        let deleting = archive
+            .as_ref()
+            .map(|path| path.with_extension("zip.deleting"));
+        let renamed = archive.as_ref().is_some_and(|path| path.is_file());
+        if renamed && let (Some(archive), Some(deleting)) = (&archive, &deleting) {
+            fs::rename(archive, deleting)?;
+        }
+        let outcome: Result<()> = (|| {
+            let mut connection = self.connection()?;
+            let transaction =
+                connection.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
+            transaction.execute(
+                "DELETE FROM world_backups WHERE id = ?1",
+                params![backup_id],
+            )?;
+            transaction.commit()?;
+            Ok(())
+        })();
+        match outcome {
+            Ok(()) => {
+                if renamed && let Some(deleting) = &deleting {
+                    let _ = fs::remove_file(deleting);
+                }
+                Ok(())
+            }
+            Err(error) => {
+                if renamed && let (Some(archive), Some(deleting)) = (&archive, &deleting) {
+                    let _ = fs::rename(deleting, archive);
+                }
+                Err(error)
+            }
+        }
+    }
+
+    /// 启动恢复：清理删除中断留下的 .deleting 归档（记录已删则清文件，否则还原）。
+    pub(crate) fn recover_interrupted_backup_deletions(&self) -> Result<()> {
+        let instances_dir = self
+            .selected_data_directory()?
+            .join("backups")
+            .join("instances");
+        if !instances_dir.is_dir() {
+            return Ok(());
+        }
+        let known: std::collections::HashSet<String> = self
+            .list_world_backups(None)?
+            .into_iter()
+            .filter_map(|backup| backup.archive_path)
+            .collect();
+        for instance_entry in fs::read_dir(&instances_dir)? {
+            let instance_path = instance_entry?.path();
+            if !instance_path.is_dir() {
+                continue;
+            }
+            for entry in fs::read_dir(&instance_path)? {
+                let path = entry?.path();
+                let Some(name) = path.file_name().and_then(|value| value.to_str()) else {
+                    continue;
+                };
+                if !name.ends_with(".zip.deleting") {
+                    continue;
+                }
+                let original = path.with_extension("");
+                let original_name = original
+                    .file_name()
+                    .and_then(|value| value.to_str())
+                    .unwrap_or("")
+                    .to_owned();
+                let still_tracked = known.iter().any(|archive| {
+                    PathBuf::from(archive)
+                        .file_name()
+                        .and_then(|value| value.to_str())
+                        == Some(original_name.as_str())
+                });
+                if still_tracked {
+                    let _ = fs::rename(&path, &original);
+                } else {
+                    let _ = fs::remove_file(&path);
+                }
+            }
+        }
+        Ok(())
+    }
+
     pub fn create_world_backup(
         &self,
         instance_id: &str,

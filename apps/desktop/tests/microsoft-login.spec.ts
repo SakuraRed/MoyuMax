@@ -35,6 +35,7 @@ test.beforeEach(async ({ page }) => {
 
 test("M30-MS-001 设备码登录完成后账户入库", async ({ page }) => {
   await page.getByRole("button", { name: "设置" }).click();
+  await page.locator(".sn-item", { hasText: "账户" }).click();
   await page.getByRole("button", { name: "添加 Microsoft 账户" }).click();
 
   const panel = page.locator(".device-code-panel");
@@ -55,6 +56,7 @@ test("M30-MS-002 轮询期间取消登录", async ({ page }) => {
     window.localStorage.setItem("moyumax.browser.msLoginScenario", "pending");
   });
   await page.getByRole("button", { name: "设置" }).click();
+  await page.locator(".sn-item", { hasText: "账户" }).click();
   await page.getByRole("button", { name: "添加 Microsoft 账户" }).click();
 
   const panel = page.locator(".device-code-panel");
@@ -70,6 +72,7 @@ test("M30-MS-003 登录失败显示可读错误", async ({ page }) => {
     window.localStorage.setItem("moyumax.browser.msLoginScenario", "fail");
   });
   await page.getByRole("button", { name: "设置" }).click();
+  await page.locator(".sn-item", { hasText: "账户" }).click();
   await page.getByRole("button", { name: "添加 Microsoft 账户" }).click();
 
   await expect(page.locator(".device-code-panel")).toBeVisible();
@@ -85,6 +88,7 @@ test("UI-MS-001 设备码面板在 960x600 和 200% 放大下不溢出", async (
   });
   await page.setViewportSize({ width: 960, height: 600 });
   await page.getByRole("button", { name: "设置" }).click();
+  await page.locator(".sn-item", { hasText: "账户" }).click();
   await page.getByRole("button", { name: "添加 Microsoft 账户" }).click();
   await expect(page.locator(".device-code-panel")).toBeVisible();
   await page.evaluate(() => {

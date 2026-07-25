@@ -48,6 +48,7 @@ test("M22-I18N-001 英文界面渲染资源中心与任务中心", async ({ page
 
 test("M22-I18N-002 繁体中文界面渲染数据中心", async ({ page }) => {
   await page.getByRole("button", { name: "设置" }).click();
+  await page.locator(".sn-item", { hasText: "外观与语言" }).click();
   await page.getByRole("button", { name: "繁體中文", exact: true }).click();
   await expect(page.locator(".nav-item", { hasText: "資料" })).toBeVisible();
 
@@ -104,6 +105,7 @@ test("UI-I18N-002 英文资源中心在 960x600 和 200% 放大下不溢出", as
 
 async function switchToEnglish(page: import("@playwright/test").Page): Promise<void> {
   await page.getByRole("button", { name: "设置" }).click();
+  await page.locator(".sn-item", { hasText: "外观与语言" }).click();
   await page.getByRole("button", { name: "English", exact: true }).click();
   await expect(page.locator(".nav-item", { hasText: "Settings" })).toBeVisible();
   // 设置页只放行首页导航，先回到首页再跳转其他页面。

@@ -50,6 +50,7 @@ test.beforeEach(async ({ page }) => {
 
 test("M20-ACCT-001 创建离线账户并自动成为默认", async ({ page }) => {
   await page.getByRole("button", { name: "设置" }).click();
+  await page.locator(".sn-item", { hasText: "账户" }).click();
   await expect(page.getByRole("heading", { name: "账户" })).toBeVisible();
   await expect(page.getByText("还没有账户", { exact: false })).toBeVisible();
 
@@ -67,6 +68,7 @@ test("M20-ACCT-001 创建离线账户并自动成为默认", async ({ page }) =>
 
 test("M20-ACCT-002 外置登录添加账户且凭据错误可读", async ({ page }) => {
   await page.getByRole("button", { name: "设置" }).click();
+  await page.locator(".sn-item", { hasText: "账户" }).click();
   await page.getByRole("button", { name: "添加外置账户" }).click();
   await page.getByRole("textbox", { name: "外置账户用户名" }).fill("Alex@littleskin.cn");
   await page.getByRole("textbox", { name: "外置账户密码" }).fill("s3cret");
@@ -96,6 +98,7 @@ test("M20-ACCT-003 默认唯一且移除默认后最早剩余接任", async ({ p
     }),
   ]);
   await page.getByRole("button", { name: "设置" }).click();
+  await page.locator(".sn-item", { hasText: "账户" }).click();
 
   const authlibRow = page.locator(".backup-row").filter({ hasText: "Alex" });
   await authlibRow.getByRole("button", { name: "设为默认" }).click();
@@ -120,6 +123,7 @@ test("M20-ACCT-004 会话过期的账户刷新失败并保留过期标记", asyn
     }),
   ]);
   await page.getByRole("button", { name: "设置" }).click();
+  await page.locator(".sn-item", { hasText: "账户" }).click();
 
   await expect(page.getByText("会话已过期", { exact: true })).toBeVisible();
   await page.getByRole("button", { name: "刷新会话" }).click();
@@ -129,6 +133,7 @@ test("M20-ACCT-004 会话过期的账户刷新失败并保留过期标记", asyn
 
 test("M20-ACCT-005 Microsoft 提供真实设备码登录入口", async ({ page }) => {
   await page.getByRole("button", { name: "设置" }).click();
+  await page.locator(".sn-item", { hasText: "账户" }).click();
   await expect(page.getByRole("button", { name: "添加 Microsoft 账户" })).toBeVisible();
   await expect(page.getByText("登录功能在后续里程碑提供", { exact: false })).toHaveCount(0);
 });
@@ -139,6 +144,7 @@ test("UI-ACCT-001 账户区与添加表单在 960x600 和 200% 放大下不溢�
   ]);
   await page.setViewportSize({ width: 960, height: 600 });
   await page.getByRole("button", { name: "设置" }).click();
+  await page.locator(".sn-item", { hasText: "账户" }).click();
   await page.getByRole("button", { name: "添加外置账户" }).click();
   await expect(page.getByRole("textbox", { name: "外置账户用户名" })).toBeVisible();
   await page.evaluate(() => {

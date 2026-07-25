@@ -395,6 +395,27 @@ export interface AccountSummary {
   lastValidatedAtUnixSeconds: number | null;
 }
 
+/** 联机房间的非敏感视图（不携带密码）。 */
+export interface NetplayRoomView {
+  networkName: string;
+  virtualIp: string;
+  isHost: boolean;
+}
+
+/** 端口转发规则视图。 */
+export interface PortForwardView {
+  listen: string;
+  target: string;
+  publicBind: boolean;
+}
+
+/** 简化 NAT 检测报告。 */
+export interface NatReportView {
+  mappedAddress: string;
+  behindNat: boolean;
+  impact: string;
+}
+
 /** Microsoft 设备码登录的展示信息（用户码与验证地址）。 */
 export interface DeviceCodeInfo {
   userCode: string;
@@ -701,6 +722,10 @@ export interface MoyuRuntime {
   ): Promise<number>;
   importInstanceWorld(instanceId: string, sourcePath: string): Promise<InstanceWorldInfo>;
   rollbackWorldBackup(backupId: string): Promise<WorldBackupSummary>;
+  /** 手动创建一个备份。 */
+  createManualWorldBackup(instanceId: string): Promise<WorldBackupSummary>;
+  /** 手动删除一个备份（记录与归档随事务删除）。 */
+  deleteWorldBackup(backupId: string): Promise<void>;
   listInstanceScreenshots(instanceId: string): Promise<InstanceScreenshot[]>;
   /** 把截图图片写入系统剪贴板。 */
   copyScreenshotToClipboard(instanceId: string, fileName: string): Promise<void>;
@@ -730,6 +755,20 @@ export interface MoyuRuntime {
   onMicrosoftDeviceLogin(handler: (event: MicrosoftLoginEvent) => void): () => void;
   /** 在系统浏览器打开 https 外部链接。 */
   openExternalUrl(url: string): Promise<void>;
+  /** 创建或加入 EasyTier 联机房间（首次自动下载校验 EasyTier）。 */
+  startNetplayRoom(networkName: string, networkSecret: string, isHost: boolean): Promise<NetplayRoomView>;
+  /** 离开当前联机房间。 */
+  stopNetplayRoom(): Promise<void>;
+  /** 当前联机房间状态。 */
+  getNetplayStatus(): Promise<NetplayRoomView | null>;
+  /** 简化 NAT 检测（STUN，仅手动触发）。 */
+  detectNatType(): Promise<NatReportView>;
+  /** 启动本机端口转发；绑定非回环地址需 publicBind 风险确认。 */
+  startPortForward(listen: string, target: string, publicBind: boolean): Promise<PortForwardView>;
+  /** 停止本机端口转发。 */
+  stopPortForward(): Promise<void>;
+  /** 当前端口转发状态。 */
+  getPortForward(): Promise<PortForwardView | null>;
   getUiPreferences(): Promise<UiPreferences>;
   setUiTheme(theme: string): Promise<void>;
   setUiLanguage(language: string): Promise<void>;
@@ -976,6 +1015,10 @@ function createTauriRuntime(): MoyuRuntime {
       invoke<InstanceWorldInfo>("import_instance_world", { instanceId, sourcePath }),
     rollbackWorldBackup: (backupId) =>
       invoke<WorldBackupSummary>("rollback_world_backup", { backupId }),
+    createManualWorldBackup: (instanceId) =>
+      invoke<WorldBackupSummary>("create_manual_world_backup", { instanceId }),
+    deleteWorldBackup: (backupId) =>
+      invoke<void>("delete_world_backup", { backupId }),
     listInstanceScreenshots: (instanceId) =>
       invoke<InstanceScreenshot[]>("list_instance_screenshots", { instanceId }),
     copyScreenshotToClipboard: async (instanceId, fileName) => {
@@ -1028,6 +1071,15 @@ function createTauriRuntime(): MoyuRuntime {
       return () => unlisten?.();
     },
     openExternalUrl: (url) => invoke<void>("open_external_url", { url }),
+    startNetplayRoom: (networkName, networkSecret, isHost) =>
+      invoke<NetplayRoomView>("start_netplay_room", { networkName, networkSecret, isHost }),
+    stopNetplayRoom: () => invoke<void>("stop_netplay_room"),
+    getNetplayStatus: () => invoke<NetplayRoomView | null>("get_netplay_status"),
+    detectNatType: () => invoke<NatReportView>("detect_nat_type"),
+    startPortForward: (listen, target, publicBind) =>
+      invoke<PortForwardView>("start_port_forward", { listen, target, publicBind }),
+    stopPortForward: () => invoke<void>("stop_port_forward"),
+    getPortForward: () => invoke<PortForwardView | null>("get_port_forward"),
     getUiPreferences: () => invoke<UiPreferences>("get_ui_preferences"),
     setUiTheme: (theme) => invoke<void>("set_ui_theme", { theme }),
     setUiLanguage: (language) => invoke<void>("set_ui_language", { language }),
@@ -1707,6 +1759,40 @@ function createBrowserRuntime(): MoyuRuntime {
       window.localStorage.setItem(BROWSER_WORLD_BACKUPS_KEY, JSON.stringify(backups));
       return recovery;
     },
+    async createManualWorldBackup(instanceId) {
+      const backups = browserWorldBackups();
+      const instances = browserInstances();
+      const instance = instances.find((candidate) => candidate.id === instanceId);
+      if (!instance) throw new Error("目标实例不存在");
+      const now = Math.floor(Date.now() / 1000);
+      const backup: WorldBackupSummary = {
+        id: `backup-${crypto.randomUUID()}`,
+        instanceId,
+        instanceName: instance.name,
+        launchSessionId: null,
+        trigger: "manual",
+        state: "ready",
+        archivePath: `D:\\MoyuMax\\data\\backups\\instances\\${instanceId}\\${now}-manual.zip`,
+        worldCount: 1,
+        sourceBytes: 1024,
+        archiveBytes: 512,
+        createdAtUnixSeconds: now,
+        completedAtUnixSeconds: now,
+        errorSummary: null,
+        kind: "full",
+        baseBackupId: null,
+      };
+      backups.unshift(backup);
+      window.localStorage.setItem(BROWSER_WORLD_BACKUPS_KEY, JSON.stringify(backups));
+      return backup;
+    },
+    async deleteWorldBackup(backupId) {
+      const backups = browserWorldBackups();
+      const index = backups.findIndex((candidate) => candidate.id === backupId);
+      if (index < 0) throw new Error("备份不存在或已被删除");
+      backups.splice(index, 1);
+      window.localStorage.setItem(BROWSER_WORLD_BACKUPS_KEY, JSON.stringify(backups));
+    },
     async getWorldBackupSettings() {
       return browserBackupSettings();
     },
@@ -1870,6 +1956,53 @@ function createBrowserRuntime(): MoyuRuntime {
       if (!url.startsWith("https://")) {
         throw new Error("只允许打开 https 链接");
       }
+    },
+    async startNetplayRoom(networkName, networkSecret, isHost) {
+      if (!/^[A-Za-z0-9_-]{4,32}$/.test(networkName)) {
+        throw new Error("房间号必须是 4-32 位字母、数字、连字符或下划线");
+      }
+      if (!/^[!-~]{8,64}$/.test(networkSecret)) {
+        throw new Error("房间密码必须是 8-64 位可见字符（不含空格）");
+      }
+      const view: NetplayRoomView = {
+        networkName,
+        virtualIp: isHost ? "10.144.144.1" : "自动分配（DHCP）",
+        isHost,
+      };
+      window.localStorage.setItem("moyumax.browser.netplayRoom", JSON.stringify(view));
+      return view;
+    },
+    async stopNetplayRoom() {
+      window.localStorage.removeItem("moyumax.browser.netplayRoom");
+    },
+    async getNetplayStatus() {
+      const serialized = window.localStorage.getItem("moyumax.browser.netplayRoom");
+      return serialized ? (JSON.parse(serialized) as NetplayRoomView) : null;
+    },
+    async detectNatType() {
+      if (window.localStorage.getItem("moyumax.browser.natOffline") === "true") {
+        throw new Error("NAT 检测失败：无法连接 STUN 服务器");
+      }
+      return {
+        mappedAddress: "203.0.113.55:54321",
+        behindNat: true,
+        impact: "你在 NAT 之后，直连入站通常不可达；建议使用联机房间组网",
+      };
+    },
+    async startPortForward(listen, target, publicBind) {
+      if (publicBind && window.localStorage.getItem("moyumax.browser.forwardAuthorized") !== "true") {
+        throw new Error("绑定非回环地址必须经风险确认");
+      }
+      const view: PortForwardView = { listen, target, publicBind };
+      window.localStorage.setItem("moyumax.browser.portForward", JSON.stringify(view));
+      return view;
+    },
+    async stopPortForward() {
+      window.localStorage.removeItem("moyumax.browser.portForward");
+    },
+    async getPortForward() {
+      const serialized = window.localStorage.getItem("moyumax.browser.portForward");
+      return serialized ? (JSON.parse(serialized) as PortForwardView) : null;
     },
     async getUiPreferences() {
       const serialized = window.localStorage.getItem("moyumax.browser.uiPreferences");

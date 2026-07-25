@@ -7,7 +7,7 @@
  *   当前版本还没有敏感页面,该机制为账户里程碑预留并以单测固定。
  */
 
-export type ShellPage = "home" | "install" | "resources" | "tasks" | "data" | "crash";
+export type ShellPage = "home" | "install" | "resources" | "tasks" | "data" | "backups" | "crash";
 
 export interface ShellState {
   page: ShellPage;
@@ -20,6 +20,7 @@ const RESTORABLE_PAGES: ReadonlySet<string> = new Set<ShellPage>([
   "resources",
   "tasks",
   "data",
+  "backups",
   "crash",
 ]);
 

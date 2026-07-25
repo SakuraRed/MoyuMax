@@ -1,7 +1,7 @@
 <script lang="ts">
   import { onMount } from "svelte";
 
-  import { refreshShellAccount } from "../accounts.svelte";
+  import { consumeSettingsPage, refreshShellAccount } from "../accounts.svelte";
   import {
     applyUiPreferences,
     refreshBackgroundImage,
@@ -36,6 +36,45 @@
   import { LITTLESKIN_YGGDRASIL_URL } from "../runtime";
   import AppShell from "./AppShell.svelte";
   import Icon from "./Icon.svelte";
+  import SettingsNetwork from "./SettingsNetwork.svelte";
+
+  type SettingsPage =
+    | "general"
+    | "appearance"
+    | "java"
+    | "network"
+    | "accounts"
+    | "backups"
+    | "updates"
+    | "dev"
+    | "about";
+
+  const SETTINGS_NAV: { groupKey: string; items: { key: SettingsPage; labelKey: string }[] }[] = [
+    {
+      groupKey: "settings.nav.groupGeneral",
+      items: [
+        { key: "general", labelKey: "settings.nav.general" },
+        { key: "appearance", labelKey: "settings.nav.appearance" },
+      ],
+    },
+    {
+      groupKey: "settings.nav.groupGame",
+      items: [
+        { key: "java", labelKey: "settings.nav.java" },
+        { key: "network", labelKey: "settings.nav.network" },
+        { key: "accounts", labelKey: "settings.nav.accounts" },
+        { key: "backups", labelKey: "settings.nav.backups" },
+      ],
+    },
+    {
+      groupKey: "settings.nav.groupAdvanced",
+      items: [
+        { key: "updates", labelKey: "settings.nav.updates" },
+        { key: "dev", labelKey: "settings.nav.dev" },
+        { key: "about", labelKey: "settings.nav.about" },
+      ],
+    },
+  ];
 
   interface Props {
     runtime: MoyuRuntime;
@@ -78,6 +117,9 @@
   let pendingAccountRemove = $state<string | null>(null);
   let msLogin = $state<DeviceCodeInfo | null>(null);
   let msCodeCopied = $state(false);
+  let subPage = $state<SettingsPage>(
+    (consumeSettingsPage() as SettingsPage | null) ?? "general",
+  );
   let cliEnabled = $state(false);
   let updateChecks = $state(true);
   let checkingUpdates = $state(false);
@@ -630,22 +672,49 @@
   {onToggleMaximize}
   {onClose}
 >
-  <main class="content java-content" data-scroll-region="main">
-    <header class="task-center-heading">
-      <div>
-        <h1>{t("settings.java.heading")}</h1>
-        <p>{t("settings.java.description")}</p>
-      </div>
-    </header>
+  <main class="content settings-content">
+    <div class="settings-layout">
+      <nav class="settings-nav" aria-label={t("settings.nav.aria")}>
+        {#each SETTINGS_NAV as group}
+          <div class="sn-group">{t(group.groupKey)}</div>
+          {#each group.items as item}
+            <button
+              class="sn-item"
+              class:active={subPage === item.key}
+              aria-current={subPage === item.key ? "page" : undefined}
+              onclick={() => { subPage = item.key; }}
+            >{t(item.labelKey)}</button>
+          {/each}
+        {/each}
+      </nav>
 
-    {#if errorMessage}
-      <div class="error-block" role="alert"><strong>{t("settings.error.title")}</strong><span>{errorMessage}</span></div>
-    {/if}
-    {#if notice}
-      <div class="java-notice" role="status">{notice}</div>
-    {/if}
+      <div class="settings-main" data-scroll-region="main">
+        {#if errorMessage}
+          <div class="error-block" role="alert"><strong>{t("settings.error.title")}</strong><span>{errorMessage}</span></div>
+        {/if}
+        {#if notice}
+          <div class="java-notice" role="status">{notice}</div>
+        {/if}
 
-    <section class="backup-settings" aria-labelledby="appearance-title">
+        {#if subPage === "general"}
+          <section class="backup-settings" aria-labelledby="general-title">
+            <header>
+              <div>
+                <h2 id="general-title">{t("settings.general.title")}</h2>
+                <p>{t("settings.general.description")}</p>
+              </div>
+            </header>
+            <dl class="about-grid">
+              <div><dt>{t("settings.general.dataDirectory")}</dt><dd>{settings.dataDirectory}</dd></div>
+              <div><dt>{t("settings.general.isolation")}</dt><dd>{settings.instanceIsolationEnabled ? t("settings.general.isolationOn") : t("settings.general.isolationOff")}</dd></div>
+              <div><dt>{t("settings.general.telemetry")}</dt><dd>{t("settings.general.telemetryOff")}</dd></div>
+              <div><dt>{t("settings.general.version")}</dt><dd>0.1.0-preview.1</dd></div>
+            </dl>
+          </section>
+        {/if}
+
+        {#if subPage === "appearance"}
+          <section class="backup-settings" aria-labelledby="appearance-title">
       <header>
         <div>
           <h2 id="appearance-title">{t("appearance.title")}</h2>
@@ -750,7 +819,9 @@
         </div>
       </div>
     </section>
+        {/if}
 
+        {#if subPage === "accounts"}
     <section class="backup-settings" aria-labelledby="accounts-title">
       <header>
         <div>
@@ -858,7 +929,9 @@
         </div>
       {/if}
     </section>
+        {/if}
 
+        {#if subPage === "updates"}
     <section class="backup-settings" aria-labelledby="update-title">
       <header>
         <div>
@@ -915,7 +988,9 @@
         </div>
       {/if}
     </section>
+        {/if}
 
+        {#if subPage === "dev"}
     <section class="backup-settings" aria-labelledby="dev-title">
       <header>
         <div>
@@ -943,7 +1018,9 @@
         </div>
       {/if}
     </section>
+        {/if}
 
+        {#if subPage === "backups"}
     <section class="backup-settings" aria-labelledby="backup-settings-title">
       <header>
         <div>
@@ -976,60 +1053,93 @@
         </label>
       </div>
     </section>
+        {/if}
 
-    {#if environments.length === 0 && deletedEnvironments.length === 0}
-      <section class="task-empty"><Icon name="box" size={28} /><h2>{t("settings.java.emptyTitle")}</h2><p>{t("settings.java.emptyDescription")}</p></section>
-    {:else}
-      <div class="task-list">
-        {#each environments as environment}
-          <article class="task-card java-card">
+        {#if subPage === "network"}
+          <SettingsNetwork {runtime} />
+        {/if}
+
+        {#if subPage === "java"}
+          <section class="backup-settings" aria-labelledby="java-title">
             <header>
               <div>
-                <strong>{distributionName(environment)} {environment.fullVersion}</strong>
-                <small>{environment.architecture} · {formatBytes(environment.sizeBytes)}</small>
+                <h2 id="java-title">{t("settings.java.heading")}</h2>
+                <p>{t("settings.java.description")}</p>
               </div>
-              <span class="task-state" class:java-missing={!environment.healthy}>{statusLabel(environment)}</span>
             </header>
-            <p class="java-home"><code>{environment.homeDirectory}</code></p>
-            {#if environment.referencingInstances.length > 0}
-              <p class="java-refs">
-                {t("settings.java.refs").replace("{names}", environment.referencingInstances.map((entry) => entry.name).join(t("settings.java.namesSeparator")))}
-              </p>
-            {:else}
-              <p class="java-refs muted">{t("settings.java.noRefs")}</p>
-            {/if}
-            <div class="task-buttons">
-              <button class="button ghost compact" disabled={busy === environment.id} onclick={() => void verify(environment)}>{t("settings.java.verify")}</button>
-              <button class="button ghost compact" disabled={busy === environment.id} onclick={() => void openLocation(environment)}>{t("settings.java.openLocation")}</button>
-              <button
-                class="button ghost compact"
-                disabled={busy === environment.id || instances.length === 0}
-                onclick={() => {
-                  assignTarget = assignTarget === environment.id ? "" : environment.id;
-                  assignInstance = instances[0]?.id ?? "";
-                }}
-              >{t("settings.java.assign")}</button>
-              <button class="button danger-subtle compact" disabled={busy === environment.id} onclick={() => void requestDelete(environment)}>{t("settings.java.delete")}</button>
-            </div>
-            {#if assignTarget === environment.id}
-              <div class="java-assign" role="group" aria-label={t("settings.java.assignAria")}>
-                <label>
-                  {t("settings.java.assignTarget")}
-                  <select bind:value={assignInstance}>
-                    {#each instances as instance}
-                      <option value={instance.id}>{t("settings.java.instanceOption").replace("{name}", instance.name).replace("{version}", instance.gameVersion).replace("{loader}", instance.loaderKind)}</option>
-                    {/each}
-                  </select>
-                </label>
-                <button class="button primary compact" disabled={busy === environment.id || !assignInstance} onclick={() => void applyAssignment(environment)}>{t("settings.java.assignConfirm")}</button>
-                <small>{t("settings.java.assignHint")}</small>
-              </div>
-            {/if}
-          </article>
-        {/each}
+          </section>
+    {#if environments.length === 0 && deletedEnvironments.length === 0}
+      <section class="task-empty"><Icon name="box" size={28} /><h2>{t("settings.java.emptyTitle")}</h2><p>{t("settings.java.emptyDescription")}</p></section>
+    {:else if environments.length > 0}
+      <div class="java-table-wrap">
+        <table class="java-table">
+          <thead>
+            <tr>
+              <th>{t("settings.java.colRuntime")}</th>
+              <th>{t("settings.java.colArch")}</th>
+              <th>{t("settings.java.colSize")}</th>
+              <th>{t("settings.java.colRefs")}</th>
+              <th>{t("settings.java.colPath")}</th>
+              <th>{t("settings.java.colActions")}</th>
+            </tr>
+          </thead>
+          <tbody>
+            {#each environments as environment}
+              <tr class:java-row-missing={!environment.healthy}>
+                <td>
+                  <div class="java-cell-main">
+                    <strong>{distributionName(environment)} {environment.fullVersion}</strong>
+                    <small class:java-missing={!environment.healthy}>{statusLabel(environment)}</small>
+                  </div>
+                </td>
+                <td class="mono">{environment.architecture}</td>
+                <td class="mono">{formatBytes(environment.sizeBytes)}</td>
+                <td>
+                  {#if environment.referencingInstances.length > 0}
+                    <span class="java-refs-badge" title={environment.referencingInstances.map((entry) => entry.name).join(t("settings.java.namesSeparator"))}>{t("settings.java.refsCount").replace("{count}", String(environment.referencingInstances.length))}</span>
+                  {:else}
+                    <span class="java-refs-none">{t("settings.java.noRefs")}</span>
+                  {/if}
+                </td>
+                <td class="java-cell-path mono" title={environment.homeDirectory}><code>{environment.homeDirectory}</code></td>
+                <td>
+                  <div class="task-buttons">
+                    <button class="button ghost compact" disabled={busy === environment.id} onclick={() => void verify(environment)}>{t("settings.java.verify")}</button>
+                    <button class="button ghost compact" disabled={busy === environment.id} onclick={() => void openLocation(environment)}>{t("settings.java.openLocation")}</button>
+                    <button
+                      class="button ghost compact"
+                      disabled={busy === environment.id || instances.length === 0}
+                      onclick={() => {
+                        assignTarget = assignTarget === environment.id ? "" : environment.id;
+                        assignInstance = instances[0]?.id ?? "";
+                      }}
+                    >{t("settings.java.assign")}</button>
+                    <button class="button danger-subtle compact" disabled={busy === environment.id} onclick={() => void requestDelete(environment)}>{t("settings.java.delete")}</button>
+                  </div>
+                  {#if assignTarget === environment.id}
+                    <div class="java-assign" role="group" aria-label={t("settings.java.assignAria")}>
+                      <label>
+                        {t("settings.java.assignTarget")}
+                        <select bind:value={assignInstance}>
+                          {#each instances as instance}
+                            <option value={instance.id}>{t("settings.java.instanceOption").replace("{name}", instance.name).replace("{version}", instance.gameVersion).replace("{loader}", instance.loaderKind)}</option>
+                          {/each}
+                        </select>
+                      </label>
+                      <button class="button primary compact" disabled={busy === environment.id || !assignInstance} onclick={() => void applyAssignment(environment)}>{t("settings.java.assignConfirm")}</button>
+                      <small>{t("settings.java.assignHint")}</small>
+                    </div>
+                  {/if}
+                </td>
+              </tr>
+            {/each}
+          </tbody>
+        </table>
       </div>
     {/if}
+        {/if}
 
+        {#if subPage === "about"}
     <section class="backup-settings" aria-labelledby="about-title">
       <header>
         <div>
@@ -1048,8 +1158,9 @@
         <span>{t("settings.about.unsignedBody")}</span>
       </div>
     </section>
+        {/if}
 
-    {#if deletedEnvironments.length > 0}
+        {#if subPage === "java" && deletedEnvironments.length > 0}
       <section class="java-deleted" aria-label={t("settings.java.deletedSectionTitle")}>
         <h2>{t("settings.java.deletedSectionTitle")}</h2>
         <p>{t("settings.java.deletedSectionDescription")}</p>
@@ -1074,6 +1185,8 @@
         </div>
       </section>
     {/if}
+      </div>
+    </div>
   </main>
 
   {#if deleteTarget}

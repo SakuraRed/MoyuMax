@@ -1,7 +1,7 @@
 <script lang="ts">
   import type { Snippet } from "svelte";
 
-  import { markAvatarFailed, shellAccount, skinAvatarUrl } from "../accounts.svelte";
+  import { markAvatarFailed, requestSettingsPage, shellAccount, skinAvatarUrl } from "../accounts.svelte";
   import { t, uiBackground, uiBackgroundImageUrl, uiContrast, uiMotion, uiTheme } from "../i18n.svelte";
   import type { NavigationKey } from "../runtime";
   import Icon from "./Icon.svelte";
@@ -114,7 +114,7 @@
           class="account"
           aria-label={t("shell.account.aria")}
           disabled={navigationDisabled}
-          onclick={() => onNavigate?.("settings")}
+          onclick={() => { requestSettingsPage("accounts"); onNavigate?.("settings"); }}
         >
           {#if avatarUrl}
             <img class="avatar avatar-img" src={avatarUrl} alt="" onerror={() => markAvatarFailed()} />
@@ -131,7 +131,7 @@
           class="account"
           aria-label={t("shell.account.aria")}
           disabled={navigationDisabled}
-          onclick={() => onNavigate?.("settings")}
+          onclick={() => { requestSettingsPage("accounts"); onNavigate?.("settings"); }}
         >
           <span class="avatar">?</span>
           <span><strong>{t("shell.account.notLoggedIn")}</strong><small>{t("shell.account.addHint")}</small></span>
