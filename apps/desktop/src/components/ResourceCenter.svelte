@@ -224,7 +224,7 @@
   }
 
   function kindLabel(kind: InstanceResourceKind): string {
-    return kind === "resourcepack" ? t("resources.kind.resourcepack") : kind === "shader" ? t("resources.kind.shader") : t("resources.kind.datapack");
+    return kind === "resourcepack" ? t("resources.kind.resourcepack") : kind === "shader" ? t("resources.kind.shader") : kind === "mod" ? t("resources.kind.mod") : t("resources.kind.datapack");
   }
 
   async function importResource(kind: InstanceResourceKind, worldName?: string): Promise<void> {

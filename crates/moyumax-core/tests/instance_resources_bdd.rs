@@ -343,6 +343,45 @@ fn m16_res_007_kind_filter_and_filename_validation() {
     assert!(error.to_string().contains("找不到"));
 }
 
+#[test]
+fn m16_res_008_mod_import_lands_in_mods_directory_and_roundtrips() {
+    let fixture = ResourceFixture::new();
+    let source = fixture.write_source("fabric-api.jar", b"mod-jar-bytes");
+
+    let resource = fixture
+        .service
+        .import_instance_resource(
+            &fixture.instance_id,
+            InstanceResourceKind::Mod,
+            &source,
+            None,
+        )
+        .expect("模组导入必须成功");
+
+    let target = fixture.instance_root.join(".minecraft/mods/fabric-api.jar");
+    assert_eq!(fs::read(&target).unwrap(), b"mod-jar-bytes");
+    assert_eq!(resource.kind, InstanceResourceKind::Mod);
+    assert_eq!(
+        resource.relative_path, ".minecraft/mods/fabric-api.jar",
+        "模组必须落在实例 mods 目录"
+    );
+    let mods = fixture
+        .service
+        .list_instance_resources(&fixture.instance_id, Some(InstanceResourceKind::Mod))
+        .unwrap();
+    assert_eq!(mods, vec![resource], "模组索引必须按种类过滤往返一致");
+    let error = fixture
+        .service
+        .import_instance_resource(
+            &fixture.instance_id,
+            InstanceResourceKind::Mod,
+            &fixture.write_source("fabric-api-2.jar", b"mod-jar-bytes-2"),
+            Some("world"),
+        )
+        .expect_err("模组不允许选择目标世界");
+    assert!(error.to_string().contains("只有数据包可以选择目标世界"));
+}
+
 struct ResourceFixture {
     directory: TempDir,
     database_path: PathBuf,

@@ -32,16 +32,26 @@ test("M12-FORGE-001 新建实例页可选择 Forge 与 NeoForge", async ({ page 
     "aria-checked",
     "true",
   );
-  const forgeField = page.getByRole("combobox", { name: "Forge 版本" });
-  await expect(forgeField).toHaveValue("58.1.20");
-  await forgeField.selectOption("58.1.19");
+  const forgeGroup = page.getByRole("radiogroup", { name: "Forge 版本", exact: true });
+  await expect(forgeGroup).toBeVisible();
+  await expect(
+    forgeGroup.getByRole("radio", { name: /58\.1\.20/ }),
+  ).toHaveAttribute("aria-checked", "true");
+  await forgeGroup.getByRole("radio", { name: "58.1.19", exact: true }).click();
+  await expect(
+    forgeGroup.getByRole("radio", { name: "58.1.19", exact: true }),
+  ).toHaveAttribute("aria-checked", "true");
   await expect(page.getByRole("textbox", { name: "实例名称" })).toHaveValue(
     "1.21.8 Forge",
   );
 
   await page.getByRole("radio", { name: /NeoForge / }).click();
-  const neoforgeField = page.getByRole("combobox", { name: "NeoForge 版本" });
-  await expect(neoforgeField).toHaveValue("21.8.54");
+  const neoforgeGroup = page.getByRole("radiogroup", { name: "NeoForge 版本", exact: true });
+  await expect(neoforgeGroup).toBeVisible();
+  await expect(
+    neoforgeGroup.getByRole("radio", { name: /21\.8\.54/ }),
+  ).toHaveAttribute("aria-checked", "true");
+  await expect(forgeGroup).toHaveCount(0);
   await expect(page.getByRole("textbox", { name: "实例名称" })).toHaveValue(
     "1.21.8 NeoForge",
   );

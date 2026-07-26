@@ -210,7 +210,9 @@
       ? t("resources.kind.resourcepack")
       : kind === "shader"
         ? t("resources.kind.shader")
-        : t("resources.kind.datapack");
+        : kind === "mod"
+          ? t("resources.kind.mod")
+          : t("resources.kind.datapack");
   }
 
   function formatBytes(bytes: number): string {

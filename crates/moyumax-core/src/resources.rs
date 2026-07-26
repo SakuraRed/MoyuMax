@@ -1,9 +1,10 @@
-//! 实例资源内容管理（资源包/光影/数据包）。
+//! 实例资源内容管理（资源包/光影/数据包/模组）。
 //!
 //! 资源文件直接落在实例目录内：资源包进入 `resourcepacks/`、光影进入
-//! `shaderpacks/`、数据包进入所选世界的 `datapacks/`。导入经过受管暂存与
-//! 原子 rename，索引写入与文件落位互为补偿；启用/停用通过 `.disabled`
-//! 后缀切换，游戏忽略该后缀文件。不做删除，删除随回收站扩展另行设计。
+//! `shaderpacks/`、数据包进入所选世界的 `datapacks/`、模组进入 `mods/`。
+//! 导入经过受管暂存与原子 rename，索引写入与文件落位互为补偿；
+//! 启用/停用通过 `.disabled` 后缀切换，游戏忽略该后缀文件。
+//! 不做删除，删除随回收站扩展另行设计。
 
 use std::{
     fs,
@@ -27,6 +28,7 @@ pub enum InstanceResourceKind {
     ResourcePack,
     Shader,
     Datapack,
+    Mod,
 }
 
 impl InstanceResourceKind {
@@ -35,6 +37,7 @@ impl InstanceResourceKind {
             Self::ResourcePack => "resourcepack",
             Self::Shader => "shader",
             Self::Datapack => "datapack",
+            Self::Mod => "mod",
         }
     }
 
@@ -43,6 +46,7 @@ impl InstanceResourceKind {
             "resourcepack" => Ok(Self::ResourcePack),
             "shader" => Ok(Self::Shader),
             "datapack" => Ok(Self::Datapack),
+            "mod" => Ok(Self::Mod),
             _ => Err(CoreError::InvalidStoredState(format!(
                 "未知资源类型：{value}"
             ))),
@@ -54,6 +58,7 @@ impl InstanceResourceKind {
             Self::ResourcePack => "资源包",
             Self::Shader => "光影包",
             Self::Datapack => "数据包",
+            Self::Mod => "模组",
         }
     }
 }
@@ -472,6 +477,7 @@ fn resource_target_directory(
             .join("saves")
             .join(world_name.unwrap_or_default())
             .join("datapacks"),
+        InstanceResourceKind::Mod => minecraft.join("mods"),
     }
 }
 

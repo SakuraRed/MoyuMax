@@ -134,6 +134,39 @@ async fn catalog_latest_file_prefers_release_and_validates_hashes() {
 }
 
 #[tokio::test]
+async fn catalog_project_version_file_returns_selected_version_primary_file() {
+    let (base_url, _server) = spawn_api(
+        |method, path, _body| {
+            assert_eq!(method, "GET");
+            assert_eq!(path, "/version/VER12345");
+            (
+                200,
+                serde_json::json!({
+                    "id": "VER12345", "project_id": "P7dR8mSH", "version_number": "0.91.0+1.21.8",
+                    "game_versions": ["1.21.8"], "loaders": ["fabric", "quilt"],
+                    "version_type": "release", "status": "listed",
+                    "date_published": "2026-07-01T00:00:00Z", "dependencies": [],
+                    "files": [{
+                        "hashes": {"sha1": "cccccccccccccccccccccccccccccccccccccccc", "sha512": "c".repeat(128)},
+                        "url": "https://cdn.example.com/fabric-api.jar",
+                        "filename": "fabric-api.jar", "primary": true, "size": 42
+                    }]
+                })
+                .to_string(),
+            )
+        },
+        None,
+    );
+    let client = ModrinthClient::with_base_url(&base_url).unwrap();
+
+    let file = client.project_version_file("VER12345").await.unwrap();
+
+    assert_eq!(file.filename, "fabric-api.jar");
+    assert_eq!(file.size, 42);
+    assert_eq!(file.sha1, "c".repeat(40));
+}
+
+#[tokio::test]
 async fn catalog_download_verifies_sha1_before_commit() {
     let payload = b"modpack-bytes".to_vec();
     let good_sha1 = hex_encode(&Sha1::digest(&payload));

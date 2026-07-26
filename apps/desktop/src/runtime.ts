@@ -337,7 +337,7 @@ export interface ContentUpdateInfo {
   file: ContentFilePlan;
 }
 
-export type InstanceResourceKind = "resourcepack" | "shader" | "datapack";
+export type InstanceResourceKind = "resourcepack" | "shader" | "datapack" | "mod";
 
 export interface InstanceResource {
   id: string;
@@ -826,11 +826,12 @@ export interface MoyuRuntime {
   getInstanceModpack(instanceId: string): Promise<InstalledModpack | null>;
   /** 在线整合包预览：下载并解析 Modrinth 整合包后返回预览，确认走 installModpack。 */
   previewOnlineModpack(projectId: string): Promise<ModpackPreviewResponse>;
-  /** 在线光影/资源包安装：按实例版本解析、下载校验后导入实例。 */
+  /** 在线光影/资源包/模组安装：按实例版本解析（可指定版本），下载校验后导入实例。 */
   installOnlineResource(
     instanceId: string,
     kind: InstanceResourceKind,
     projectId: string,
+    versionId?: string,
   ): Promise<InstanceResource>;
   /** 订阅整合包安装/更新进度事件，返回取消订阅函数。 */
   onModpackProgress(handler: (event: ModpackProgressEvent) => void): () => void;
@@ -1202,8 +1203,8 @@ function createTauriRuntime(): MoyuRuntime {
       invoke<InstalledModpack | null>("get_instance_modpack", { instanceId }),
     previewOnlineModpack: (projectId) =>
       invoke<ModpackPreviewResponse>("preview_online_modpack", { projectId }),
-    installOnlineResource: (instanceId, kind, projectId) =>
-      invoke<InstanceResource>("install_online_resource", { instanceId, kind, projectId }),
+    installOnlineResource: (instanceId, kind, projectId, versionId) =>
+      invoke<InstanceResource>("install_online_resource", { instanceId, kind, projectId, versionId }),
     onModpackProgress: (handler) => {
       let unlisten: (() => void) | undefined;
       void listen<ModpackProgressEvent>("modpack-progress", (event) => {
@@ -2308,13 +2309,14 @@ function createBrowserRuntime(): MoyuRuntime {
       window.localStorage.setItem("moyumax.browser.downloadedFiles", JSON.stringify(downloaded));
       return path;
     },
-    async installOnlineResource(instanceId, kind, projectId) {
-      if (!projectId) throw new Error("Modrinth 项目 ID 格式无效");      if (kind !== "resourcepack" && kind !== "shader") {
-        throw new Error("在线安装仅支持资源包与光影");
+    async installOnlineResource(instanceId, kind, projectId, _versionId) {
+      if (!projectId) throw new Error("Modrinth 项目 ID 格式无效");
+      if (kind !== "resourcepack" && kind !== "shader" && kind !== "mod") {
+        throw new Error("在线安装仅支持资源包、光影与模组");
       }
       const instance = browserInstances().find((candidate) => candidate.id === instanceId);
       if (!instance) throw new Error("目标实例不存在");
-      const fileName = `${projectId}.zip`;
+      const fileName = kind === "mod" ? `${projectId}.jar` : `${projectId}.zip`;
       const resources = browserInstanceResources();
       const resource: InstanceResource = {
         id: crypto.randomUUID(),
@@ -2325,7 +2327,9 @@ function createBrowserRuntime(): MoyuRuntime {
         relativePath:
           kind === "shader"
             ? `.minecraft/shaderpacks/${fileName}`
-            : `.minecraft/resourcepacks/${fileName}`,
+            : kind === "mod"
+              ? `.minecraft/mods/${fileName}`
+              : `.minecraft/resourcepacks/${fileName}`,
         size: 1024,
         sha256: "3".repeat(64),
         enabled: true,

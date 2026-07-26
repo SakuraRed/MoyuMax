@@ -439,6 +439,20 @@ impl ModrinthClient {
         })
     }
 
+    /// 指定版本的主文件（在线安装按用户选定版本安装用）。
+    /// 与 `latest_project_file` 走同一套主文件判定与摘要校验。
+    pub async fn project_version_file(&self, version_id: &str) -> Result<ModrinthVersionFile> {
+        let version = self.get_version(version_id).await?;
+        let plan = select_primary_file(&version)?;
+        Ok(ModrinthVersionFile {
+            url: plan.url,
+            filename: plan.filename,
+            sha1: plan.sha1,
+            sha512: plan.sha512,
+            size: plan.size,
+        })
+    }
+
     /// 流式下载项目文件到目标目录，SHA-1 校验后原子改名返回最终路径。
     pub async fn download_project_file(
         &self,
@@ -743,15 +757,7 @@ impl ModrinthClient {
         {
             return Err(CoreError::Content("保存文件名无效".to_owned()));
         }
-        let version = self.get_version(version_id).await?;
-        let plan = select_primary_file(&version)?;
-        let file = ModrinthVersionFile {
-            url: plan.url,
-            filename: plan.filename,
-            sha1: plan.sha1,
-            sha512: plan.sha512,
-            size: plan.size,
-        };
+        let file = self.project_version_file(version_id).await?;
         let target = target_dir.join(trimmed);
         if target.exists() {
             return Err(CoreError::Content(format!(

@@ -33,11 +33,15 @@ test("M11-QUILT-001 新建实例页可选择 Quilt 并完成安装预览", async
     "true",
   );
 
-  const versionField = page.getByRole("combobox", { name: /Quilt Loader 版本/ });
-  await expect(versionField).toBeVisible();
-  await expect(versionField).toHaveValue("0.30.0");
-  await versionField.selectOption("0.30.1-beta.1");
-  await expect(versionField).toHaveValue("0.30.1-beta.1");
+  const versionGroup = page.getByRole("radiogroup", { name: /Quilt Loader 版本/ });
+  await expect(versionGroup).toBeVisible();
+  await expect(
+    versionGroup.getByRole("radio", { name: /0\.30\.0/ }),
+  ).toHaveAttribute("aria-checked", "true");
+  await versionGroup.getByRole("radio", { name: "0.30.1-beta.1", exact: true }).click();
+  await expect(
+    versionGroup.getByRole("radio", { name: "0.30.1-beta.1", exact: true }),
+  ).toHaveAttribute("aria-checked", "true");
 
   await expect(page.getByRole("textbox", { name: "实例名称" })).toHaveValue(
     "1.21.8 Quilt",

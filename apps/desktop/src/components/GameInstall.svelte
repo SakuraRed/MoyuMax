@@ -19,6 +19,7 @@
     ModpackInstallReport,
     ModpackProgressEvent,
     ModpackPreviewResponse,
+    ModrinthVersionSummary,
     MoyuRuntime,
     NavigationKey,
     OnboardingSelection,
@@ -39,6 +40,10 @@
   }
 
   type InstallView = "loading" | "configure" | "previewing" | "confirm" | "queueing" | "queued";
+  type FoldLoaderKind = "forge" | "neoforge" | "fabric" | "quilt";
+
+  /** Modrinth 上 Fabric API 的项目 ID（PCL 同款附带安装对象）。 */
+  const FABRIC_API_PROJECT_ID = "P7dR8mSH";
 
   let {
     runtime,
@@ -77,6 +82,15 @@
   let expandedMajors = $state<Set<string>>(new Set());
   let showSnapshots = $state(false);
   let showOldVersions = $state(false);
+  let expandedLoader = $state<FoldLoaderKind | null>(null);
+  let fabricApiVersions = $state<ModrinthVersionSummary[]>([]);
+  let fabricApiEnabled = $state(false);
+  let fabricApiVersionId = $state("");
+  let fabricApiLoading = $state(false);
+  let fabricApiRequestSequence = 0;
+  let fabricApiInstall = $state<"idle" | "installing" | "done" | "failed">("idle");
+  let fabricApiInstallError = $state("");
+  let fabricApiInstallTriggered = false;
 
   /** 大版本号：1.21.4 → 1.21；26.2 → 26.2（两段及以下保持原样）。 */
   function majorOf(id: string): string {
@@ -84,10 +98,28 @@
     return parts.length >= 3 ? `${parts[0]}.${parts[1]}` : id;
   }
 
+  /** 最新快捷卡：最新正式版 +（快照开关打开且快照更新时的）最新快照。 */
+  const latestReleaseVersion = $derived(
+    (catalog?.versions ?? []).find((version) => version.id === catalog?.latestRelease) ??
+      (catalog?.versions ?? []).find((version) => version.releaseType === "release") ??
+      null,
+  );
+  const latestSnapshotVersion = $derived.by(() => {
+    const candidate =
+      (catalog?.versions ?? []).find((version) => version.id === catalog?.latestSnapshot) ??
+      (catalog?.versions ?? []).find((version) => version.releaseType === "snapshot") ??
+      null;
+    if (!candidate || !latestReleaseVersion) return null;
+    const snapshotTime = new Date(candidate.releaseTime).valueOf();
+    const releaseTime = new Date(latestReleaseVersion.releaseTime).valueOf();
+    return snapshotTime > releaseTime ? candidate : null;
+  });
+  const showLatestSnapshot = $derived(showSnapshots && latestSnapshotVersion !== null);
   const releaseGroups = $derived.by(() => {
     const groups = new Map<string, GameVersionSummary[]>();
     for (const version of (catalog?.versions ?? []).filter(
-      (candidate) => candidate.releaseType === "release",
+      (candidate) =>
+        candidate.releaseType === "release" && candidate.id !== latestReleaseVersion?.id,
     )) {
       const major = majorOf(version.id);
       if (!groups.has(major)) groups.set(major, []);
@@ -96,7 +128,11 @@
     return [...groups.entries()].map(([major, versions]) => ({ major, versions }));
   });
   const snapshotVersions = $derived(
-    (catalog?.versions ?? []).filter((version) => version.releaseType === "snapshot"),
+    (catalog?.versions ?? []).filter(
+      (version) =>
+        version.releaseType === "snapshot" &&
+        !(showLatestSnapshot && version.id === latestSnapshotVersion?.id),
+    ),
   );
   const oldVersions = $derived(
     (catalog?.versions ?? []).filter(
@@ -148,6 +184,10 @@
       selectedVersion = recommended;
       expandedMajors = new Set([majorOf(recommended.id)]);
       await loadLoaders(recommended, true);
+      if (loader.kind === "fabric" || loader.kind === "quilt") {
+        expandedLoader = loader.kind;
+        void loadFabricApi(loader.kind);
+      }
       installLeaping = true;
       setTimeout(() => {
         view = "configure";
@@ -187,6 +227,8 @@
   async function selectVersion(version: GameVersionSummary): Promise<void> {
     selectedVersion = version;
     loader = { kind: "vanilla" };
+    expandedLoader = null;
+    resetFabricApi();
     fabricLoaders = [];
     quiltLoaders = [];
     forgeVersions = [];
@@ -263,6 +305,8 @@
 
   function selectVanilla(): void {
     loader = { kind: "vanilla" };
+    expandedLoader = null;
+    resetFabricApi();
     updateGeneratedName();
   }
 
@@ -271,6 +315,7 @@
     if (!recommended) return;
     loader = { kind: "fabric", version: recommended.version };
     updateGeneratedName();
+    void loadFabricApi("fabric");
   }
 
   function selectQuilt(): void {
@@ -278,6 +323,7 @@
     if (!recommended) return;
     loader = { kind: "quilt", version: recommended.version };
     updateGeneratedName();
+    void loadFabricApi("quilt");
   }
 
   function selectForge(): void {
@@ -314,6 +360,78 @@
     updateGeneratedName();
   }
 
+  function currentLoaderVersion(): string | null {
+    return loader.kind === "vanilla" ? null : loader.version;
+  }
+
+  /** 折叠卡头：选中该加载器（未选时）并展开其版本列表、收起其他卡。 */
+  function selectLoaderKind(kind: FoldLoaderKind): void {
+    if (loader.kind !== kind) {
+      if (kind === "forge") selectForge();
+      else if (kind === "neoforge") selectNeoForge();
+      else if (kind === "fabric") selectFabric();
+      else selectQuilt();
+    }
+    expandedLoader = kind;
+  }
+
+  function toggleLoaderCard(kind: FoldLoaderKind): void {
+    expandedLoader = expandedLoader === kind ? null : kind;
+  }
+
+  function selectLoaderVersion(kind: FoldLoaderKind, version: string): void {
+    if (kind === "forge") selectForgeVersion(version);
+    else if (kind === "neoforge") selectNeoForgeVersion(version);
+    else if (kind === "fabric") selectFabricVersion(version);
+    else selectQuiltVersion(version);
+  }
+
+  /** 折叠卡右侧清除：回到不安装加载器的状态。 */
+  function clearLoaderSelection(): void {
+    loader = { kind: "vanilla" };
+    resetFabricApi();
+    updateGeneratedName();
+  }
+
+  async function loadFabricApi(kind: "fabric" | "quilt"): Promise<void> {
+    const version = selectedVersion;
+    if (!version) return;
+    const requestSequence = ++fabricApiRequestSequence;
+    fabricApiLoading = true;
+    fabricApiVersions = [];
+    fabricApiVersionId = "";
+    fabricApiEnabled = false;
+    try {
+      const versions = await runtime.listModrinthVersions(FABRIC_API_PROJECT_ID, version.id, kind);
+      if (requestSequence !== fabricApiRequestSequence || loader.kind !== kind || selectedVersion?.id !== version.id) return;
+      fabricApiVersions = versions;
+      fabricApiVersionId = versions[0]?.id ?? "";
+      fabricApiEnabled = kind === "fabric" && versions.length > 0;
+    } catch {
+      if (requestSequence !== fabricApiRequestSequence) return;
+      fabricApiVersions = [];
+    } finally {
+      if (requestSequence === fabricApiRequestSequence) fabricApiLoading = false;
+    }
+  }
+
+  function resetFabricApi(): void {
+    fabricApiRequestSequence += 1;
+    fabricApiLoading = false;
+    fabricApiVersions = [];
+    fabricApiVersionId = "";
+    fabricApiEnabled = false;
+    fabricApiInstall = "idle";
+    fabricApiInstallError = "";
+    fabricApiInstallTriggered = false;
+  }
+
+  function fabricApiSummary(): string {
+    if (fabricApiLoading) return t("install.fabricApi.loading");
+    const selected = fabricApiVersions.find((candidate) => candidate.id === fabricApiVersionId);
+    return selected?.versionNumber ?? t("install.fabricApi.none");
+  }
+
   function updateGeneratedName(): void {
     if (!nameEdited && selectedVersion) {
       instanceName = defaultInstanceName(selectedVersion.id, loader);
@@ -342,6 +460,9 @@
     if (!preview) return;
     view = "queueing";
     errorMessage = "";
+    fabricApiInstall = "idle";
+    fabricApiInstallError = "";
+    fabricApiInstallTriggered = false;
     try {
       task = await runtime.confirmInstallPreview(preview.id);
       view = "queued";
@@ -366,9 +487,31 @@
       if (refreshed && ["completed", "failed", "cancelled"].includes(refreshed.state)) {
         if (taskPoll) clearInterval(taskPoll);
         taskPoll = undefined;
+        if (refreshed.state === "completed") void installFabricApiAddon(refreshed);
       }
     } finally {
       taskPollRunning = false;
+    }
+  }
+
+  /** 安装任务完成后附带安装 Fabric API；失败不阻塞实例，仅给出可重试提示。 */
+  async function installFabricApiAddon(completedTask: InstallTask): Promise<void> {
+    if (fabricApiInstallTriggered || !fabricApiEnabled) return;
+    if (loader.kind !== "fabric" && loader.kind !== "quilt") return;
+    fabricApiInstallTriggered = true;
+    fabricApiInstall = "installing";
+    fabricApiInstallError = "";
+    try {
+      await runtime.installOnlineResource(
+        completedTask.plan.instanceId,
+        "mod",
+        FABRIC_API_PROJECT_ID,
+        fabricApiVersionId || undefined,
+      );
+      fabricApiInstall = "done";
+    } catch (error) {
+      fabricApiInstall = "failed";
+      fabricApiInstallError = error instanceof Error ? error.message : String(error);
     }
   }
 
@@ -485,6 +628,52 @@
             <div class="section-number">1</div>
             <div class="section-content">
               <h2 id="game-version-heading">{t("install.version.heading")}</h2>
+              {#if selectedVersion.releaseType === "snapshot"}
+                <div class="hint-banner" role="status">
+                  <Icon name="info" size={14} />
+                  <span>{t("install.hint.snapshot")}</span>
+                </div>
+              {:else if selectedVersion.releaseType === "oldBeta" || selectedVersion.releaseType === "oldAlpha"}
+                <div class="hint-banner" role="status">
+                  <Icon name="info" size={14} />
+                  <span>{t("install.hint.oldVersion")}</span>
+                </div>
+              {/if}
+              {#if latestReleaseVersion}
+                <div class="latest-card" role="group" aria-label={t("install.version.latestHeading")}>
+                  <strong class="latest-card-title">{t("install.version.latestHeading")}</strong>
+                  <div class="install-choice-list">
+                    <button
+                      class:selected={selectedVersion.id === latestReleaseVersion.id}
+                      class="install-choice-row"
+                      role="radio"
+                      aria-checked={selectedVersion.id === latestReleaseVersion.id}
+                      onclick={() => void selectVersion(latestReleaseVersion)}
+                    >
+                      <span class="radio-mark"></span>
+                      <span class="choice-copy">
+                        <strong>{latestReleaseVersion.id}<em>{t("install.version.latestReleaseTag")}</em></strong>
+                        <small>{releaseDescription(latestReleaseVersion)}</small>
+                      </span>
+                    </button>
+                    {#if showLatestSnapshot && latestSnapshotVersion}
+                      <button
+                        class:selected={selectedVersion.id === latestSnapshotVersion.id}
+                        class="install-choice-row"
+                        role="radio"
+                        aria-checked={selectedVersion.id === latestSnapshotVersion.id}
+                        onclick={() => void selectVersion(latestSnapshotVersion)}
+                      >
+                        <span class="radio-mark"></span>
+                        <span class="choice-copy">
+                          <strong>{latestSnapshotVersion.id}<em>{t("install.version.latestSnapshotTag")}</em></strong>
+                          <small>{releaseDescription(latestSnapshotVersion)}</small>
+                        </span>
+                      </button>
+                    {/if}
+                  </div>
+                </div>
+              {/if}
               <div class="version-groups" role="radiogroup" aria-label={t("install.version.heading")}>
                 {#each releaseGroups as group}
                   <div class="version-group">
@@ -591,70 +780,115 @@
             <div class="section-number">2</div>
             <div class="section-content">
               <h2 id="loader-heading">{t("install.loader.heading")}</h2>
-              <div class="loader-grid" role="radiogroup" aria-label={t("install.loader.groupAria")}>
+              <div class="loader-list" role="radiogroup" aria-label={t("install.loader.groupAria")}>
                 <button class:selected={loader.kind === "vanilla"} class="loader-card" role="radio" aria-checked={loader.kind === "vanilla"} onclick={selectVanilla}>
                   <span class="radio-mark"></span><strong>{t("install.loader.none")}</strong><small>{t("home.loader.vanilla")}</small>
                 </button>
-                <button class:selected={loader.kind === "forge"} class="loader-card" role="radio" aria-checked={loader.kind === "forge"} disabled={forgeVersions.length === 0} onclick={selectForge}>
-                  <span class="radio-mark"></span><strong>Forge</strong><small>{recommendedFabricLoader(forgeVersions)?.version ?? t("install.loader.unavailable")}{t("install.loader.recommendedSuffix")}</small>
-                </button>
-                <button class:selected={loader.kind === "neoforge"} class="loader-card" role="radio" aria-checked={loader.kind === "neoforge"} disabled={neoforgeVersions.length === 0} onclick={selectNeoForge}>
-                  <span class="radio-mark"></span><strong>NeoForge</strong><small>{recommendedFabricLoader(neoforgeVersions)?.version ?? t("install.loader.unavailable")}{t("install.loader.recommendedSuffix")}</small>
-                </button>
-                <button class:selected={loader.kind === "fabric"} class="loader-card" role="radio" aria-checked={loader.kind === "fabric"} disabled={fabricLoaders.length === 0} onclick={selectFabric}>
-                  <span class="radio-mark"></span><strong>Fabric</strong><small>{recommendedFabricLoader(fabricLoaders)?.version ?? t("install.loader.unavailable")}{t("install.loader.recommendedSuffix")}</small>
-                </button>
-                <button class:selected={loader.kind === "quilt"} class="loader-card" role="radio" aria-checked={loader.kind === "quilt"} disabled={quiltLoaders.length === 0} onclick={selectQuilt}>
-                  <span class="radio-mark"></span><strong>Quilt</strong><small>{recommendedFabricLoader(quiltLoaders)?.version ?? t("install.loader.unavailable")}{t("install.loader.recommendedSuffix")}</small>
-                </button>
+                {@render loaderFoldCard("forge", "Forge", forgeVersions, t("install.loader.forgeField"))}
+                {@render loaderFoldCard("neoforge", "NeoForge", neoforgeVersions, t("install.loader.neoforgeField"))}
+                {@render loaderFoldCard("fabric", "Fabric", fabricLoaders, t("install.loader.fabricField"))}
+                {@render loaderFoldCard("quilt", "Quilt", quiltLoaders, t("install.loader.quiltField"))}
               </div>
-              {#if loader.kind === "fabric"}
-                <label class="loader-version-field">
-                  {t("install.loader.fabricField")}
-                  <select value={loader.version} onchange={(event) => selectFabricVersion(event.currentTarget.value)}>
-                    {#each fabricLoaders as candidate}
-                      <option value={candidate.version}>{candidate.version}{candidate.recommended ? t("install.loader.recommendedTag") : ""}</option>
-                    {/each}
-                  </select>
-                  <small>{t("install.loader.fabricHint").replace("{version}", selectedVersion.id)}</small>
-                </label>
-              {/if}
-              {#if loader.kind === "quilt"}
-                <label class="loader-version-field">
-                  {t("install.loader.quiltField")}
-                  <select value={loader.version} onchange={(event) => selectQuiltVersion(event.currentTarget.value)}>
-                    {#each quiltLoaders as candidate}
-                      <option value={candidate.version}>{candidate.version}{candidate.recommended ? t("install.loader.recommendedTag") : ""}</option>
-                    {/each}
-                  </select>
-                  <small>{t("install.loader.quiltHint").replace("{version}", selectedVersion.id)}</small>
-                </label>
-              {/if}
-              {#if loader.kind === "forge"}
-                <label class="loader-version-field">
-                  {t("install.loader.forgeField")}
-                  <select value={loader.version} onchange={(event) => selectForgeVersion(event.currentTarget.value)}>
-                    {#each forgeVersions as candidate}
-                      <option value={candidate.version}>{candidate.version}{candidate.recommended ? t("install.loader.recommendedTag") : ""}</option>
-                    {/each}
-                  </select>
-                  <small>{t("install.loader.forgeHint").replace("{version}", selectedVersion.id)}</small>
-                </label>
-              {/if}
-              {#if loader.kind === "neoforge"}
-                <label class="loader-version-field">
-                  {t("install.loader.neoforgeField")}
-                  <select value={loader.version} onchange={(event) => selectNeoForgeVersion(event.currentTarget.value)}>
-                    {#each neoforgeVersions as candidate}
-                      <option value={candidate.version}>{candidate.version}{candidate.recommended ? t("install.loader.recommendedTag") : ""}</option>
-                    {/each}
-                  </select>
-                  <small>{t("install.loader.neoforgeHint").replace("{version}", selectedVersion.id)}</small>
-                </label>
+              {#if loader.kind === "fabric" || loader.kind === "quilt"}
+                <div class="fabric-api">
+                  {#if !fabricApiEnabled}
+                    <div class="hint-banner" class:danger={loader.kind === "fabric"} role="alert">
+                      <Icon name="info" size={14} />
+                      <span>{loader.kind === "fabric" ? t("install.fabricApi.warning") : t("install.fabricApi.quiltHint")}</span>
+                    </div>
+                  {/if}
+                  <div class="fabric-api-card">
+                    <div class="fabric-api-head">
+                      <strong>Fabric API</strong>
+                      <small>{fabricApiSummary()}</small>
+                      <label class="fabric-api-toggle">
+                        <input
+                          type="checkbox"
+                          checked={fabricApiEnabled}
+                          disabled={fabricApiLoading || fabricApiVersions.length === 0}
+                          onchange={(event) => { fabricApiEnabled = event.currentTarget.checked; }}
+                        />
+                        {t("install.fabricApi.enable")}
+                      </label>
+                    </div>
+                    {#if fabricApiEnabled && fabricApiVersions.length > 0}
+                      <div class="loader-version-list" role="radiogroup" aria-label="Fabric API">
+                        {#each fabricApiVersions as candidate}
+                          <button
+                            class="install-choice-row loader-version-row"
+                            class:selected={fabricApiVersionId === candidate.id}
+                            role="radio"
+                            aria-checked={fabricApiVersionId === candidate.id}
+                            onclick={() => { fabricApiVersionId = candidate.id; }}
+                          >
+                            <span class="radio-mark"></span>
+                            <span class="choice-copy">
+                              <strong>{candidate.versionNumber}</strong>
+                              <small>{candidate.versionType}</small>
+                            </span>
+                          </button>
+                        {/each}
+                      </div>
+                    {:else if !fabricApiLoading && fabricApiVersions.length === 0}
+                      <p class="hint fabric-api-note">{t("install.fabricApi.none")}</p>
+                    {/if}
+                  </div>
+                </div>
               {/if}
               {#if loaderMessage}<p class="hint">{loaderMessage}</p>{/if}
             </div>
           </section>
+
+          {#snippet loaderFoldCard(kind: FoldLoaderKind, name: string, versions: FabricLoaderSummary[], fieldLabel: string)}
+            {@const selected = loader.kind === kind}
+            {@const available = versions.length > 0}
+            {@const recommended = recommendedFabricLoader(versions)}
+            <div class="loader-card loader-fold" class:selected class:unavailable={!available}>
+              <div class="loader-fold-head">
+                <button
+                  class="loader-fold-main"
+                  role="radio"
+                  aria-checked={selected}
+                  disabled={!available}
+                  onclick={() => selectLoaderKind(kind)}
+                >
+                  <span class="radio-mark"></span>
+                  <strong>{name}</strong>
+                  <small>{selected ? (currentLoaderVersion() ?? "") : available ? `${recommended?.version ?? ""}${t("install.loader.recommendedSuffix")}` : t("install.loader.unavailable")}</small>
+                </button>
+                {#if selected}
+                  <button class="loader-clear" aria-label={t("install.loader.clear")} title={t("install.loader.clear")} onclick={clearLoaderSelection}>×</button>
+                {/if}
+                <button
+                  class="loader-expand"
+                  aria-label={fieldLabel}
+                  aria-expanded={expandedLoader === kind}
+                  disabled={!available}
+                  onclick={() => toggleLoaderCard(kind)}
+                >
+                  <span class="group-chevron" class:open={expandedLoader === kind}></span>
+                </button>
+              </div>
+              {#if expandedLoader === kind && available}
+                <div class="loader-version-list" role="radiogroup" aria-label={fieldLabel}>
+                  {#each versions as candidate}
+                    <button
+                      class="install-choice-row loader-version-row"
+                      class:selected={selected && currentLoaderVersion() === candidate.version}
+                      role="radio"
+                      aria-checked={selected && currentLoaderVersion() === candidate.version}
+                      onclick={() => selectLoaderVersion(kind, candidate.version)}
+                    >
+                      <span class="radio-mark"></span>
+                      <span class="choice-copy">
+                        <strong>{candidate.version}{#if candidate.recommended}<em>{t("install.loader.recommendedTag")}</em>{/if}</strong>
+                      </span>
+                    </button>
+                  {/each}
+                </div>
+              {/if}
+            </div>
+          {/snippet}
 
           <section class="install-section" aria-labelledby="instance-name-heading">
             <div class="section-number">3</div>
@@ -750,6 +984,20 @@
           {/if}
           <small>{t("install.queued.staging")}<code>{task.stagingDirectory}</code></small>
         </div>
+        {#if fabricApiInstall !== "idle"}
+          <div class="fabric-api-result">
+            {#if fabricApiInstall === "installing"}
+              <p class="fabric-api-status" role="status">{t("install.fabricApi.installing")}</p>
+            {:else if fabricApiInstall === "done"}
+              <p class="fabric-api-status done" role="status">{t("install.fabricApi.done")}</p>
+            {:else}
+              <div class="hint-banner" role="alert">
+                <Icon name="info" size={14} />
+                <span>{t("install.fabricApi.failed").replace("{error}", fabricApiInstallError)}</span>
+              </div>
+            {/if}
+          </div>
+        {/if}
         <button class="button primary" data-autofocus="true" onclick={onBack}>{t("settings.back")}</button>
       </section>
     {/if}

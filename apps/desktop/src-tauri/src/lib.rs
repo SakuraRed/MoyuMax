@@ -1785,7 +1785,8 @@ async fn download_modrinth_file(
     Ok(path.to_string_lossy().into_owned())
 }
 
-/// 在线光影/资源包安装：按实例游戏版本解析最新文件，下载校验后走
+/// 在线资源安装：资源包/光影/模组按实例约束解析文件（指定版本优先，
+/// 否则取最新兼容；模组额外按实例加载器过滤），下载校验后走
 /// M16 本地导入事务（同名拒绝、实例隔离、中断收敛）。
 #[tauri::command]
 async fn install_online_resource(
@@ -1793,12 +1794,10 @@ async fn install_online_resource(
     instance_id: String,
     kind: InstanceResourceKind,
     project_id: String,
+    version_id: Option<String>,
 ) -> Result<InstanceResource, String> {
-    if !matches!(
-        kind,
-        InstanceResourceKind::ResourcePack | InstanceResourceKind::Shader
-    ) {
-        return Err("在线安装仅支持资源包与光影".to_owned());
+    if matches!(kind, InstanceResourceKind::Datapack) {
+        return Err("数据包必须选择目标世界，请走本地导入".to_owned());
     }
     let instances = service
         .list_instances()
@@ -1808,10 +1807,26 @@ async fn install_online_resource(
         .find(|candidate| candidate.id == instance_id)
         .ok_or_else(|| "目标实例不存在".to_owned())?;
     let client = ModrinthClient::new().map_err(|error| error.to_string())?;
-    let file = client
-        .latest_project_file(&project_id, Some(&instance.game_version), None)
-        .await
-        .map_err(|error| error.to_string())?;
+    let loader_filter = match kind {
+        InstanceResourceKind::Mod if instance.loader_kind != "vanilla" => {
+            Some(instance.loader_kind.as_str())
+        }
+        _ => None,
+    };
+    let file = match version_id
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    {
+        Some(selected) => client
+            .project_version_file(selected)
+            .await
+            .map_err(|error| error.to_string())?,
+        None => client
+            .latest_project_file(&project_id, Some(&instance.game_version), loader_filter)
+            .await
+            .map_err(|error| error.to_string())?,
+    };
     let staging_directory = service
         .selected_data_directory()
         .map_err(|error| error.to_string())?
