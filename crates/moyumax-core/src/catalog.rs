@@ -10,7 +10,8 @@ use sha2::{Digest as Sha2Digest, Sha256};
 use crate::{
     AppService, ArtifactKind, CoreError, InstallProfile, InstallSelection, JavaArchitecture,
     JavaDistribution, LoaderChoice, ResolvedArtifact, ResolvedGameVersion, ResolvedInstallRequest,
-    ResolvedJavaPackage, ResolvedLoader, Result, read_install_profile, unix_timestamp,
+    ResolvedJavaPackage, ResolvedLoader, Result, SourceCandidates, SourcePolicy, candidates_for,
+    read_install_profile, unix_timestamp,
 };
 
 const VERSION_MANIFEST_CACHE_KEY: &str = "mojang-version-manifest-v2";
@@ -308,6 +309,7 @@ pub struct MetadataClient {
     bmclapi_base: String,
     forge_maven_base: String,
     neoforge_maven_base: String,
+    source_policy: SourcePolicy,
 }
 
 impl MetadataClient {
@@ -323,7 +325,15 @@ impl MetadataClient {
             bmclapi_base: BMCLAPI_BASE_URL.to_owned(),
             forge_maven_base: "https://maven.minecraftforge.net".to_owned(),
             neoforge_maven_base: "https://maven.neoforged.net/releases".to_owned(),
+            source_policy: SourcePolicy::default(),
         })
+    }
+
+    /// 设置下载源策略(安装器等较大文件下载按策略走镜像候选)。
+    #[must_use]
+    pub fn with_source_policy(mut self, policy: SourcePolicy) -> Self {
+        self.source_policy = policy;
+        self
     }
 
     /// 覆盖 Quilt 元数据基址,供本地契约测试使用。生产保持官方默认值。
@@ -771,18 +781,49 @@ impl MetadataClient {
     }
 
     /// 下载安装器并在内存中解析 spec-1 profile,返回 profile、version.json 与校验信息。
+    /// 安装器有十几 MB,客户端默认 15s 总超时必然中断(实测报
+    /// "error decoding response body"),这里按下载源策略走镜像候选并放宽到 180s。
     async fn download_installer(
         &self,
         url: &str,
     ) -> Result<(InstallProfile, serde_json::Value, String, u64)> {
-        let payload = self
-            .client
-            .get(url)
-            .send()
-            .await?
-            .error_for_status()?
-            .bytes()
-            .await?;
+        let candidates = match candidates_for(url, &self.source_policy) {
+            SourceCandidates::Ready(list) => list,
+            // 自定义源不覆盖该域名时按策略不切换来源,只走官方。
+            _ => vec![crate::DownloadCandidate {
+                url: url.to_owned(),
+                channel: crate::SourceChannel::Official,
+                label: "官方源".to_owned(),
+            }],
+        };
+        let mut attempts = Vec::new();
+        let mut payload = None;
+        for candidate in &candidates {
+            let result = self
+                .client
+                .get(&candidate.url)
+                .timeout(Duration::from_secs(180))
+                .send()
+                .await
+                .and_then(|response| response.error_for_status());
+            let result = match result {
+                Ok(response) => response.bytes().await.map_err(CoreError::Network),
+                Err(error) => Err(CoreError::Network(error)),
+            };
+            match result {
+                Ok(bytes) => {
+                    payload = Some(bytes);
+                    break;
+                }
+                Err(error) => attempts.push(format!("{}: {error}", candidate.label)),
+            }
+        }
+        let Some(payload) = payload else {
+            return Err(CoreError::Metadata(format!(
+                "安装器下载失败（{}）",
+                attempts.join("；")
+            )));
+        };
         let mut hasher = Sha1::new();
         Sha1Digest::update(&mut hasher, &payload);
         let installer_sha1 = encode_hex(Sha1Digest::finalize(hasher));
