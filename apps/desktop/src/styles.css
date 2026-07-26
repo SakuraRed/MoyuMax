@@ -5631,6 +5631,18 @@ summary:focus-visible {
   color: var(--text);
 }
 
+/* 实例导出整合包子页(mrpack) */
+
+.instance-export-name input {
+  width: 260px;
+}
+
+.instance-export-options {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px 20px;
+}
+
 .instance-empty {
   display: grid;
   justify-items: center;

@@ -548,6 +548,40 @@ export interface ModpackUpdateReport {
   keptUserModified: string[];
 }
 
+export interface ExportModpackOptions {
+  name: string;
+  version: string;
+  includeConfig: boolean;
+  includeResourcePacks: boolean;
+  includeShaders: boolean;
+  includeServers: boolean;
+  includeScreenshots: boolean;
+}
+
+export interface ExportModpackReport {
+  instanceId: string;
+  packName: string;
+  packVersion: string;
+  outputPath: string;
+  totalBytes: number;
+  /** 写入 files 引用的内容数（安装时按 URL 重新下载）。 */
+  referencedFiles: number;
+  /** 打入 overrides 的文件本体数。 */
+  bundledFiles: number;
+}
+
+/** 整合包导出文件名：过滤 Windows 非法字符与控制字符，末尾去点。 */
+export function sanitizeModpackFileName(name: string, version: string): string {
+  const clean = (value: string): string =>
+    value
+      .replace(/[\\/:*?"<>|\u0000-\u001F]/g, "-")
+      .trim()
+      .replace(/[. ]+$/, "");
+  const base = clean(name) || "modpack";
+  const suffix = clean(version) || "1.0.0";
+  return `${base}-${suffix}`;
+}
+
 export interface ModpackProgressEvent {
   stage: string;
   current: number;
@@ -878,6 +912,14 @@ export interface MoyuRuntime {
   installModpack(previewId: string): Promise<ModpackInstallReport>;
   updateModpack(instanceId: string, sourcePath: string): Promise<ModpackUpdateReport>;
   getInstanceModpack(instanceId: string): Promise<InstalledModpack | null>;
+  /** 打开原生保存对话框选择整合包导出位置；用户取消时返回 null。 */
+  pickModpackExportPath(packName: string, version: string): Promise<string | null>;
+  /** 把实例导出为 Modrinth mrpack 到指定路径。 */
+  exportInstanceModpack(
+    instanceId: string,
+    options: ExportModpackOptions,
+    destinationPath: string,
+  ): Promise<ExportModpackReport>;
   /** 在线整合包预览：下载并解析 Modrinth 整合包后返回预览，确认走 installModpack。 */
   previewOnlineModpack(projectId: string): Promise<ModpackPreviewResponse>;
   /** 在线光影/资源包/模组安装：按实例版本解析（可指定版本），下载校验后导入实例。 */
@@ -1281,6 +1323,19 @@ function createTauriRuntime(): MoyuRuntime {
       invoke<ModpackUpdateReport>("update_modpack", { instanceId, sourcePath }),
     getInstanceModpack: (instanceId) =>
       invoke<InstalledModpack | null>("get_instance_modpack", { instanceId }),
+    pickModpackExportPath: async (packName, version) => {
+      const { save } = await import("@tauri-apps/plugin-dialog");
+      return await save({
+        defaultPath: `${sanitizeModpackFileName(packName, version)}.mrpack`,
+        filters: [{ name: "Modrinth 整合包", extensions: ["mrpack"] }],
+      });
+    },
+    exportInstanceModpack: (instanceId, options, destinationPath) =>
+      invoke<ExportModpackReport>("export_instance_modpack", {
+        instanceId,
+        options,
+        destinationPath,
+      }),
     previewOnlineModpack: (projectId) =>
       invoke<ModpackPreviewResponse>("preview_online_modpack", { projectId }),
     installOnlineResource: (instanceId, kind, projectId, versionId) =>
@@ -2492,6 +2547,31 @@ function createBrowserRuntime(): MoyuRuntime {
     },
     async getInstanceModpack(instanceId) {
       return browserModpacks()[instanceId] ?? null;
+    },
+    async pickModpackExportPath(packName, version) {
+      return (
+        window.localStorage.getItem("moyumax.browser.pickedModpackExportPath") ??
+        `/mock/exports/${sanitizeModpackFileName(packName, version)}.mrpack`
+      );
+    },
+    async exportInstanceModpack(instanceId, options, destinationPath) {
+      if (!destinationPath.toLowerCase().endsWith(".mrpack")) {
+        throw new Error("导出目标必须是 .mrpack 文件");
+      }
+      const report: ExportModpackReport = {
+        instanceId,
+        packName: options.name,
+        packVersion: options.version,
+        outputPath: destinationPath,
+        totalBytes: 4096,
+        referencedFiles: 2,
+        bundledFiles: 3,
+      };
+      window.localStorage.setItem(
+        "moyumax.browser.lastModpackExport",
+        JSON.stringify({ options, destinationPath, report }),
+      );
+      return report;
     },
     onModpackProgress(handler) {
       browserModpackProgressHandlers.add(handler);

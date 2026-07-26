@@ -315,7 +315,7 @@ fn parse_modrinth_index(index: &[u8], archive: &mut ZipArchive<fs::File>) -> Res
             "整合包目标游戏不是 minecraft".to_owned(),
         ));
     }
-    if index.files.is_empty() || index.files.len() > MAX_PACK_FILES {
+    if index.files.len() > MAX_PACK_FILES {
         return Err(CoreError::Content(
             "整合包文件数量超出可接受范围".to_owned(),
         ));
@@ -474,7 +474,7 @@ fn normalize_loader_kind(kind: &str) -> Result<&str> {
     }
 }
 
-fn validate_pack_relative_path(path: &str) -> Result<String> {
+pub(crate) fn validate_pack_relative_path(path: &str) -> Result<String> {
     let relative = Path::new(path);
     let mut components = Vec::new();
     for component in relative.components() {

@@ -11,6 +11,7 @@
     InstanceWorldInfo,
     InstalledContent,
     InstalledModpack,
+    ExportModpackReport,
     JavaEnvironment,
     LaunchSession,
     LaunchSessionState,
@@ -53,7 +54,7 @@
     onClose,
   }: Props = $props();
 
-  type DetailTab = "overview" | "setup" | "mods" | "saves" | "screenshots" | "resourcepacks" | "shaders" | "servers" | "logs";
+  type DetailTab = "overview" | "setup" | "mods" | "saves" | "screenshots" | "resourcepacks" | "shaders" | "servers" | "logs" | "export";
   type ContentFilter = "all" | "enabled" | "disabled";
 
   const NAV_GROUPS: { groupKey: string; items: { key: DetailTab; labelKey: string }[] }[] = [
@@ -63,6 +64,7 @@
         { key: "overview", labelKey: "instanceDetail.nav.overview" },
         { key: "setup", labelKey: "instanceDetail.nav.setup" },
         { key: "logs", labelKey: "instanceDetail.nav.logs" },
+        { key: "export", labelKey: "instanceDetail.nav.export" },
       ],
     },
     {
@@ -148,6 +150,16 @@
   let savingMemory = $state(false);
   let savingAutoUpdate = $state(false);
   let assigningJava = $state(false);
+  // 导出整合包子页(PCL 4.5 简化版:Modrinth mrpack)。
+  let exportName = $state("");
+  let exportVersion = $state("1.0.0");
+  let exportIncludeConfig = $state(true);
+  let exportIncludeResourcePacks = $state(true);
+  let exportIncludeShaders = $state(true);
+  let exportIncludeServers = $state(false);
+  let exportIncludeScreenshots = $state(false);
+  let exporting = $state(false);
+  let exportReport = $state<ExportModpackReport | null>(null);
   let message = $state("");
   let errorMessage = $state("");
 
@@ -245,6 +257,7 @@
       worlds = worldList;
       screenshots = shotList;
       servers = serverList;
+      if (!exportName) exportName = current.name;
     } catch (error) {
       errorMessage = error instanceof Error ? error.message : String(error);
     } finally {
@@ -568,6 +581,40 @@
       errorMessage = error instanceof Error ? error.message : String(error);
     } finally {
       updatingPack = false;
+    }
+  }
+
+  async function startExport(): Promise<void> {
+    const current = instance;
+    if (!current || exporting) return;
+    clearMessages();
+    exportReport = null;
+    if (!exportName.trim() || !exportVersion.trim()) {
+      errorMessage = t("instanceDetail.export.invalidInput");
+      return;
+    }
+    const destination = await runtime.pickModpackExportPath(exportName, exportVersion);
+    if (!destination) return;
+    exporting = true;
+    try {
+      exportReport = await runtime.exportInstanceModpack(
+        current.id,
+        {
+          name: exportName,
+          version: exportVersion,
+          includeConfig: exportIncludeConfig,
+          includeResourcePacks: exportIncludeResourcePacks,
+          includeShaders: exportIncludeShaders,
+          includeServers: exportIncludeServers,
+          includeScreenshots: exportIncludeScreenshots,
+        },
+        destination,
+      );
+      message = t("instanceDetail.export.success");
+    } catch (error) {
+      errorMessage = error instanceof Error ? error.message : String(error);
+    } finally {
+      exporting = false;
     }
   }
 
@@ -1428,6 +1475,61 @@
                     <pre class="log-output">{logLines.join("\n")}</pre>
                   {/if}
                 </div>
+              {/if}
+            </section>
+          {:else if tab === "export"}
+            <section class="backup-settings" aria-labelledby="instance-export-title">
+              <header>
+                <div>
+                  <h2 id="instance-export-title">{t("instanceDetail.export.title")}</h2>
+                  <p>{t("instanceDetail.export.description")}</p>
+                </div>
+              </header>
+              <div class="instance-memory-inputs">
+                <label class="instance-export-name">
+                  <span>{t("instanceDetail.export.nameLabel")}</span>
+                  <input bind:value={exportName} type="text" aria-label={t("instanceDetail.export.nameAria")} />
+                </label>
+                <label>
+                  <span>{t("instanceDetail.export.versionLabel")}</span>
+                  <input bind:value={exportVersion} type="text" aria-label={t("instanceDetail.export.versionAria")} />
+                </label>
+              </div>
+              <div class="instance-export-options" role="group" aria-label={t("instanceDetail.export.optionsAria")}>
+                <label class="resource-enable-toggle">
+                  <input type="checkbox" bind:checked={exportIncludeConfig} aria-label={t("instanceDetail.export.optionConfigAria")} />
+                  <span>{t("instanceDetail.export.optionConfig")}</span>
+                </label>
+                <label class="resource-enable-toggle">
+                  <input type="checkbox" bind:checked={exportIncludeResourcePacks} aria-label={t("instanceDetail.export.optionResourcePacksAria")} />
+                  <span>{t("instanceDetail.export.optionResourcePacks")}</span>
+                </label>
+                <label class="resource-enable-toggle">
+                  <input type="checkbox" bind:checked={exportIncludeShaders} aria-label={t("instanceDetail.export.optionShadersAria")} />
+                  <span>{t("instanceDetail.export.optionShaders")}</span>
+                </label>
+                <label class="resource-enable-toggle">
+                  <input type="checkbox" bind:checked={exportIncludeServers} aria-label={t("instanceDetail.export.optionServersAria")} />
+                  <span>{t("instanceDetail.export.optionServers")}</span>
+                </label>
+                <label class="resource-enable-toggle">
+                  <input type="checkbox" bind:checked={exportIncludeScreenshots} aria-label={t("instanceDetail.export.optionScreenshotsAria")} />
+                  <span>{t("instanceDetail.export.optionScreenshots")}</span>
+                </label>
+              </div>
+              <p class="instance-card-note">{t("instanceDetail.export.hint")}</p>
+              <div class="task-buttons">
+                <button class="button primary" disabled={exporting} onclick={() => void startExport()}>
+                  {exporting ? t("instanceDetail.export.running") : t("instanceDetail.export.start")}
+                </button>
+              </div>
+              {#if exportReport}
+                <dl class="instance-meta" aria-label={t("instanceDetail.export.reportAria")}>
+                  <div><dt>{t("instanceDetail.export.reportPath")}</dt><dd><code>{exportReport.outputPath}</code></dd></div>
+                  <div><dt>{t("instanceDetail.export.reportSize")}</dt><dd>{formatBytes(exportReport.totalBytes)}</dd></div>
+                  <div><dt>{t("instanceDetail.export.reportReferenced")}</dt><dd>{exportReport.referencedFiles}</dd></div>
+                  <div><dt>{t("instanceDetail.export.reportBundled")}</dt><dd>{exportReport.bundledFiles}</dd></div>
+                </dl>
               {/if}
             </section>
           {/if}

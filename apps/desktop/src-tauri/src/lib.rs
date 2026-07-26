@@ -11,18 +11,18 @@ use moyumax_core::{
     AccountSummary, AppService, ArtifactDownloader, BootstrapState, ContentExecutor,
     ContentInstallPlan, ContentInstallTask, ContentUpdateInfo, CrashReportSummary,
     DiagnosticExportPreview, DiagnosticExportResult, DownloadInterrupt, ExitImpactSummary,
-    FabricLoaderSummary, InstallExecutor, InstallSelection, InstallTask, InstalledContent,
-    InstalledModpack, InstanceIsolation, InstanceResource, InstanceResourceKind,
-    InstanceScreenshot, InstanceServerEntry, InstanceWorldInfo, JavaArchitecture,
-    JavaDeleteOutcome, JavaDistribution, JavaEnvironmentSummary, LaunchExecution, LaunchLogRead,
-    LaunchOptions, LaunchSessionSummary, LoaderChoice, ManagedInstanceSummary, MciMirrorClient,
-    MetadataClient, MicrosoftAuthClient, MicrosoftLoginCancel, MinecraftServerStatus,
-    ModpackInstallReport, ModpackUpdateReport, ModrinthClient, ModrinthSearchPage,
-    ModrinthSearchQuery, ModrinthVersionSummary, OnboardingSelection, RecoveryDecision,
-    RecycleBinItem, RecyclePurgeResult, ReleaseInfo, ResolvedInstallRequest, ResolvedLoader,
-    ShellState, SourcePolicy, ThemePack, UiBackground, UpdateClient, VersionCatalog,
-    WindowCloseBehavior, WorldBackupSummary, YggdrasilClient, min_version_block,
-    run_launch_execution,
+    ExportModpackOptions, ExportModpackReport, FabricLoaderSummary, InstallExecutor,
+    InstallSelection, InstallTask, InstalledContent, InstalledModpack, InstanceIsolation,
+    InstanceResource, InstanceResourceKind, InstanceScreenshot, InstanceServerEntry,
+    InstanceWorldInfo, JavaArchitecture, JavaDeleteOutcome, JavaDistribution,
+    JavaEnvironmentSummary, LaunchExecution, LaunchLogRead, LaunchOptions, LaunchSessionSummary,
+    LoaderChoice, ManagedInstanceSummary, MciMirrorClient, MetadataClient, MicrosoftAuthClient,
+    MicrosoftLoginCancel, MinecraftServerStatus, ModpackInstallReport, ModpackUpdateReport,
+    ModrinthClient, ModrinthSearchPage, ModrinthSearchQuery, ModrinthVersionSummary,
+    OnboardingSelection, RecoveryDecision, RecycleBinItem, RecyclePurgeResult, ReleaseInfo,
+    ResolvedInstallRequest, ResolvedLoader, ShellState, SourcePolicy, ThemePack, UiBackground,
+    UpdateClient, VersionCatalog, WindowCloseBehavior, WorldBackupSummary, YggdrasilClient,
+    min_version_block, run_launch_execution,
 };
 use serde::Serialize;
 use tauri::{Emitter, Manager, State};
@@ -878,6 +878,22 @@ fn export_instance_world(
             &instance_id,
             &world_name,
             std::path::Path::new(&destination),
+        )
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+fn export_instance_modpack(
+    service: State<'_, AppService>,
+    instance_id: String,
+    options: ExportModpackOptions,
+    destination_path: String,
+) -> Result<ExportModpackReport, String> {
+    service
+        .export_instance_modpack(
+            &instance_id,
+            std::path::Path::new(&destination_path),
+            &options,
         )
         .map_err(|error| error.to_string())
 }
@@ -2673,6 +2689,7 @@ pub fn run() {
             set_instance_resource_enabled,
             list_instance_world_details,
             export_instance_world,
+            export_instance_modpack,
             import_instance_world,
             rollback_world_backup,
             create_manual_world_backup,
