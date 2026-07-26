@@ -14,14 +14,15 @@ use moyumax_core::{
     FabricLoaderSummary, InstallExecutor, InstallSelection, InstallTask, InstalledContent,
     InstalledModpack, InstanceIsolation, InstanceResource, InstanceResourceKind,
     InstanceScreenshot, InstanceServerEntry, InstanceWorldInfo, JavaArchitecture,
-    JavaDeleteOutcome, JavaDistribution, JavaEnvironmentSummary, LaunchExecution, LaunchOptions,
-    LaunchSessionSummary, LoaderChoice, ManagedInstanceSummary, MciMirrorClient, MetadataClient,
-    MicrosoftAuthClient, MicrosoftLoginCancel, MinecraftServerStatus, ModpackInstallReport,
-    ModpackUpdateReport, ModrinthClient, ModrinthSearchPage, ModrinthSearchQuery,
-    ModrinthVersionSummary, OnboardingSelection, RecoveryDecision, RecycleBinItem,
-    RecyclePurgeResult, ReleaseInfo, ResolvedInstallRequest, ResolvedLoader, ShellState,
-    SourcePolicy, ThemePack, UiBackground, UpdateClient, VersionCatalog, WindowCloseBehavior,
-    WorldBackupSummary, YggdrasilClient, min_version_block, run_launch_execution,
+    JavaDeleteOutcome, JavaDistribution, JavaEnvironmentSummary, LaunchExecution, LaunchLogRead,
+    LaunchOptions, LaunchSessionSummary, LoaderChoice, ManagedInstanceSummary, MciMirrorClient,
+    MetadataClient, MicrosoftAuthClient, MicrosoftLoginCancel, MinecraftServerStatus,
+    ModpackInstallReport, ModpackUpdateReport, ModrinthClient, ModrinthSearchPage,
+    ModrinthSearchQuery, ModrinthVersionSummary, OnboardingSelection, RecoveryDecision,
+    RecycleBinItem, RecyclePurgeResult, ReleaseInfo, ResolvedInstallRequest, ResolvedLoader,
+    ShellState, SourcePolicy, ThemePack, UiBackground, UpdateClient, VersionCatalog,
+    WindowCloseBehavior, WorldBackupSummary, YggdrasilClient, min_version_block,
+    run_launch_execution,
 };
 use serde::Serialize;
 use tauri::{Emitter, Manager, State};
@@ -2173,6 +2174,42 @@ fn list_launch_sessions(
         .map_err(|error| error.to_string())
 }
 
+/// 游戏日志副页的尾部跟随读取：按双通道字节偏移返回增量内容与最新会话状态。
+#[tauri::command]
+fn read_launch_log(
+    service: State<'_, AppService>,
+    session_id: String,
+    stdout_offset: u64,
+    stderr_offset: u64,
+) -> Result<LaunchLogRead, String> {
+    service
+        .read_launch_log(&session_id, stdout_offset, stderr_offset)
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+fn open_launch_log_location(
+    service: State<'_, AppService>,
+    session_id: String,
+) -> Result<(), String> {
+    let session = service
+        .list_launch_sessions()
+        .map_err(|error| error.to_string())?
+        .into_iter()
+        .find(|session| session.id == session_id)
+        .ok_or_else(|| "启动会话不存在".to_owned())?;
+    let path = std::path::Path::new(&session.stdout_path);
+    if !path.is_file() {
+        return Err("日志文件不存在或已删除".to_owned());
+    }
+    std::process::Command::new("explorer.exe")
+        .arg("/select,")
+        .arg(path)
+        .spawn()
+        .map_err(|error| format!("无法打开日志位置：{error}"))?;
+    Ok(())
+}
+
 #[tauri::command]
 fn list_crash_reports(service: State<'_, AppService>) -> Result<Vec<CrashReportSummary>, String> {
     service
@@ -2705,6 +2742,8 @@ pub fn run() {
             start_instance,
             stop_instance,
             list_launch_sessions,
+            read_launch_log,
+            open_launch_log_location,
             list_crash_reports,
             preview_diagnostic_export,
             confirm_diagnostic_export,

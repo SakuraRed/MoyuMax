@@ -13,6 +13,7 @@
     InstalledModpack,
     JavaEnvironment,
     LaunchSession,
+    LaunchSessionState,
     ManagedInstance,
     MinecraftServerStatus,
     MoyuRuntime,
@@ -28,6 +29,8 @@
     /** 当前实例；被回收等情况下为 null，组件自行退回首页。 */
     instance: ManagedInstance | null;
     launchSessions: LaunchSession[];
+    /** 进入详情页时定位的子页（如首页运行卡片直达 "logs"）。 */
+    initialTab?: string | null;
     onExit: () => void;
     onStateChanged: () => Promise<void>;
     onNavigate: (target: NavigationKey) => void;
@@ -41,6 +44,7 @@
     settings,
     instance,
     launchSessions,
+    initialTab = null,
     onExit,
     onStateChanged,
     onNavigate,
@@ -49,7 +53,7 @@
     onClose,
   }: Props = $props();
 
-  type DetailTab = "overview" | "setup" | "mods" | "saves" | "screenshots" | "resourcepacks" | "shaders" | "servers";
+  type DetailTab = "overview" | "setup" | "mods" | "saves" | "screenshots" | "resourcepacks" | "shaders" | "servers" | "logs";
   type ContentFilter = "all" | "enabled" | "disabled";
 
   const NAV_GROUPS: { groupKey: string; items: { key: DetailTab; labelKey: string }[] }[] = [
@@ -58,6 +62,7 @@
       items: [
         { key: "overview", labelKey: "instanceDetail.nav.overview" },
         { key: "setup", labelKey: "instanceDetail.nav.setup" },
+        { key: "logs", labelKey: "instanceDetail.nav.logs" },
       ],
     },
     {
@@ -146,7 +151,32 @@
   let message = $state("");
   let errorMessage = $state("");
 
+  // 游戏日志副页:双通道偏移尾部跟随,运行中会话每 2 秒轮询一次。
+  const LOG_POLL_INTERVAL_MS = 2_000;
+  const LOG_LINE_LIMIT = 5_000;
+  let logSessionId = $state("");
+  let logLines = $state<string[]>([]);
+  let logStdoutOffset = $state(0);
+  let logStderrOffset = $state(0);
+  let logTruncated = $state(false);
+  let logState = $state<LaunchSessionState | null>(null);
+  let logAutoScroll = $state(true);
+  let logCopied = $state(false);
+  let logStopping = $state(false);
+  let logViewport = $state<HTMLElement | null>(null);
+  let logTimer: ReturnType<typeof setInterval> | undefined;
+  let logCopyTimer: ReturnType<typeof setTimeout> | undefined;
+
   const instanceId = $derived(instance?.id ?? "");
+  const instanceSessions = $derived(
+    launchSessions.filter((session) => session.instanceId === instanceId),
+  );
+  const selectedLogSession = $derived(
+    instanceSessions.find((session) => session.id === logSessionId) ?? null,
+  );
+  const logSessionRunning = $derived(
+    logState !== null && ["starting", "running"].includes(logState),
+  );
   const activeSession = $derived(
     launchSessions.find(
       (session) =>
@@ -169,7 +199,17 @@
   );
 
   onMount(() => {
+    if (
+      initialTab &&
+      NAV_GROUPS.some((group) => group.items.some((item) => item.key === initialTab))
+    ) {
+      selectTab(initialTab as DetailTab);
+    }
     void loadDetail();
+    return () => {
+      stopLogPolling();
+      if (logCopyTimer !== undefined) clearTimeout(logCopyTimer);
+    };
   });
 
   // 实例被回收（或外部删除）后列表快照不再包含它，优雅退回首页。
@@ -219,6 +259,131 @@
     editingServer = null;
     message = "";
     errorMessage = "";
+    if (next === "logs") {
+      // 默认选中该实例最近一次启动会话(list 已按开始时间倒序)。
+      logSessionId = instanceSessions[0]?.id ?? "";
+      restartLogStream();
+    } else {
+      stopLogPolling();
+    }
+  }
+
+  function stopLogPolling(): void {
+    if (logTimer !== undefined) {
+      clearInterval(logTimer);
+      logTimer = undefined;
+    }
+  }
+
+  /** 进入日志副页或切换会话时从零偏移重读;仅运行中会话需要周期跟随。 */
+  function restartLogStream(): void {
+    stopLogPolling();
+    logLines = [];
+    logStdoutOffset = 0;
+    logStderrOffset = 0;
+    logTruncated = false;
+    logCopied = false;
+    const session = selectedLogSession;
+    logState = session?.state ?? null;
+    if (!session) return;
+    void pullLaunchLog();
+    if (["starting", "running"].includes(session.state)) {
+      logTimer = setInterval(() => void pullLaunchLog(), LOG_POLL_INTERVAL_MS);
+    }
+  }
+
+  async function pullLaunchLog(): Promise<void> {
+    const sessionId = logSessionId;
+    if (!sessionId) return;
+    try {
+      const read = await runtime.readLaunchLog(
+        sessionId,
+        logStdoutOffset,
+        logStderrOffset,
+      );
+      // 读取期间用户已切换会话,丢弃过期结果避免串台。
+      if (sessionId !== logSessionId) return;
+      logStdoutOffset = read.stdout.nextOffset;
+      logStderrOffset = read.stderr.nextOffset;
+      logTruncated = read.stdout.truncated || read.stderr.truncated;
+      const appended = [
+        ...splitLogContent(read.stdout.content),
+        ...splitLogContent(read.stderr.content),
+      ];
+      if (appended.length > 0) {
+        logLines = [...logLines, ...appended].slice(-LOG_LINE_LIMIT);
+        if (logAutoScroll) {
+          await tick();
+          if (logViewport) logViewport.scrollTop = logViewport.scrollHeight;
+        }
+      }
+      const wasRunning = logSessionRunning;
+      logState = read.state;
+      if (wasRunning && !logSessionRunning) {
+        stopLogPolling();
+        // 会话刚结束,同步父级快照让首页与详情状态一致。
+        await onStateChanged();
+      }
+    } catch (error) {
+      stopLogPolling();
+      errorMessage = error instanceof Error ? error.message : String(error);
+    }
+  }
+
+  /** 增量内容按行拆分;去掉末尾换行产生的空段。 */
+  function splitLogContent(content: string): string[] {
+    if (!content) return [];
+    const lines = content.split("\n");
+    if (lines[lines.length - 1] === "") lines.pop();
+    return lines;
+  }
+
+  function logSessionLabel(session: LaunchSession): string {
+    return `${formatSessionTime(session.startedAtUnixSeconds)} · ${sessionStateLabel(session.state)}`;
+  }
+
+  function formatSessionTime(unixSeconds: number): string {
+    return new Intl.DateTimeFormat(uiLanguage(), {
+      dateStyle: "medium",
+      timeStyle: "short",
+    }).format(new Date(unixSeconds * 1000));
+  }
+
+  async function copyLaunchLog(): Promise<void> {
+    try {
+      await navigator.clipboard.writeText(logLines.join("\n"));
+    } catch {
+      errorMessage = t("instanceDetail.logs.copyFailed");
+      return;
+    }
+    logCopied = true;
+    if (logCopyTimer !== undefined) clearTimeout(logCopyTimer);
+    logCopyTimer = setTimeout(() => {
+      logCopied = false;
+    }, 1600);
+  }
+
+  async function stopLogSession(): Promise<void> {
+    if (!instance) return;
+    logStopping = true;
+    errorMessage = "";
+    try {
+      await runtime.stopInstance(instance.id);
+      await onStateChanged();
+    } catch (error) {
+      errorMessage = error instanceof Error ? error.message : String(error);
+    } finally {
+      logStopping = false;
+    }
+  }
+
+  async function openLogLocation(): Promise<void> {
+    if (!logSessionId) return;
+    try {
+      await runtime.openLaunchLogLocation(logSessionId);
+    } catch (error) {
+      errorMessage = error instanceof Error ? error.message : String(error);
+    }
   }
 
   function loaderLabel(entry: ManagedInstance): string {
@@ -1192,6 +1357,76 @@
                       {/if}
                     </article>
                   {/each}
+                </div>
+              {/if}
+            </section>
+          {:else if tab === "logs"}
+            <section class="backup-settings" aria-labelledby="instance-logs-title">
+              <header>
+                <div>
+                  <h2 id="instance-logs-title">{t("instanceDetail.logs.title")}</h2>
+                  <p>{t("instanceDetail.logs.description")}</p>
+                </div>
+              </header>
+              {#if instanceSessions.length === 0}
+                <div class="resource-empty">
+                  <p>{t("instanceDetail.logs.empty")}</p>
+                </div>
+              {:else}
+                <div class="log-toolbar">
+                  <label class="log-session-picker">
+                    <span>{t("instanceDetail.logs.session")}</span>
+                    <select
+                      aria-label={t("instanceDetail.logs.sessionAria")}
+                      bind:value={logSessionId}
+                      onchange={() => restartLogStream()}
+                    >
+                      {#each instanceSessions as session}
+                        <option value={session.id}>{logSessionLabel(session)}</option>
+                      {/each}
+                    </select>
+                  </label>
+                  <label class="log-autoscroll">
+                    <input type="checkbox" bind:checked={logAutoScroll} />
+                    <span>{t("instanceDetail.logs.autoScroll")}</span>
+                  </label>
+                  <div class="log-actions">
+                    <button
+                      class="button ghost compact"
+                      disabled={logLines.length === 0}
+                      onclick={() => void copyLaunchLog()}
+                    >{logCopied ? t("instanceDetail.logs.copied") : t("instanceDetail.logs.copy")}</button>
+                    <button
+                      class="button ghost compact"
+                      onclick={() => void openLogLocation()}
+                    >{t("instanceDetail.logs.openLocation")}</button>
+                    <button
+                      class="button ghost compact"
+                      disabled={logLines.length === 0}
+                      onclick={() => { logLines = []; }}
+                    >{t("instanceDetail.logs.clear")}</button>
+                    {#if logSessionRunning}
+                      <button
+                        class="button danger-subtle compact"
+                        disabled={logStopping}
+                        onclick={() => void stopLogSession()}
+                      >{logStopping ? t("instanceDetail.logs.stopping") : t("instanceDetail.logs.stop")}</button>
+                    {/if}
+                  </div>
+                </div>
+                {#if logTruncated}
+                  <p class="log-truncated">{t("instanceDetail.logs.truncated")}</p>
+                {/if}
+                <div
+                  class="log-viewport"
+                  bind:this={logViewport}
+                  aria-label={t("instanceDetail.logs.viewportAria")}
+                >
+                  {#if logLines.length === 0}
+                    <p class="log-empty">{t("instanceDetail.logs.noOutput")}</p>
+                  {:else}
+                    <pre class="log-output">{logLines.join("\n")}</pre>
+                  {/if}
                 </div>
               {/if}
             </section>

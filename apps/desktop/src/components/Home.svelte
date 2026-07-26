@@ -31,7 +31,7 @@
     onInstall: () => void;
     onOpenTasks: () => void;
     onOpenCrash: (report: CrashReport) => void;
-    onManageInstance: (instance: ManagedInstance) => void;
+    onManageInstance: (instance: ManagedInstance, tab?: string) => void;
     onStateChanged: () => Promise<void>;
     onNavigate: (target: NavigationKey) => void;
     onMinimize: () => Promise<void>;
@@ -381,6 +381,11 @@
                     disabled={changingInstance === instance.id}
                     onclick={() => void stop(instance)}
                   >{changingInstance === instance.id ? t("home.launch.stopping") : t("home.launch.stop")}</button>
+                  <button
+                    class="button ghost"
+                    aria-label={t("home.launch.logsAria").replace("{name}", instance.name)}
+                    onclick={() => onManageInstance(instance, "logs")}
+                  >{t("home.launch.logs")}</button>
                 {:else}
                   <button
                     class="button primary large"

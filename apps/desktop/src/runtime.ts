@@ -580,6 +580,19 @@ export interface LaunchSession {
   postExitBackup?: WorldBackupSummary | null;
 }
 
+export interface LaunchLogChunk {
+  content: string;
+  nextOffset: number;
+  truncated: boolean;
+}
+
+export interface LaunchLogRead {
+  sessionId: string;
+  state: LaunchSessionState;
+  stdout: LaunchLogChunk;
+  stderr: LaunchLogChunk;
+}
+
 export type CrashCauseKind =
   | "outOfMemory"
   | "modConflict"
@@ -887,6 +900,14 @@ export interface MoyuRuntime {
   startInstance(instanceId: string): Promise<LaunchSession>;
   stopInstance(instanceId: string): Promise<void>;
   listLaunchSessions(): Promise<LaunchSession[]>;
+  /** 尾部跟随读取一次启动会话的游戏输出;偏移量按通道分别传入,单文件单次最多返回 2 MiB 尾部。 */
+  readLaunchLog(
+    sessionId: string,
+    stdoutOffset: number,
+    stderrOffset: number,
+  ): Promise<LaunchLogRead>;
+  /** 在系统文件管理器中选中该会话的游戏日志文件。 */
+  openLaunchLogLocation(sessionId: string): Promise<void>;
   listCrashReports(): Promise<CrashReport[]>;
   previewDiagnosticExport(reportId: string): Promise<DiagnosticExportPreview>;
   confirmDiagnosticExport(previewId: string): Promise<DiagnosticExportResult>;
@@ -932,6 +953,7 @@ const BROWSER_INSTANCES_KEY = "moyumax.browser.instances";
 const BROWSER_RECYCLE_BIN_KEY = "moyumax.browser.recycleBin";
 const BROWSER_WORLD_BACKUPS_KEY = "moyumax.browser.worldBackups";
 const BROWSER_LAUNCH_SESSIONS_KEY = "moyumax.browser.launchSessions";
+const BROWSER_LAUNCH_LOGS_KEY = "moyumax.browser.launchLogs";
 const BROWSER_CRASH_REPORTS_KEY = "moyumax.browser.crashReports";
 const BROWSER_CONTENT_TASKS_KEY = "moyumax.browser.contentTasks";
 const BROWSER_INSTALLED_CONTENT_KEY = "moyumax.browser.installedContent";
@@ -1293,6 +1315,14 @@ function createTauriRuntime(): MoyuRuntime {
     stopInstance: (instanceId) => invoke<void>("stop_instance", { instanceId }),
     listLaunchSessions: () =>
       invoke<LaunchSession[]>("list_launch_sessions"),
+    readLaunchLog: (sessionId, stdoutOffset, stderrOffset) =>
+      invoke<LaunchLogRead>("read_launch_log", {
+        sessionId,
+        stdoutOffset,
+        stderrOffset,
+      }),
+    openLaunchLogLocation: (sessionId) =>
+      invoke<void>("open_launch_log_location", { sessionId }),
     listCrashReports: () => invoke<CrashReport[]>("list_crash_reports"),
     previewDiagnosticExport: (reportId) =>
       invoke<DiagnosticExportPreview>("preview_diagnostic_export", { reportId }),
@@ -2793,6 +2823,13 @@ function createBrowserRuntime(): MoyuRuntime {
         BROWSER_LAUNCH_SESSIONS_KEY,
         JSON.stringify(sessions),
       );
+      // 模拟游戏进程的初始输出,日志副页立即可见内容。
+      const logs = browserLaunchLogs();
+      logs[sessionId] = {
+        stdout: `[MoyuMax] 浏览器模拟的游戏进程已启动,实例 ${instance.name}\n[Init] 正在加载游戏 ${instance.gameVersion}\n`,
+        stderr: "",
+      };
+      window.localStorage.setItem(BROWSER_LAUNCH_LOGS_KEY, JSON.stringify(logs));
       return session;
     },
     async stopInstance(instanceId) {
@@ -2822,6 +2859,24 @@ function createBrowserRuntime(): MoyuRuntime {
     },
     async listLaunchSessions() {
       return browserLaunchSessions();
+    },
+    async readLaunchLog(sessionId, stdoutOffset, stderrOffset) {
+      const session = browserLaunchSessions().find(
+        (candidate) => candidate.id === sessionId,
+      );
+      if (!session) throw new Error("启动会话不存在");
+      const entry = browserLaunchLogs()[sessionId] ?? { stdout: "", stderr: "" };
+      return {
+        sessionId,
+        state: session.state,
+        stdout: sliceLaunchLogChunk(entry.stdout, stdoutOffset),
+        stderr: sliceLaunchLogChunk(entry.stderr, stderrOffset),
+      };
+    },
+    async openLaunchLogLocation(sessionId) {
+      if (!browserLaunchSessions().some((candidate) => candidate.id === sessionId)) {
+        throw new Error("启动会话不存在");
+      }
     },
     async listCrashReports() {
       return browserCrashReports();
@@ -3410,6 +3465,36 @@ function createBrowserWorldBackup(
 function browserLaunchSessions(): LaunchSession[] {
   const serialized = window.localStorage.getItem(BROWSER_LAUNCH_SESSIONS_KEY);
   return serialized ? (JSON.parse(serialized) as LaunchSession[]) : [];
+}
+
+/** 浏览器 mock 的会话日志内容存储:会话 id → 两通道文本。 */
+function browserLaunchLogs(): Record<string, { stdout: string; stderr: string }> {
+  const serialized = window.localStorage.getItem(BROWSER_LAUNCH_LOGS_KEY);
+  return serialized
+    ? (JSON.parse(serialized) as Record<string, { stdout: string; stderr: string }>)
+    : {};
+}
+
+const BROWSER_LAUNCH_LOG_LIMIT_BYTES = 2 * 1024 * 1024;
+
+/** 与核心 read_log_chunk 对齐的字节偏移切片:尾部 2 MiB 上限 + UTF-8 字符边界保护。 */
+function sliceLaunchLogChunk(content: string, fromOffset: number): LaunchLogChunk {
+  const bytes = new TextEncoder().encode(content);
+  let start = Math.min(Math.max(0, fromOffset), bytes.length);
+  const truncated = bytes.length - start > BROWSER_LAUNCH_LOG_LIMIT_BYTES;
+  if (truncated) {
+    start = bytes.length - BROWSER_LAUNCH_LOG_LIMIT_BYTES;
+  }
+  if (start > 0) {
+    while (start < bytes.length && ((bytes[start] ?? 0) & 0b1100_0000) === 0b1000_0000) {
+      start += 1;
+    }
+  }
+  return {
+    content: new TextDecoder().decode(bytes.subarray(start)),
+    nextOffset: bytes.length,
+    truncated,
+  };
 }
 
 function browserJavaEnvironments(): JavaEnvironment[] {

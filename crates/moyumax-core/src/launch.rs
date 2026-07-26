@@ -1,6 +1,7 @@
 use std::{
     collections::HashMap,
     fmt, fs,
+    io::{Read as _, Seek, SeekFrom},
     path::{Component, Path, PathBuf},
     process::Stdio,
 };
@@ -193,6 +194,32 @@ pub struct LaunchSessionSummary {
     pub pre_launch_backup: Option<WorldBackupSummary>,
     #[serde(default)]
     pub post_exit_backup: Option<WorldBackupSummary>,
+}
+
+/// 单次日志增量读取的单文件上限（2 MiB 尾部），防止超大日志一次性进入内存。
+pub const LAUNCH_LOG_READ_LIMIT_BYTES: u64 = 2 * 1024 * 1024;
+
+/// 单个日志通道的一次增量读取结果。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LaunchLogChunk {
+    /// 自请求偏移起新增的内容（UTF-8 有损解码，截断时从完整字符边界开始）。
+    pub content: String,
+    /// 下次读取应传入的字节偏移（即读取时文件长度）。
+    pub next_offset: u64,
+    /// 请求偏移之前的内容因超过单次读取上限而被跳过。
+    pub truncated: bool,
+}
+
+/// 一次启动会话的双通道（stdout/stderr）增量读取结果。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LaunchLogRead {
+    pub session_id: String,
+    /// 读取时刻的会话状态；前端据此决定是否在会话结束后停止轮询。
+    pub state: LaunchSessionState,
+    pub stdout: LaunchLogChunk,
+    pub stderr: LaunchLogChunk,
 }
 
 pub struct LaunchExecution {
@@ -471,6 +498,30 @@ impl AppService {
                 self.backup_for_session(&session.id, BackupTrigger::PostExit)?;
         }
         Ok(sessions)
+    }
+
+    /// 按字节偏移增量读取一次启动会话的游戏输出（stdout/stderr 两通道）。
+    ///
+    /// 日志由游戏进程直接写入会话文件，本方法只负责尾部跟随式读取：
+    /// 单文件每次最多返回 [`LAUNCH_LOG_READ_LIMIT_BYTES`] 尾部内容，超出部分标记截断；
+    /// 文件缺失按空内容处理（会话刚创建时日志可能尚未落盘）。
+    pub fn read_launch_log(
+        &self,
+        session_id: &str,
+        stdout_offset: u64,
+        stderr_offset: u64,
+    ) -> Result<LaunchLogRead> {
+        let session = self
+            .list_launch_sessions()?
+            .into_iter()
+            .find(|session| session.id == session_id)
+            .ok_or_else(|| CoreError::Launch("启动会话不存在".to_owned()))?;
+        Ok(LaunchLogRead {
+            session_id: session.id,
+            state: session.state,
+            stdout: read_log_chunk(&session.stdout_path, stdout_offset)?,
+            stderr: read_log_chunk(&session.stderr_path, stderr_offset)?,
+        })
     }
 
     pub(crate) fn recover_interrupted_launch_sessions(&self) -> Result<()> {
@@ -997,6 +1048,55 @@ fn fallback_launch_options() -> LaunchOptions {
         minimum_memory_mib: 512,
         maximum_memory_mib: 2_048,
     }
+}
+
+/// 读取单个日志文件自 `from_offset` 起的增量内容。
+///
+/// 偏移超过当前文件长度时按文件末尾处理（例如日志被外部清理后重新写入）；
+/// 增量超过 [`LAUNCH_LOG_READ_LIMIT_BYTES`] 时只保留尾部并标记截断，
+/// 截断起点回退到完整 UTF-8 字符边界，避免产生半个字符的替换符。
+fn read_log_chunk(path: &str, from_offset: u64) -> Result<LaunchLogChunk> {
+    let path_ref = Path::new(path);
+    let length = match fs::metadata(path_ref) {
+        Ok(metadata) => metadata.len(),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            return Ok(LaunchLogChunk {
+                content: String::new(),
+                next_offset: 0,
+                truncated: false,
+            });
+        }
+        Err(error) => {
+            return Err(CoreError::Launch(format!(
+                "无法读取游戏日志 {path}：{error}"
+            )));
+        }
+    };
+    let mut start = from_offset.min(length);
+    let truncated = length - start > LAUNCH_LOG_READ_LIMIT_BYTES;
+    if truncated {
+        start = length - LAUNCH_LOG_READ_LIMIT_BYTES;
+    }
+    let mut buffer = Vec::new();
+    fs::File::open(path_ref)
+        .and_then(|mut file| {
+            file.seek(SeekFrom::Start(start))?;
+            file.read_to_end(&mut buffer)
+        })
+        .map_err(|error| CoreError::Launch(format!("无法读取游戏日志 {path}：{error}")))?;
+    if start > 0 {
+        // 从多字节字符中间开始读取时，跳过开头不完整的 UTF-8 续字节。
+        let continuation = buffer
+            .iter()
+            .take_while(|byte| (*byte & 0b1100_0000) == 0b1000_0000)
+            .count();
+        buffer.drain(..continuation);
+    }
+    Ok(LaunchLogChunk {
+        content: String::from_utf8_lossy(&buffer).into_owned(),
+        next_offset: length,
+        truncated,
+    })
 }
 
 fn absolute_directory(value: &str, label: &str) -> Result<PathBuf> {

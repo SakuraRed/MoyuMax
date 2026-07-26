@@ -50,6 +50,7 @@
   let crashReports = $state<CrashReport[]>([]);
   let selectedCrashReport = $state<CrashReport | null>(null);
   let selectedInstanceId = $state<string | null>(null);
+  let instanceDetailTab = $state<string | null>(null);
   let homeRefreshRunning = false;
   let tasksPaused = $state(false);
   let closeDialog = $state<{
@@ -294,13 +295,15 @@
     }
     selectedCrashReport = null;
     selectedInstanceId = null;
+    instanceDetailTab = null;
     phase = "home";
   }
 
   /** 打开实例详情副页；实例被回收等情况下由详情页回调 onExit 回首页。 */
-  function openInstanceDetail(instance: ManagedInstance): void {
+  function openInstanceDetail(instance: ManagedInstance, tab: string | null = null): void {
     notice = "";
     selectedInstanceId = instance.id;
+    instanceDetailTab = tab;
     phase = "instanceDetail";
   }
 
@@ -534,6 +537,7 @@
     {settings}
     instance={selectedInstance}
     {launchSessions}
+    initialTab={instanceDetailTab}
     onExit={() => void returnHome()}
     onStateChanged={refreshHomeState}
     onNavigate={navigate}
