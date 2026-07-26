@@ -530,6 +530,10 @@ async fn get_game_version_catalog(
     service: State<'_, AppService>,
     metadata: State<'_, MetadataClient>,
 ) -> Result<VersionCatalog, String> {
+    let metadata = metadata
+        .inner()
+        .clone()
+        .with_source_policy(service.download_source_policy().unwrap_or_default());
     match metadata.fetch_version_catalog().await {
         Ok(catalog) => {
             service
@@ -540,16 +544,20 @@ async fn get_game_version_catalog(
         Err(network_error) => service
             .cached_version_catalog()
             .map_err(|error| error.to_string())?
-            .ok_or_else(|| format!("无法连接官方版本服务，且本地没有可用缓存：{network_error}")),
+            .ok_or_else(|| format!("无法连接版本服务，且本地没有可用缓存：{network_error}")),
     }
 }
 
 #[tauri::command]
 async fn get_fabric_loaders(
+    service: State<'_, AppService>,
     metadata: State<'_, MetadataClient>,
     game_version: String,
 ) -> Result<Vec<FabricLoaderSummary>, String> {
     metadata
+        .inner()
+        .clone()
+        .with_source_policy(service.download_source_policy().unwrap_or_default())
         .compatible_fabric_loaders(&game_version)
         .await
         .map_err(|error| error.to_string())
@@ -557,10 +565,14 @@ async fn get_fabric_loaders(
 
 #[tauri::command]
 async fn get_quilt_loaders(
+    service: State<'_, AppService>,
     metadata: State<'_, MetadataClient>,
     game_version: String,
 ) -> Result<Vec<FabricLoaderSummary>, String> {
     metadata
+        .inner()
+        .clone()
+        .with_source_policy(service.download_source_policy().unwrap_or_default())
         .compatible_quilt_loaders(&game_version)
         .await
         .map_err(|error| error.to_string())

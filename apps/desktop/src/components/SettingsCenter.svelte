@@ -986,19 +986,18 @@
           />
         </label>
       </div>
-      <div class="backup-settings-grid" role="radiogroup" aria-label={t("settings.download.sourceAria")}>
-        <span>{t("settings.download.sourceLabel")}</span>
-        <label class="auto-update-toggle">
-          <input type="radio" name="source-policy" checked={sourcePolicyKind === "mirrorFirst"} onchange={() => void saveSourcePolicy("mirrorFirst")} />
-          <span>{t("settings.download.sourceMirrorFirst")}</span>
-        </label>
-        <label class="auto-update-toggle">
-          <input type="radio" name="source-policy" checked={sourcePolicyKind === "officialFirst"} onchange={() => void saveSourcePolicy("officialFirst")} />
-          <span>{t("settings.download.sourceOfficialFirst")}</span>
-        </label>
-        <label class="auto-update-toggle">
-          <input type="radio" name="source-policy" checked={sourcePolicyKind === "custom"} onchange={() => void saveSourcePolicy("custom")} />
-          <span>{t("settings.download.sourceCustom")}</span>
+      <div class="backup-settings-grid">
+        <label>
+          <span>{t("settings.download.sourceLabel")}</span>
+          <select
+            aria-label={t("settings.download.sourceAria")}
+            value={sourcePolicyKind}
+            onchange={(event) => void saveSourcePolicy(event.currentTarget.value as "mirrorFirst" | "officialFirst" | "custom")}
+          >
+            <option value="mirrorFirst">{t("settings.download.sourceMirrorFirst")}</option>
+            <option value="officialFirst">{t("settings.download.sourceOfficialFirst")}</option>
+            <option value="custom">{t("settings.download.sourceCustom")}</option>
+          </select>
         </label>
       </div>
       {#if sourcePolicyKind === "custom"}

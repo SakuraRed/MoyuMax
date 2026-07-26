@@ -25,11 +25,12 @@ async function openDownloadSettings(page: Page): Promise<void> {
   await expect(page.getByRole("heading", { name: "下载" })).toBeVisible();
 }
 
-test("SRC-001 默认内置镜像优先,可切换官方优先并持久化", async ({ page }) => {
+test("SRC-001 默认内置镜像优先,下拉切换官方优先并持久化", async ({ page }) => {
   await openDownloadSettings(page);
 
-  await expect(page.getByRole("radio", { name: /内置镜像优先/ })).toBeChecked();
-  await page.getByRole("radio", { name: /官方源优先/ }).click();
+  const sourceSelect = page.getByRole("combobox", { name: "下载源" });
+  await expect(sourceSelect).toHaveValue("mirrorFirst");
+  await sourceSelect.selectOption("officialFirst");
   await expect(page.locator(".java-notice").getByText("下载源已保存", { exact: false })).toBeVisible();
   const stored = await page.evaluate(() =>
     JSON.parse(window.localStorage.getItem("moyumax.browser.sourcePolicy") ?? "null"),
@@ -39,13 +40,13 @@ test("SRC-001 默认内置镜像优先,可切换官方优先并持久化", async
   // 回读:离开设置页再进入,选择保持
   await page.getByRole("button", { name: "首页", exact: true }).click();
   await openDownloadSettings(page);
-  await expect(page.getByRole("radio", { name: /官方源优先/ })).toBeChecked();
+  await expect(page.getByRole("combobox", { name: "下载源" })).toHaveValue("officialFirst");
 });
 
 test("SRC-002 自定义源校验与保存回读", async ({ page }) => {
   await openDownloadSettings(page);
 
-  await page.getByRole("radio", { name: "自定义源" }).click();
+  await page.getByRole("combobox", { name: "下载源" }).selectOption("custom");
   const minecraftInput = page.getByRole("textbox", { name: "Minecraft 镜像基址" });
   await expect(minecraftInput).toBeVisible();
 
@@ -73,7 +74,7 @@ test("SRC-002 自定义源校验与保存回读", async ({ page }) => {
 
   await page.getByRole("button", { name: "首页", exact: true }).click();
   await openDownloadSettings(page);
-  await expect(page.getByRole("radio", { name: "自定义源" })).toBeChecked();
+  await expect(page.getByRole("combobox", { name: "下载源" })).toHaveValue("custom");
   await expect(page.getByRole("textbox", { name: "Minecraft 镜像基址" })).toHaveValue(
     "https://bmclapi2.bangbang93.com",
   );

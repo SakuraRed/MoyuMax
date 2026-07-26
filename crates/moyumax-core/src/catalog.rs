@@ -369,15 +369,47 @@ impl MetadataClient {
     }
 
     pub async fn fetch_version_catalog(&self) -> Result<VersionCatalog> {
-        let payload = self
-            .client
-            .get(VERSION_MANIFEST_URL)
-            .send()
-            .await?
-            .error_for_status()?
-            .bytes()
-            .await?;
+        let payload = self.get_bytes_with_policy(VERSION_MANIFEST_URL).await?;
         parse_mojang_version_manifest(&payload, unix_timestamp())
+    }
+
+    /// 按下载源策略走镜像候选的 GET(版本清单/详情等小型元数据)。
+    /// 官方不可用时自动回退内置镜像;全部失败时汇总各渠道错误。
+    async fn get_bytes_with_policy(&self, url: &str) -> Result<Vec<u8>> {
+        let candidates = match candidates_for(url, &self.source_policy) {
+            SourceCandidates::Ready(list) => list,
+            // 自定义源不覆盖该域名时按策略不切换来源,只走官方。
+            _ => vec![crate::DownloadCandidate {
+                url: url.to_owned(),
+                channel: crate::SourceChannel::Official,
+                label: "官方源".to_owned(),
+            }],
+        };
+        let mut attempts = Vec::new();
+        for candidate in &candidates {
+            let result = self
+                .client
+                .get(&candidate.url)
+                .send()
+                .await
+                .and_then(|response| response.error_for_status());
+            let result = match result {
+                Ok(response) => response
+                    .bytes()
+                    .await
+                    .map(|bytes| bytes.to_vec())
+                    .map_err(CoreError::Network),
+                Err(error) => Err(CoreError::Network(error)),
+            };
+            match result {
+                Ok(bytes) => return Ok(bytes),
+                Err(error) => attempts.push(format!("{}: {error}", candidate.label)),
+            }
+        }
+        Err(CoreError::Metadata(format!(
+            "在线元数据获取失败（{}）",
+            attempts.join("；")
+        )))
     }
 
     pub async fn compatible_fabric_loaders(
@@ -386,14 +418,8 @@ impl MetadataClient {
     ) -> Result<Vec<FabricLoaderSummary>> {
         validate_metadata_component(game_version, "Minecraft 版本")?;
         let url = format!("{FABRIC_META_BASE_URL}/versions/loader/{game_version}");
-        let entries = self
-            .client
-            .get(url)
-            .send()
-            .await?
-            .error_for_status()?
-            .json::<Vec<RawFabricLoaderEntry>>()
-            .await?;
+        let payload = self.get_bytes_with_policy(&url).await?;
+        let entries = serde_json::from_slice::<Vec<RawFabricLoaderEntry>>(&payload)?;
         let recommended_index = entries.iter().position(|entry| entry.loader.stable);
         Ok(entries
             .into_iter()
@@ -414,14 +440,8 @@ impl MetadataClient {
     ) -> Result<Vec<FabricLoaderSummary>> {
         validate_metadata_component(game_version, "Minecraft 版本")?;
         let url = format!("{}/versions/loader/{game_version}", self.quilt_meta_base);
-        let entries = self
-            .client
-            .get(url)
-            .send()
-            .await?
-            .error_for_status()?
-            .json::<Vec<RawQuiltLoaderEntry>>()
-            .await?;
+        let payload = self.get_bytes_with_policy(&url).await?;
+        let entries = serde_json::from_slice::<Vec<RawQuiltLoaderEntry>>(&payload)?;
         let recommended_index = entries
             .iter()
             .position(|entry| !entry.loader.version.contains('-'));
@@ -476,14 +496,7 @@ impl MetadataClient {
         version: &GameVersionSummary,
     ) -> Result<ResolvedGameVersion> {
         validate_https_url(&version.metadata_url)?;
-        let payload = self
-            .client
-            .get(&version.metadata_url)
-            .send()
-            .await?
-            .error_for_status()?
-            .bytes()
-            .await?;
+        let payload = self.get_bytes_with_policy(&version.metadata_url).await?;
         let mut sha1 = Sha1::new();
         Sha1Digest::update(&mut sha1, &payload);
         let actual_sha1 = encode_hex(Sha1Digest::finalize(sha1));
