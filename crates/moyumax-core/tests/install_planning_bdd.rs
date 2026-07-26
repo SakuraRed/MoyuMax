@@ -269,3 +269,47 @@ fn catalog_shape_example() -> VersionCatalog {
         source: CatalogSource::Network,
     }
 }
+
+#[test]
+fn m2_install_006_dedupe_artifacts_merges_overlap_and_rejects_conflicts() {
+    use moyumax_core::dedupe_artifacts;
+
+    // NeoForge install_profile 与 version.json 的库列表重叠场景(实测
+    // commons-lang3 3.14.0):同路径同哈希应去重而不是报"重复目标路径"。
+    let artifact = |sha1: Option<&str>| ResolvedArtifact {
+        kind: ArtifactKind::Library,
+        relative_path:
+            "minecraft/libraries/org/apache/commons/commons-lang3/3.14.0/commons-lang3-3.14.0.jar"
+                .to_owned(),
+        url: "https://example.com/commons-lang3.jar".to_owned(),
+        size: 600_000,
+        sha1: sha1.map(str::to_owned),
+        sha256: None,
+        sha512: None,
+    };
+
+    let merged = dedupe_artifacts(vec![
+        artifact(Some("a".repeat(40).as_str())),
+        artifact(Some("a".repeat(40).as_str())),
+    ])
+    .expect("同路径同哈希必须去重");
+    assert_eq!(merged.len(), 1);
+
+    // 无哈希在前、有哈希在后:保留带哈希的记录。
+    let merged = dedupe_artifacts(vec![
+        artifact(None),
+        artifact(Some("b".repeat(40).as_str())),
+    ])
+    .expect("同路径互补哈希必须去重");
+    assert_eq!(merged.len(), 1);
+    assert_eq!(merged[0].sha1.as_deref(), Some("b".repeat(40).as_str()));
+
+    // 同路径不同哈希是真冲突,必须拒绝。
+    assert!(
+        dedupe_artifacts(vec![
+            artifact(Some("a".repeat(40).as_str())),
+            artifact(Some("b".repeat(40).as_str())),
+        ])
+        .is_err()
+    );
+}

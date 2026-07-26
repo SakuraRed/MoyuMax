@@ -1620,6 +1620,7 @@ impl InstallExecutor {
         if let JavaPlanAction::Install { package, .. } = &task.plan.java_action {
             initial_artifacts.push(package.clone());
         }
+        let initial_artifacts = dedupe_artifacts(initial_artifacts)?;
         validate_artifact_paths(&initial_artifacts)?;
 
         let base_total = initial_artifacts
@@ -2399,6 +2400,35 @@ fn copy_native_dlls(source: &Path, destination: &Path) -> Result<usize> {
         copied = copied.saturating_add(1);
     }
     Ok(copied)
+}
+
+/// 按目标路径去重(保持首次出现顺序)。
+/// NeoForge 的 install_profile 与 version.json 的库列表有重叠(如实测
+/// commons-lang3 3.14.0 两边都在),同一坐标指向同一文件属正常;仅当两条
+/// 同路径记录带不同 SHA-1 时才按冲突拒绝。同路径时优先保留带 SHA-1 的记录。
+#[doc(hidden)]
+pub fn dedupe_artifacts(artifacts: Vec<ResolvedArtifact>) -> Result<Vec<ResolvedArtifact>> {
+    let mut deduped: Vec<ResolvedArtifact> = Vec::with_capacity(artifacts.len());
+    for artifact in artifacts {
+        if let Some(existing) = deduped
+            .iter_mut()
+            .find(|existing| existing.relative_path == artifact.relative_path)
+        {
+            match (&existing.sha1, &artifact.sha1) {
+                (Some(first), Some(second)) if first != second => {
+                    return Err(CoreError::InvalidInstallRequest(format!(
+                        "安装计划存在冲突文件：{}",
+                        artifact.relative_path
+                    )));
+                }
+                (None, Some(_)) => *existing = artifact,
+                _ => {}
+            }
+            continue;
+        }
+        deduped.push(artifact);
+    }
+    Ok(deduped)
 }
 
 fn validate_artifact_paths(artifacts: &[ResolvedArtifact]) -> Result<()> {
