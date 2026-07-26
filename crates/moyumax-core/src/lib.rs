@@ -562,6 +562,17 @@ impl AppService {
                 ",
             )?;
         }
+        // v18:实例级启动内存配置（NULL 表示未设置，回退默认 512/2048 MiB）。
+        let version: i64 = connection.query_row("PRAGMA user_version", [], |row| row.get(0))?;
+        if version < 18 {
+            connection.execute_batch(
+                "
+                ALTER TABLE instances ADD COLUMN launch_min_memory_mib INTEGER;
+                ALTER TABLE instances ADD COLUMN launch_max_memory_mib INTEGER;
+                PRAGMA user_version = 18;
+                ",
+            )?;
+        }
         Ok(())
     }
 

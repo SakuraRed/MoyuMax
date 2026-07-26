@@ -726,6 +726,38 @@ fn get_installed_content(
 }
 
 #[tauri::command]
+fn set_installed_content_enabled(
+    service: State<'_, AppService>,
+    content_id: String,
+    enabled: bool,
+) -> Result<InstalledContent, String> {
+    service
+        .set_installed_content_enabled(&content_id, enabled)
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+fn get_instance_launch_options(
+    service: State<'_, AppService>,
+    instance_id: String,
+) -> Result<LaunchOptions, String> {
+    service
+        .instance_launch_options(&instance_id)
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+fn set_instance_launch_options(
+    service: State<'_, AppService>,
+    instance_id: String,
+    options: LaunchOptions,
+) -> Result<(), String> {
+    service
+        .set_instance_launch_options(&instance_id, &options)
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
 async fn check_content_updates(
     service: State<'_, AppService>,
     modrinth: State<'_, ModrinthClient>,
@@ -2042,14 +2074,9 @@ async fn start_instance(
         .map_err(|error| error.to_string())?;
     let preparation_service = service.clone();
     let execution = tauri::async_runtime::spawn_blocking(move || {
-        preparation_service.create_launch_execution(
-            &instance_id,
-            &account,
-            &LaunchOptions {
-                minimum_memory_mib: 512,
-                maximum_memory_mib: 2_048,
-            },
-        )
+        // 实例级启动内存配置；未单独设置时核心回退默认 512/2048 MiB。
+        let options = preparation_service.instance_launch_options(&instance_id)?;
+        preparation_service.create_launch_execution(&instance_id, &account, &options)
     })
     .await
     .map_err(|error| format!("后台启动检查中断：{error}"))?
@@ -2524,6 +2551,9 @@ pub fn run() {
             confirm_content_preview,
             get_content_install_tasks,
             get_installed_content,
+            set_installed_content_enabled,
+            get_instance_launch_options,
+            set_instance_launch_options,
             check_content_updates,
             plan_content_update,
             get_instance_content_auto_update,

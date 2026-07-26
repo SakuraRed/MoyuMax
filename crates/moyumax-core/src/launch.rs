@@ -117,7 +117,8 @@ impl LaunchAccount {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct LaunchOptions {
     pub minimum_memory_mib: u32,
     pub maximum_memory_mib: u32,
@@ -360,6 +361,58 @@ impl AppService {
             return Err(error.into());
         }
         Ok(LaunchExecution { session, prepared })
+    }
+
+    /// 实例的启动内存配置；实例未单独设置时回退默认 512/2048 MiB。
+    pub fn instance_launch_options(&self, instance_id: &str) -> Result<LaunchOptions> {
+        let connection = self.connection()?;
+        let row = connection
+            .query_row(
+                "SELECT launch_min_memory_mib, launch_max_memory_mib FROM instances WHERE id = ?1",
+                params![instance_id],
+                |row| Ok((row.get::<_, Option<i64>>(0)?, row.get::<_, Option<i64>>(1)?)),
+            )
+            .optional()?;
+        let Some((minimum, maximum)) = row else {
+            return Err(CoreError::Launch("实例不存在".to_owned()));
+        };
+        match (minimum, maximum) {
+            (Some(minimum), Some(maximum)) => {
+                let options = LaunchOptions {
+                    minimum_memory_mib: u32::try_from(minimum)
+                        .map_err(|_| CoreError::Launch("实例启动内存配置损坏".to_owned()))?,
+                    maximum_memory_mib: u32::try_from(maximum)
+                        .map_err(|_| CoreError::Launch("实例启动内存配置损坏".to_owned()))?,
+                };
+                validate_launch_options(&options)?;
+                Ok(options)
+            }
+            _ => Ok(fallback_launch_options()),
+        }
+    }
+
+    /// 持久化实例的启动内存配置；写入前复用启动校验规则，非法值拒绝。
+    pub fn set_instance_launch_options(
+        &self,
+        instance_id: &str,
+        options: &LaunchOptions,
+    ) -> Result<()> {
+        validate_launch_options(options)?;
+        let mut connection = self.connection()?;
+        let transaction = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let changed = transaction.execute(
+            "UPDATE instances SET launch_min_memory_mib = ?2, launch_max_memory_mib = ?3 WHERE id = ?1",
+            params![
+                instance_id,
+                i64::from(options.minimum_memory_mib),
+                i64::from(options.maximum_memory_mib)
+            ],
+        )?;
+        if changed == 0 {
+            return Err(CoreError::Launch("实例不存在".to_owned()));
+        }
+        transaction.commit()?;
+        Ok(())
     }
 
     pub fn list_launch_sessions(&self) -> Result<Vec<LaunchSessionSummary>> {
@@ -936,6 +989,14 @@ fn validate_launch_options(options: &LaunchOptions) -> Result<()> {
         ));
     }
     Ok(())
+}
+
+/// 实例未单独配置启动内存时的回退值（与桌面端历史默认一致）。
+fn fallback_launch_options() -> LaunchOptions {
+    LaunchOptions {
+        minimum_memory_mib: 512,
+        maximum_memory_mib: 2_048,
+    }
 }
 
 fn absolute_directory(value: &str, label: &str) -> Result<PathBuf> {

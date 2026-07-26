@@ -31,6 +31,7 @@
     onInstall: () => void;
     onOpenTasks: () => void;
     onOpenCrash: (report: CrashReport) => void;
+    onManageInstance: (instance: ManagedInstance) => void;
     onStateChanged: () => Promise<void>;
     onNavigate: (target: NavigationKey) => void;
     onMinimize: () => Promise<void>;
@@ -50,6 +51,7 @@
     onInstall,
     onOpenTasks,
     onOpenCrash,
+    onManageInstance,
     onStateChanged,
     onNavigate,
     onMinimize,
@@ -398,6 +400,11 @@
                   >{updatingPack === instance.id ? t("modpack.updating") : t("modpack.update")}</button>
                 {/if}
                 {#if !active}
+                  <button
+                    class="button ghost"
+                    aria-label={t("home.launch.manageAria").replace("{name}", instance.name)}
+                    onclick={() => onManageInstance(instance)}
+                  >{t("home.launch.manage")}</button>
                   <button
                     class="button danger-subtle"
                     aria-label={t("home.launch.recycleAria").replace("{name}", instance.name)}

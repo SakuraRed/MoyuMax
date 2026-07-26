@@ -9,6 +9,7 @@
   import DataCenter from "./components/DataCenter.svelte";
   import GameInstall from "./components/GameInstall.svelte";
   import Home from "./components/Home.svelte";
+  import InstanceCenter from "./components/InstanceCenter.svelte";
   import NetplayCenter from "./components/NetplayCenter.svelte";
   import Onboarding from "./components/Onboarding.svelte";
   import ResourceCenter from "./components/ResourceCenter.svelte";
@@ -33,7 +34,7 @@
   } from "./runtime";
   import { isRestorablePage, sanitizeShellState } from "./shell-state";
 
-  type Phase = "loading" | "onboarding" | "home" | "install" | "resources" | "netplay" | "tasks" | "data" | "backups" | "crash" | "settings" | "fatal";
+  type Phase = "loading" | "onboarding" | "home" | "install" | "resources" | "netplay" | "tasks" | "data" | "backups" | "crash" | "settings" | "instanceDetail" | "fatal";
 
   const runtime = createRuntime();
   let phase = $state<Phase>("loading");
@@ -48,6 +49,7 @@
   let launchSessions = $state<LaunchSession[]>([]);
   let crashReports = $state<CrashReport[]>([]);
   let selectedCrashReport = $state<CrashReport | null>(null);
+  let selectedInstanceId = $state<string | null>(null);
   let homeRefreshRunning = false;
   let tasksPaused = $state(false);
   let closeDialog = $state<{
@@ -291,7 +293,15 @@
       notice = `无法刷新任务：${error instanceof Error ? error.message : String(error)}`;
     }
     selectedCrashReport = null;
+    selectedInstanceId = null;
     phase = "home";
+  }
+
+  /** 打开实例详情副页；实例被回收等情况下由详情页回调 onExit 回首页。 */
+  function openInstanceDetail(instance: ManagedInstance): void {
+    notice = "";
+    selectedInstanceId = instance.id;
+    phase = "instanceDetail";
   }
 
   function openCrashReport(report: CrashReport): void {
@@ -382,6 +392,11 @@
       void persistShellState(0);
     }
   });
+
+  // 实例详情副页按 id 派生,实例被回收后为 null,由详情页自行退回首页。
+  const selectedInstance = $derived(
+    instances.find((instance) => instance.id === selectedInstanceId) ?? null,
+  );
 </script>
 
 {#if phase === "loading"}
@@ -420,6 +435,7 @@
     onInstall={openInstaller}
     onOpenTasks={() => phase = "tasks"}
     onOpenCrash={openCrashReport}
+    onManageInstance={openInstanceDetail}
     onStateChanged={refreshHomeState}
     onNavigate={navigate}
     onMinimize={() => runtime.minimizeWindow()}
@@ -507,6 +523,19 @@
     {settings}
     report={selectedCrashReport}
     instance={instances.find((instance) => instance.id === selectedCrashReport?.instanceId) ?? null}
+    onNavigate={navigate}
+    onMinimize={() => runtime.minimizeWindow()}
+    onToggleMaximize={() => runtime.toggleMaximizeWindow()}
+    onClose={() => runtime.closeWindow()}
+  />
+{:else if phase === "instanceDetail" && settings}
+  <InstanceCenter
+    {runtime}
+    {settings}
+    instance={selectedInstance}
+    {launchSessions}
+    onExit={() => void returnHome()}
+    onStateChanged={refreshHomeState}
     onNavigate={navigate}
     onMinimize={() => runtime.minimizeWindow()}
     onToggleMaximize={() => runtime.toggleMaximizeWindow()}

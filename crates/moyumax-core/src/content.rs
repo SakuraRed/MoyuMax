@@ -957,6 +957,32 @@ impl AppService {
         Ok(())
     }
 
+    /// 启用或停用实例已安装内容（Mod 等）；只更新索引标记，不改动已安装文件。
+    pub fn set_installed_content_enabled(
+        &self,
+        content_id: &str,
+        enabled: bool,
+    ) -> Result<InstalledContent> {
+        let connection = self.connection()?;
+        let changed = connection.execute(
+            "UPDATE installed_content SET enabled = ?2 WHERE id = ?1",
+            params![content_id, enabled],
+        )?;
+        if changed == 0 {
+            return Err(CoreError::Content("内容项不存在".to_owned()));
+        }
+        let instance_id: String = connection.query_row(
+            "SELECT instance_id FROM installed_content WHERE id = ?1",
+            params![content_id],
+            |row| row.get(0),
+        )?;
+        drop(connection);
+        self.list_installed_content(&instance_id)?
+            .into_iter()
+            .find(|entry| entry.id == content_id)
+            .ok_or_else(|| CoreError::Content("内容项不存在".to_owned()))
+    }
+
     /// 检查实例已安装内容的可用更新。只解析元数据,不下载任何文件。
     pub async fn check_content_updates(
         &self,

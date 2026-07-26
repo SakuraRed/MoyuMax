@@ -5085,3 +5085,126 @@ summary:focus-visible {
 .window[data-motion="reduce"] .netplay-float-dot {
   box-shadow: none;
 }
+
+/* ---------- 实例详情副页（InstanceCenter） ---------- */
+.sn-back {
+  margin-bottom: 10px;
+  border: 1px solid var(--border);
+  color: var(--text-2);
+}
+
+.sn-back:hover {
+  border-color: var(--border-strong);
+}
+
+.instance-overview-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+  gap: 14px;
+}
+
+.instance-info-card {
+  display: grid;
+  gap: 10px;
+  align-content: start;
+  padding: 16px 18px;
+  border: 1px solid var(--border);
+  border-radius: var(--r-md);
+  background: var(--surface-glass-strong);
+  backdrop-filter: blur(20px) saturate(1.2);
+  -webkit-backdrop-filter: blur(20px) saturate(1.2);
+}
+
+.instance-info-card h3 {
+  margin: 0;
+  font-size: 14px;
+}
+
+.instance-info-card p {
+  margin: 0;
+}
+
+.instance-card-note {
+  color: var(--text-3);
+  font-size: 12px;
+}
+
+.instance-meta {
+  display: grid;
+  gap: 8px;
+  margin: 0;
+}
+
+.instance-meta > div {
+  display: grid;
+  grid-template-columns: 76px 1fr;
+  gap: 10px;
+  align-items: baseline;
+}
+
+.instance-meta dt {
+  color: var(--text-3);
+  font-size: 12px;
+}
+
+.instance-meta dd {
+  margin: 0;
+  font-size: 13px;
+  overflow-wrap: anywhere;
+}
+
+.instance-field {
+  display: grid;
+  gap: 6px;
+}
+
+.instance-field > span,
+.instance-memory-inputs label > span {
+  color: var(--text-3);
+  font-size: 12px;
+}
+
+.instance-field select {
+  max-width: 360px;
+  padding: 8px 10px;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--r-sm);
+  background: var(--surface-2);
+  color: var(--text);
+}
+
+.instance-memory-inputs {
+  display: flex;
+  align-items: flex-end;
+  flex-wrap: wrap;
+  gap: 12px;
+}
+
+.instance-memory-inputs label {
+  display: grid;
+  gap: 6px;
+}
+
+.instance-memory-inputs input {
+  width: 140px;
+  padding: 8px 10px;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--r-sm);
+  background: var(--surface-2);
+  color: var(--text);
+}
+
+.instance-empty {
+  display: grid;
+  justify-items: center;
+  gap: 12px;
+  padding: 32px 18px;
+  border: 1px dashed var(--border-strong);
+  border-radius: var(--r-md);
+  color: var(--text-3);
+  text-align: center;
+}
+
+.instance-empty p {
+  margin: 0;
+}

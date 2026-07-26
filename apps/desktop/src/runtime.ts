@@ -163,6 +163,12 @@ export interface ManagedInstance {
   state: string;
 }
 
+/** 实例级启动内存配置（MiB）；未设置时核心回退 512/2048。 */
+export interface LaunchOptions {
+  minimumMemoryMib: number;
+  maximumMemoryMib: number;
+}
+
 export type RecycleItemKind = "instance" | "screenshot" | "resource" | "world";
 export type RecycleItemState = "moving" | "ready" | "restoring" | "purging" | "failed";
 
@@ -708,6 +714,11 @@ export interface MoyuRuntime {
   ): Promise<ContentInstallTask>;
   getInstanceContentAutoUpdate(instanceId: string): Promise<boolean>;
   setInstanceContentAutoUpdate(instanceId: string, enabled: boolean): Promise<void>;
+  /** 启用或停用实例已安装内容（Mod 等）；只更新索引标记。 */
+  setInstalledContentEnabled(contentId: string, enabled: boolean): Promise<InstalledContent>;
+  /** 实例级启动内存配置；未单独设置时返回回退默认 512/2048。 */
+  getInstanceLaunchOptions(instanceId: string): Promise<LaunchOptions>;
+  setInstanceLaunchOptions(instanceId: string, options: LaunchOptions): Promise<void>;
   listInstanceWorlds(instanceId: string): Promise<string[]>;
   listInstanceResources(instanceId: string): Promise<InstanceResource[]>;
   /** 打开原生文件选择器挑选要导入的资源文件；用户取消时返回 null。 */
@@ -884,6 +895,7 @@ const BROWSER_CONTENT_TASKS_KEY = "moyumax.browser.contentTasks";
 const BROWSER_INSTALLED_CONTENT_KEY = "moyumax.browser.installedContent";
 const BROWSER_CONTENT_UPDATES_KEY = "moyumax.browser.contentUpdates";
 const BROWSER_CONTENT_AUTO_UPDATE_KEY = "moyumax.browser.contentAutoUpdate";
+const BROWSER_LAUNCH_OPTIONS_KEY = "moyumax.browser.launchOptions";
 const BROWSER_INSTANCE_RESOURCES_KEY = "moyumax.browser.instanceResources";
 const BROWSER_INSTANCE_WORLDS_KEY = "moyumax.browser.instanceWorlds";
 const BROWSER_WORLD_DETAILS_KEY = "moyumax.browser.worldDetails";
@@ -987,6 +999,12 @@ function createTauriRuntime(): MoyuRuntime {
       invoke<boolean>("get_instance_content_auto_update", { instanceId }),
     setInstanceContentAutoUpdate: (instanceId, enabled) =>
       invoke<void>("set_instance_content_auto_update", { instanceId, enabled }),
+    setInstalledContentEnabled: (contentId, enabled) =>
+      invoke<InstalledContent>("set_installed_content_enabled", { contentId, enabled }),
+    getInstanceLaunchOptions: (instanceId) =>
+      invoke<LaunchOptions>("get_instance_launch_options", { instanceId }),
+    setInstanceLaunchOptions: (instanceId, options) =>
+      invoke<void>("set_instance_launch_options", { instanceId, options }),
     listInstanceWorlds: (instanceId) =>
       invoke<string[]>("list_instance_worlds", { instanceId }),
     listInstanceResources: (instanceId) =>
@@ -1663,6 +1681,48 @@ function createBrowserRuntime(): MoyuRuntime {
         BROWSER_CONTENT_AUTO_UPDATE_KEY,
         JSON.stringify(flags),
       );
+    },
+    async setInstalledContentEnabled(contentId, enabled) {
+      const contents = browserInstalledContent();
+      const entry = contents.find((candidate) => candidate.id === contentId);
+      if (!entry) throw new Error("内容项不存在");
+      entry.enabled = enabled;
+      window.localStorage.setItem(
+        BROWSER_INSTALLED_CONTENT_KEY,
+        JSON.stringify(contents),
+      );
+      return entry;
+    },
+    async getInstanceLaunchOptions(instanceId) {
+      if (!browserInstances().some((candidate) => candidate.id === instanceId)) {
+        throw new Error("实例不存在");
+      }
+      return (
+        browserLaunchOptions()[instanceId] ?? {
+          minimumMemoryMib: 512,
+          maximumMemoryMib: 2048,
+        }
+      );
+    },
+    async setInstanceLaunchOptions(instanceId, options) {
+      if (!browserInstances().some((candidate) => candidate.id === instanceId)) {
+        throw new Error("实例不存在");
+      }
+      if (
+        !Number.isInteger(options.minimumMemoryMib) ||
+        !Number.isInteger(options.maximumMemoryMib) ||
+        options.minimumMemoryMib < 256 ||
+        options.maximumMemoryMib < options.minimumMemoryMib ||
+        options.maximumMemoryMib > 65536
+      ) {
+        throw new Error("内存设置必须满足 256 MiB <= 最小值 <= 最大值 <= 65536 MiB");
+      }
+      const all = browserLaunchOptions();
+      all[instanceId] = {
+        minimumMemoryMib: options.minimumMemoryMib,
+        maximumMemoryMib: options.maximumMemoryMib,
+      };
+      window.localStorage.setItem(BROWSER_LAUNCH_OPTIONS_KEY, JSON.stringify(all));
     },
     async listInstanceWorlds(instanceId) {
       return browserInstanceWorlds()[instanceId] ?? [];
@@ -3021,6 +3081,11 @@ function browserContentUpdates(): BrowserContentUpdate[] {
 function browserContentAutoUpdate(): Record<string, boolean> {
   const serialized = window.localStorage.getItem(BROWSER_CONTENT_AUTO_UPDATE_KEY);
   return serialized ? (JSON.parse(serialized) as Record<string, boolean>) : {};
+}
+
+function browserLaunchOptions(): Record<string, LaunchOptions> {
+  const serialized = window.localStorage.getItem(BROWSER_LAUNCH_OPTIONS_KEY);
+  return serialized ? (JSON.parse(serialized) as Record<string, LaunchOptions>) : {};
 }
 
 function browserInstanceResources(): InstanceResource[] {
