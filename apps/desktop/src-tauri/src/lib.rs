@@ -79,6 +79,16 @@ struct NetplayRoomProcess {
     config: moyumax_core::NetplayRoomConfig,
     virtual_ip: String,
     child: std::process::Child,
+    /// EasyTier RPC 门户端口（本机回环），用于 node info / port-forward 管理。
+    rpc_port: u16,
+    /// easytier-cli.exe 绝对路径（与 core 同目录）。
+    cli_path: PathBuf,
+    /// 主机侧侦测到的 MC「对局域网开放」端口。
+    mc_lan_port: Option<u16>,
+    /// 客机侧已建立的本机回环转发端口（指向主机虚拟 IP:MC 端口）。
+    forwarded_local_port: Option<u16>,
+    /// MC 局域网组播监听停止标记（仅主机）。
+    lan_stop: Option<Arc<AtomicBool>>,
 }
 
 /// 联机房间的非敏感视图（不携带密码）。
@@ -88,6 +98,8 @@ struct NetplayRoomView {
     network_name: String,
     virtual_ip: String,
     is_host: bool,
+    mc_lan_port: Option<u16>,
+    forwarded_local_port: Option<u16>,
 }
 
 /// NAT 检测报告视图。
@@ -1155,7 +1167,9 @@ async fn start_netplay_room(
     })
     .await
     .map_err(|error| error.to_string())?;
-    let args = moyumax_core::easytier_args(&config);
+    let rpc_port =
+        moyumax_core::find_free_tcp_port().ok_or_else(|| "无法分配本机空闲端口".to_owned())?;
+    let args = moyumax_core::easytier_args(&config, rpc_port);
     let child = std::process::Command::new(&binary)
         .args(&args)
         .stdout(std::process::Stdio::null())
@@ -1165,23 +1179,158 @@ async fn start_netplay_room(
     let virtual_ip = if is_host {
         "10.144.144.1".to_owned()
     } else {
-        "自动分配（DHCP）".to_owned()
+        "自动分配中…".to_owned()
     };
     let view = NetplayRoomView {
         network_name: config.network_name.clone(),
         virtual_ip: virtual_ip.clone(),
         is_host,
+        mc_lan_port: None,
+        forwarded_local_port: None,
     };
+    let network_name = config.network_name.clone();
+    {
+        let mut room = coordinator
+            .room
+            .lock()
+            .map_err(|_| "联机状态不可用".to_owned())?;
+        *room = Some(NetplayRoomProcess {
+            config,
+            virtual_ip,
+            child,
+            rpc_port,
+            cli_path: binary.with_file_name("easytier-cli.exe"),
+            mc_lan_port: None,
+            forwarded_local_port: None,
+            lan_stop: None,
+        });
+    }
+    if is_host {
+        // 主机：监听 MC「对局域网开放」组播公告，自动记录端口号。
+        let stop = Arc::new(AtomicBool::new(false));
+        let listen_app = app.clone();
+        let listener = moyumax_core::listen_mc_lan_announcements(stop.clone(), move |port| {
+            let state = listen_app.state::<NetplayCoordinator>();
+            if let Ok(mut room) = state.room.lock()
+                && let Some(process) = room.as_mut()
+            {
+                process.mc_lan_port = Some(port);
+            }
+        });
+        match listener {
+            Ok(_handle) => {
+                let mut room = coordinator
+                    .room
+                    .lock()
+                    .map_err(|_| "联机状态不可用".to_owned())?;
+                if let Some(process) = room.as_mut() {
+                    process.lan_stop = Some(stop);
+                }
+            }
+            Err(error) => {
+                eprintln!("MC 局域网公告监听启动失败（不影响联机）：{error}");
+            }
+        }
+    } else {
+        // 客机：后台轮询 node info，取回 DHCP 实际分配的虚拟 IP。
+        let poll_app = app.clone();
+        let cli = binary.with_file_name("easytier-cli.exe");
+        tauri::async_runtime::spawn(async move {
+            for _ in 0..30 {
+                tokio::time::sleep(std::time::Duration::from_secs(2)).await;
+                let cli_path = cli.clone();
+                let output = tokio::task::spawn_blocking(move || {
+                    std::process::Command::new(cli_path)
+                        .args([
+                            "-p",
+                            &format!("127.0.0.1:{rpc_port}"),
+                            "-o",
+                            "json",
+                            "node",
+                            "info",
+                        ])
+                        .output()
+                })
+                .await;
+                let Ok(Ok(output)) = output else { continue };
+                let Ok(payload) = serde_json::from_slice::<serde_json::Value>(&output.stdout)
+                else {
+                    continue;
+                };
+                let Some(ip) = moyumax_core::parse_easytier_node_ipv4(&payload) else {
+                    continue;
+                };
+                let state = poll_app.state::<NetplayCoordinator>();
+                if let Ok(mut room) = state.room.lock()
+                    && let Some(process) = room.as_mut()
+                    && process.config.network_name == network_name
+                    && !process.config.is_host
+                {
+                    process.virtual_ip = ip;
+                }
+                return;
+            }
+        });
+    }
+    Ok(view)
+}
+
+/// 客机把本机回环端口转发到主机虚拟 IP 的 MC 端口；返回本机端口供游戏内直连。
+#[tauri::command]
+async fn set_netplay_forward(
+    coordinator: State<'_, NetplayCoordinator>,
+    mc_port: u16,
+) -> Result<u16, String> {
+    let (cli_path, rpc_port) = {
+        let room = coordinator
+            .room
+            .lock()
+            .map_err(|_| "联机状态不可用".to_owned())?;
+        let Some(process) = room.as_ref() else {
+            return Err("当前不在联机房间中".to_owned());
+        };
+        if process.config.is_host {
+            return Err("主机无需端口转发，直接告诉队友你的局域网端口即可".to_owned());
+        }
+        (process.cli_path.clone(), process.rpc_port)
+    };
+    let local_port =
+        moyumax_core::find_free_tcp_port().ok_or_else(|| "无法分配本机空闲端口".to_owned())?;
+    let target = format!("10.144.144.1:{mc_port}");
+    for protocol in ["tcp", "udp"] {
+        let cli = cli_path.clone();
+        let bind = format!("127.0.0.1:{local_port}");
+        let destination = target.clone();
+        let output = tokio::task::spawn_blocking(move || {
+            std::process::Command::new(cli)
+                .args([
+                    "-p",
+                    &format!("127.0.0.1:{rpc_port}"),
+                    "port-forward",
+                    "add",
+                    protocol,
+                    &bind,
+                    &destination,
+                ])
+                .output()
+        })
+        .await
+        .map_err(|error| error.to_string())?
+        .map_err(|error| format!("无法执行端口转发：{error}"))?;
+        if !output.status.success() {
+            let detail = String::from_utf8_lossy(&output.stderr);
+            return Err(format!("端口转发失败（{protocol}）：{}", detail.trim()));
+        }
+    }
     let mut room = coordinator
         .room
         .lock()
         .map_err(|_| "联机状态不可用".to_owned())?;
-    *room = Some(NetplayRoomProcess {
-        config,
-        virtual_ip,
-        child,
-    });
-    Ok(view)
+    let Some(process) = room.as_mut() else {
+        return Err("当前不在联机房间中".to_owned());
+    };
+    process.forwarded_local_port = Some(local_port);
+    Ok(local_port)
 }
 
 /// 离开当前联机房间并终止 EasyTier 进程。
@@ -1192,6 +1341,9 @@ fn stop_netplay_room(coordinator: State<'_, NetplayCoordinator>) -> Result<(), S
         .lock()
         .map_err(|_| "联机状态不可用".to_owned())?;
     if let Some(mut process) = room.take() {
+        if let Some(stop) = process.lan_stop.take() {
+            stop.store(true, Ordering::Relaxed);
+        }
         let _ = process.child.kill();
         let _ = process.child.wait();
     }
@@ -1210,6 +1362,9 @@ fn get_netplay_status(
     if let Some(process) = room.as_mut() {
         // 进程已退出时视为已离开房间。
         if let Ok(Some(_)) = process.child.try_wait() {
+            if let Some(stop) = process.lan_stop.take() {
+                stop.store(true, Ordering::Relaxed);
+            }
             *room = None;
             return Ok(None);
         }
@@ -1217,6 +1372,8 @@ fn get_netplay_status(
             network_name: process.config.network_name.clone(),
             virtual_ip: process.virtual_ip.clone(),
             is_host: process.config.is_host,
+            mc_lan_port: process.mc_lan_port,
+            forwarded_local_port: process.forwarded_local_port,
         }));
     }
     Ok(None)
@@ -2403,6 +2560,7 @@ pub fn run() {
             start_netplay_room,
             stop_netplay_room,
             get_netplay_status,
+            set_netplay_forward,
             detect_nat_type,
             get_ui_preferences,
             set_ui_theme,

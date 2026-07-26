@@ -184,6 +184,7 @@
   activeNavigation="data"
   {onNavigate}
   connectionStatus={t("data.connectionStatus")}
+  {runtime}
   {onMinimize}
   {onToggleMaximize}
   {onClose}

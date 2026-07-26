@@ -367,6 +367,7 @@
   {onNavigate}
   connectionStatus={t("data.connectionStatus")}
   taskStatus={changingItem ? t("data.taskStatus.updating") : t("data.taskStatus.summary").replace("{backups}", String(backups.length)).replace("{items}", String(items.length))}
+  {runtime}
   {onMinimize}
   {onToggleMaximize}
   {onClose}

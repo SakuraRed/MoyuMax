@@ -412,6 +412,10 @@ export interface NetplayRoomView {
   networkName: string;
   virtualIp: string;
   isHost: boolean;
+  /** 主机侧侦测到的 MC「对局域网开放」端口。 */
+  mcLanPort?: number | null;
+  /** 客机侧已建立的本机回环转发端口（游戏内连接 127.0.0.1:该端口）。 */
+  forwardedLocalPort?: number | null;
 }
 
 /** 简化 NAT 检测报告。 */
@@ -766,6 +770,8 @@ export interface MoyuRuntime {
   stopNetplayRoom(): Promise<void>;
   /** 当前联机房间状态。 */
   getNetplayStatus(): Promise<NetplayRoomView | null>;
+  /** 客机建立到主机 MC 端口的本机回环转发；返回游戏内直连的本机端口。 */
+  setNetplayForward(mcPort: number): Promise<number>;
   /** 简化 NAT 检测（STUN，仅手动触发）。 */
   detectNatType(): Promise<NatReportView>;
   /** 订阅 EasyTier 首次下载进度事件，返回取消订阅函数。 */
@@ -1106,6 +1112,7 @@ function createTauriRuntime(): MoyuRuntime {
       invoke<NetplayRoomView>("start_netplay_room", { networkName, networkSecret, isHost }),
     stopNetplayRoom: () => invoke<void>("stop_netplay_room"),
     getNetplayStatus: () => invoke<NetplayRoomView | null>("get_netplay_status"),
+    setNetplayForward: (mcPort) => invoke<number>("set_netplay_forward", { mcPort }),
     detectNatType: () => invoke<NatReportView>("detect_nat_type"),
     onNetplayDownloadProgress: (handler) => {
       let unlisten: (() => void) | undefined;
@@ -2008,8 +2015,10 @@ function createBrowserRuntime(): MoyuRuntime {
       }
       const view: NetplayRoomView = {
         networkName,
-        virtualIp: isHost ? "10.144.144.1" : "自动分配（DHCP）",
+        virtualIp: isHost ? "10.144.144.1" : "自动分配中…",
         isHost,
+        mcLanPort: isHost ? 25565 : null,
+        forwardedLocalPort: null,
       };
       window.localStorage.setItem("moyumax.browser.netplayRoom", JSON.stringify(view));
       return view;
@@ -2020,6 +2029,23 @@ function createBrowserRuntime(): MoyuRuntime {
     async getNetplayStatus() {
       const serialized = window.localStorage.getItem("moyumax.browser.netplayRoom");
       return serialized ? (JSON.parse(serialized) as NetplayRoomView) : null;
+    },
+    async setNetplayForward(mcPort) {
+      if (!Number.isInteger(mcPort) || mcPort < 1 || mcPort > 65535) {
+        throw new Error("端口号必须是 1-65535 的整数");
+      }
+      const serialized = window.localStorage.getItem("moyumax.browser.netplayRoom");
+      if (!serialized) {
+        throw new Error("当前不在联机房间中");
+      }
+      const room = JSON.parse(serialized) as NetplayRoomView;
+      if (room.isHost) {
+        throw new Error("主机无需端口转发，直接告诉队友你的局域网端口即可");
+      }
+      room.virtualIp = room.virtualIp === "自动分配中…" ? "10.144.144.2" : room.virtualIp;
+      room.forwardedLocalPort = 16565;
+      window.localStorage.setItem("moyumax.browser.netplayRoom", JSON.stringify(room));
+      return 16565;
     },
     async detectNatType() {
       if (window.localStorage.getItem("moyumax.browser.natOffline") === "true") {

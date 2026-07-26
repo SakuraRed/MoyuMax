@@ -292,6 +292,7 @@
   searchVisible
   onNavigate={onNavigate}
   taskStatus={activeLaunches.length > 0 ? t("home.taskStatus.running").replace("{count}", String(activeLaunches.length)) : activeTasks.length + activeContentTasks.length > 0 ? t("home.taskStatus.pending").replace("{count}", String(activeTasks.length + activeContentTasks.length)) : t("shell.status.noTasks")}
+  {runtime}
   {onMinimize}
   {onToggleMaximize}
   {onClose}

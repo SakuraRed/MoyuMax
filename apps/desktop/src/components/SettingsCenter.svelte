@@ -665,6 +665,7 @@
   {onNavigate}
   connectionStatus={t("settings.connectionStatus")}
   taskStatus={t("settings.envCount").replace("{count}", String(environments.length))}
+  {runtime}
   {onMinimize}
   {onToggleMaximize}
   {onClose}

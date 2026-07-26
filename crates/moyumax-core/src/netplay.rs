@@ -22,8 +22,16 @@ use crate::{CoreError, Result};
 /// GitHub Releases 元数据（EasyTier 官方仓库）。
 pub const EASYTIER_RELEASE_API: &str =
     "https://api.github.com/repos/EasyTier/EasyTier/releases/latest";
-/// EasyTier 官方共享公共节点（无公网 IP 组网）。
-pub const EASYTIER_PUBLIC_PEER: &str = "tcp://public.easytier.top:11010";
+/// EasyTier 社区共享公共节点（无公网 IP 组网，用于节点发现与中转）。
+///
+/// 官方共享节点 `public.easytier.top/.cn` 已停止解析（2026-07 实测 NXDOMAIN），
+/// 这里采用社区公开的可中转节点（与 PCL-CE 相同做法：多节点冗余，全部连上，
+/// 任一共通节点即可完成发现）。节点来源：AstralGame 社区服务器列表。
+pub const EASYTIER_PUBLIC_PEERS: [&str; 3] = [
+    "tcp://et.gbc.moe:11010",
+    "tcp://easytier.weiai.org.cn:11010",
+    "tcp://ros.scpsl.com.cn:11010",
+];
 /// wintun 官方预编译包（签名 DLL，官方许可允许随软件分发）。
 pub const WINTUN_URL: &str = "https://www.wintun.net/builds/wintun-0.14.1.zip";
 /// wintun 0.14.1 官方页面公布的 SHA-256（https://www.wintun.net/）。
@@ -335,23 +343,99 @@ pub fn validate_room_secret(secret: &str) -> Result<String> {
     Ok(secret.to_owned())
 }
 
-/// 构造 easytier-core 启动参数；主机固定 10.144.144.1，加入者 DHCP 自动分配。
-pub fn easytier_args(config: &NetplayRoomConfig) -> Vec<String> {
+/// 构造 easytier-core 启动参数。
+///
+/// 采用与 PCL-CE 相同的 no-TUN 架构（2026-07 实测：TUN 模式在普通权限下
+/// 必然 "Failed to create adapter" 退出，房间瞬间消失；no-TUN + smoltcp
+/// 用户态协议栈无需管理员即可工作）：
+/// - `--no-tun --use-smoltcp --enable-kcp-proxy --enable-quic-proxy`：不建虚拟网卡，
+///   连接经用户态栈代理；客机用 `port-forward` 把本机回环端口映射到主机虚拟 IP:端口。
+/// - 主机固定 10.144.144.1；加入者 DHCP 自动分配，实际地址经 RPC `node info` 读回。
+/// - `--private-mode` 只允许同密钥节点；`--relay-network-whitelist` 限制中转范围。
+/// - `--rpc-portal` 固定到 127.0.0.1 的随机空闲端口，避免与本机其他 EasyTier 实例冲突。
+pub fn easytier_args(config: &NetplayRoomConfig, rpc_port: u16) -> Vec<String> {
     let mut args = vec![
+        "--no-tun".to_owned(),
+        "--use-smoltcp".to_owned(),
+        "--enable-kcp-proxy".to_owned(),
+        "--enable-quic-proxy".to_owned(),
+        "--private-mode".to_owned(),
+        "true".to_owned(),
+        "--relay-network-whitelist".to_owned(),
+        config.network_name.clone(),
         "--network-name".to_owned(),
         config.network_name.clone(),
         "--network-secret".to_owned(),
         config.network_secret.clone(),
-        "-p".to_owned(),
-        EASYTIER_PUBLIC_PEER.to_owned(),
     ];
+    for peer in EASYTIER_PUBLIC_PEERS {
+        args.push("-p".to_owned());
+        args.push(peer.to_owned());
+    }
     if config.is_host {
         args.push("--ipv4".to_owned());
         args.push("10.144.144.1".to_owned());
     } else {
         args.push("--dhcp".to_owned());
     }
+    args.push("--rpc-portal".to_owned());
+    args.push(format!("127.0.0.1:{rpc_port}"));
     args
+}
+
+/// 从 `easytier-cli -o json node info` 输出中解析本机虚拟 IPv4（去掉 `/24` 后缀）。
+/// DHCP 尚未分配时 `ipv4_addr` 为空串，返回 None。
+pub fn parse_easytier_node_ipv4(payload: &serde_json::Value) -> Option<String> {
+    let raw = payload.get("ipv4_addr")?.as_str()?;
+    let ip = raw.split('/').next()?.trim();
+    if ip.is_empty() {
+        return None;
+    }
+    ip.parse::<Ipv4Addr>().ok()?;
+    Some(ip.to_owned())
+}
+
+/// 在本机回环上取一个空闲 TCP 端口（用于 RPC 门户与客机转发绑定）。
+pub fn find_free_tcp_port() -> Option<u16> {
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").ok()?;
+    Some(listener.local_addr().ok()?.port())
+}
+
+/// 解析 Minecraft「对局域网开放」UDP 组播公告（224.0.2.60:4445），
+/// 报文形如 `[MOTD]世界名[/MOTD][AD]25565[/AD]`，取 `[AD]` 中的端口。
+pub fn parse_mc_lan_port(message: &str) -> Option<u16> {
+    let start = message.find("[AD]")? + 4;
+    let end = message[start..].find("[/AD]")? + start;
+    message[start..end].trim().parse().ok()
+}
+
+/// 监听 MC 局域网组播公告（224.0.2.60:4445），每收到一个端口就回调一次。
+/// 阻塞循环，调用方放到独立线程；`stop` 置位后在下一个读超时内退出。
+pub fn listen_mc_lan_announcements(
+    stop: std::sync::Arc<std::sync::atomic::AtomicBool>,
+    on_port: impl Fn(u16) + Send + 'static,
+) -> Result<std::thread::JoinHandle<()>> {
+    use std::sync::atomic::Ordering;
+    let socket = UdpSocket::bind("0.0.0.0:4445")?;
+    socket.join_multicast_v4(&Ipv4Addr::new(224, 0, 2, 60), &Ipv4Addr::UNSPECIFIED)?;
+    socket.set_read_timeout(Some(Duration::from_millis(500)))?;
+    Ok(std::thread::spawn(move || {
+        let mut buffer = [0_u8; 1024];
+        while !stop.load(Ordering::Relaxed) {
+            match socket.recv_from(&mut buffer) {
+                Ok((received, _)) => {
+                    let text = String::from_utf8_lossy(&buffer[..received]);
+                    if let Some(port) = parse_mc_lan_port(&text) {
+                        on_port(port);
+                    }
+                }
+                Err(error)
+                    if error.kind() == std::io::ErrorKind::WouldBlock
+                        || error.kind() == std::io::ErrorKind::TimedOut => {}
+                Err(_) => break,
+            }
+        }
+    }))
 }
 
 /// 解析 STUN Binding Response，取 XOR-MAPPED-ADDRESS（IPv4）。

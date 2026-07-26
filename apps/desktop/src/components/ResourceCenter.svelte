@@ -561,6 +561,7 @@
   activeNavigation="resources"
   {onNavigate}
   connectionStatus={catalogError ? t("resources.connection.offline") : t("resources.connection.online")}
+  {runtime}
   {onMinimize}
   {onToggleMaximize}
   {onClose}

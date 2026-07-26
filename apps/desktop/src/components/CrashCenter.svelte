@@ -116,6 +116,7 @@
   {onNavigate}
   connectionStatus={t("crash.connectionStatus")}
   taskStatus={t("crash.taskStatus")}
+  {runtime}
   {onMinimize}
   {onToggleMaximize}
   {onClose}

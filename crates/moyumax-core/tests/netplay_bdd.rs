@@ -54,11 +54,14 @@ fn net_002_room_name_and_secret_validation() {
 
 #[test]
 fn net_003_easytier_args_host_static_ip_and_join_dhcp() {
-    let host = easytier_args(&NetplayRoomConfig {
-        network_name: "room01".to_owned(),
-        network_secret: "secret-123".to_owned(),
-        is_host: true,
-    });
+    let host = easytier_args(
+        &NetplayRoomConfig {
+            network_name: "room01".to_owned(),
+            network_secret: "secret-123".to_owned(),
+            is_host: true,
+        },
+        15991,
+    );
     assert!(
         host.windows(2)
             .any(|pair| pair == ["--ipv4", "10.144.144.1"])
@@ -71,14 +74,55 @@ fn net_003_easytier_args_host_static_ip_and_join_dhcp() {
         host.windows(2)
             .any(|pair| pair == ["--network-secret", "secret-123"])
     );
+    // no-TUN 架构：不建虚拟网卡，普通权限即可运行。
+    assert!(host.contains(&"--no-tun".to_owned()));
+    assert!(host.contains(&"--use-smoltcp".to_owned()));
+    assert!(
+        host.windows(2)
+            .any(|pair| pair == ["--rpc-portal", "127.0.0.1:15991"])
+    );
 
-    let join = easytier_args(&NetplayRoomConfig {
-        network_name: "room01".to_owned(),
-        network_secret: "secret-123".to_owned(),
-        is_host: false,
-    });
+    let join = easytier_args(
+        &NetplayRoomConfig {
+            network_name: "room01".to_owned(),
+            network_secret: "secret-123".to_owned(),
+            is_host: false,
+        },
+        15992,
+    );
     assert!(join.contains(&"--dhcp".to_owned()));
     assert!(!join.contains(&"--ipv4".to_owned()));
+    assert!(
+        join.windows(2)
+            .any(|pair| pair == ["--private-mode", "true"])
+    );
+    assert!(
+        join.windows(2)
+            .any(|pair| pair == ["--relay-network-whitelist", "room01"])
+    );
+}
+
+#[test]
+fn net_003b_node_info_ipv4_parsing() {
+    let assigned = serde_json::json!({"ipv4_addr": "10.144.144.2/24"});
+    assert_eq!(
+        moyumax_core::parse_easytier_node_ipv4(&assigned),
+        Some("10.144.144.2".to_owned())
+    );
+    let pending = serde_json::json!({"ipv4_addr": ""});
+    assert_eq!(moyumax_core::parse_easytier_node_ipv4(&pending), None);
+    let missing = serde_json::json!({});
+    assert_eq!(moyumax_core::parse_easytier_node_ipv4(&missing), None);
+}
+
+#[test]
+fn net_003c_mc_lan_announcement_port_parsing() {
+    assert_eq!(
+        moyumax_core::parse_mc_lan_port("[MOTD]My World[/MOTD][AD]25565[/AD]"),
+        Some(25565)
+    );
+    assert_eq!(moyumax_core::parse_mc_lan_port("garbage"), None);
+    assert_eq!(moyumax_core::parse_mc_lan_port("[AD]notaport[/AD]"), None);
 }
 
 #[test]

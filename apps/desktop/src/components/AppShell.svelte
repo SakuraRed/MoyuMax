@@ -2,8 +2,9 @@
   import type { Snippet } from "svelte";
 
   import { markAvatarFailed, requestSettingsPage, shellAccount, skinAvatarUrl } from "../accounts.svelte";
+  import { netplayRoom, refreshNetplayRoom, setNetplayRoom } from "../netplay.svelte";
   import { t, uiBackground, uiBackgroundImageUrl, uiContrast, uiMotion, uiTheme } from "../i18n.svelte";
-  import type { NavigationKey } from "../runtime";
+  import type { MoyuRuntime, NavigationKey } from "../runtime";
   import Icon from "./Icon.svelte";
 
   interface Props {
@@ -16,6 +17,7 @@
     activeNavigation?: NavigationKey;
     connectionStatus?: string;
     taskStatus?: string;
+    runtime?: MoyuRuntime | undefined;
     onMinimize: () => Promise<void>;
     onToggleMaximize: () => Promise<void>;
     onClose: () => Promise<void>;
@@ -32,11 +34,30 @@
     activeNavigation = "home",
     connectionStatus = t("shell.status.defaultConnection"),
     taskStatus = t("shell.status.noTasks"),
+    runtime = undefined,
     onMinimize,
     onToggleMaximize,
     onClose,
     onNavigate,
   }: Props = $props();
+
+  $effect(() => {
+    if (runtime) {
+      void refreshNetplayRoom(runtime);
+      const timer = setInterval(() => void refreshNetplayRoom(runtime), 5000);
+      return () => clearInterval(timer);
+    }
+  });
+
+  async function leaveRoom(): Promise<void> {
+    if (!runtime) return;
+    try {
+      await runtime.stopNetplayRoom();
+      setNetplayRoom(null);
+    } catch {
+      // 离开失败时由下一次轮询收敛
+    }
+  }
 
   const navigation = [
     { key: "home" as const, name: "home" as const, labelKey: "nav.home" },
@@ -163,4 +184,18 @@
       </footer>
     </section>
   </div>
+
+  {#if netplayRoom() && activeNavigation !== "netplay"}
+    <div class="netplay-float" role="status" aria-label={t("netplay.float.aria")}>
+      <span class="netplay-float-dot" aria-hidden="true"></span>
+      <span class="netplay-float-info">
+        <strong>{netplayRoom()?.networkName}</strong>
+        <small>{netplayRoom()?.virtualIp}</small>
+      </span>
+      <button class="netplay-float-btn" onclick={() => onNavigate?.("netplay")}>{t("netplay.float.open")}</button>
+      {#if runtime}
+        <button class="netplay-float-btn danger" onclick={() => void leaveRoom()}>{t("netplay.float.leave")}</button>
+      {/if}
+    </div>
+  {/if}
 </div>

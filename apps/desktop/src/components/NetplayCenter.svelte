@@ -2,11 +2,11 @@
   import { onMount } from "svelte";
 
   import { t } from "../i18n.svelte";
+  import { netplayRoom, refreshNetplayRoom, setNetplayRoom } from "../netplay.svelte";
   import type {
     MoyuRuntime,
     NatReportView,
     NavigationKey,
-    NetplayRoomView,
     OnboardingSelection,
   } from "../runtime";
   import AppShell from "./AppShell.svelte";
@@ -37,11 +37,15 @@
   ];
 
   let tab = $state<NetplayTab>("room");
-  let room = $state<NetplayRoomView | null>(null);
+  // 房间状态以全局 store 为准：AppShell 每 5s 轮询收敛（DHCP IP、端口侦测、转发状态）。
+  const room = $derived(netplayRoom());
   let roomName = $state("");
   let roomSecret = $state("");
   let roomBusy = $state(false);
   let roomCopied = $state(false);
+  let forwardPort = $state("");
+  let forwardBusy = $state(false);
+  let forwardCopied = $state(false);
   let downloadProgress = $state<{ current: number; total: number } | null>(null);
   let natReport = $state<NatReportView | null>(null);
   let natBusy = $state(false);
@@ -49,13 +53,7 @@
   let notice = $state("");
 
   onMount(() => {
-    void (async () => {
-      try {
-        room = await runtime.getNetplayStatus();
-      } catch {
-        // 状态读取失败不阻塞页面
-      }
-    })();
+    void refreshNetplayRoom(runtime);
     return runtime.onNetplayDownloadProgress((event) => {
       downloadProgress = event.total > 0 ? event : null;
     });
@@ -75,7 +73,8 @@
     notice = "";
     downloadProgress = null;
     try {
-      room = await runtime.startNetplayRoom(roomName.trim(), roomSecret, isHost);
+      const view = await runtime.startNetplayRoom(roomName.trim(), roomSecret, isHost);
+      setNetplayRoom(view);
       notice = isHost
         ? t("settings.network.room.created")
         : t("settings.network.room.joined");
@@ -92,7 +91,7 @@
     errorMessage = "";
     try {
       await runtime.stopNetplayRoom();
-      room = null;
+      setNetplayRoom(null);
       notice = t("settings.network.room.left");
     } catch (error) {
       errorMessage = error instanceof Error ? error.message : String(error);
@@ -101,15 +100,48 @@
     }
   }
 
+  async function submitForward(): Promise<void> {
+    const port = Number(forwardPort.trim());
+    if (!Number.isInteger(port) || port < 1 || port > 65535) {
+      errorMessage = t("settings.network.room.forwardInvalid");
+      return;
+    }
+    forwardBusy = true;
+    errorMessage = "";
+    try {
+      await runtime.setNetplayForward(port);
+      await refreshNetplayRoom(runtime);
+      notice = t("settings.network.room.forwardReady");
+    } catch (error) {
+      errorMessage = error instanceof Error ? error.message : String(error);
+    } finally {
+      forwardBusy = false;
+    }
+  }
+
   async function copyRoomInfo(): Promise<void> {
     if (!room) return;
+    const template =
+      room.isHost && room.mcLanPort
+        ? t("settings.network.room.copyPayloadHost")
+            .replace("{name}", room.networkName)
+            .replace("{port}", String(room.mcLanPort))
+        : t("settings.network.room.copyPayload").replace("{name}", room.networkName);
     try {
-      await navigator.clipboard.writeText(
-        t("settings.network.room.copyPayload")
-          .replace("{name}", room.networkName),
-      );
+      await navigator.clipboard.writeText(template);
       roomCopied = true;
       setTimeout(() => { roomCopied = false; }, 1600);
+    } catch {
+      errorMessage = t("settings.network.room.copyFailed");
+    }
+  }
+
+  async function copyForwardAddress(): Promise<void> {
+    if (!room?.forwardedLocalPort) return;
+    try {
+      await navigator.clipboard.writeText(`127.0.0.1:${room.forwardedLocalPort}`);
+      forwardCopied = true;
+      setTimeout(() => { forwardCopied = false; }, 1600);
     } catch {
       errorMessage = t("settings.network.room.copyFailed");
     }
@@ -139,6 +171,7 @@
   activeNavigation="netplay"
   {onNavigate}
   connectionStatus={room ? t("netplay.status.inRoom").replace("{name}", room.networkName) : t("netplay.status.idle")}
+  {runtime}
   {onMinimize}
   {onToggleMaximize}
   {onClose}
@@ -181,12 +214,38 @@
                     <span class="netplay-badge">{room.isHost ? t("settings.network.room.hostBadge") : t("settings.network.room.memberBadge")}</span>
                   </div>
                   <small>{t("settings.network.room.virtualIp")}: <code>{room.virtualIp}</code></small>
-                  <small>{t("settings.network.room.hint")}</small>
+                  {#if room.isHost}
+                    {#if room.mcLanPort}
+                      <small>{t("settings.network.room.lanPortDetected").replace("{port}", String(room.mcLanPort))}</small>
+                    {:else}
+                      <small>{t("settings.network.room.lanPortPending")}</small>
+                    {/if}
+                    <small>{t("settings.network.room.hostHint")}</small>
+                  {:else if room.forwardedLocalPort}
+                    <small class="netplay-forward-ready">
+                      {t("settings.network.room.forwardAddress")}: <code>127.0.0.1:{room.forwardedLocalPort}</code>
+                    </small>
+                    <small>{t("settings.network.room.forwardHint").replace("{address}", `127.0.0.1:${room.forwardedLocalPort}`)}</small>
+                  {:else}
+                    <small>{t("settings.network.room.guestHint")}</small>
+                  {/if}
                 </div>
                 <div class="task-buttons">
                   <button class="button ghost compact" onclick={() => void copyRoomInfo()}>{roomCopied ? t("settings.network.room.copied") : t("settings.network.room.copy")}</button>
+                  {#if !room.isHost && room.forwardedLocalPort}
+                    <button class="button ghost compact" onclick={() => void copyForwardAddress()}>{forwardCopied ? t("settings.network.room.copied") : t("settings.network.room.forwardCopy")}</button>
+                  {/if}
                   <button class="button danger-subtle compact" disabled={roomBusy} onclick={() => void leaveRoom()}>{roomBusy ? t("settings.network.room.leaving") : t("settings.network.room.leave")}</button>
                 </div>
+                {#if !room.isHost && !room.forwardedLocalPort}
+                  <div class="netplay-forward-form">
+                    <label>
+                      <span>{t("settings.network.room.forwardLabel")}</span>
+                      <input bind:value={forwardPort} type="text" inputmode="numeric" aria-label={t("settings.network.room.forwardAria")} placeholder={t("settings.network.room.forwardPlaceholder")} />
+                    </label>
+                    <button class="button primary compact" disabled={forwardBusy || !forwardPort.trim()} onclick={() => void submitForward()}>{forwardBusy ? t("settings.network.room.forwardStarting") : t("settings.network.room.forwardStart")}</button>
+                  </div>
+                {/if}
               </article>
             {:else}
               <div class="account-form" role="group" aria-label={t("settings.network.room.title")}>

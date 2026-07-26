@@ -246,6 +246,7 @@
   {onNavigate}
   connectionStatus={t("tasks.connectionStatus")}
   taskStatus={t("home.taskStatus.pending").replace("{count}", String([...tasks, ...contentTasks].filter((task) => !["completed", "cancelled"].includes(task.state)).length))}
+  {runtime}
   {onMinimize}
   {onToggleMaximize}
   {onClose}

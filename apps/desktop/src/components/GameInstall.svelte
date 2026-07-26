@@ -401,6 +401,7 @@
   connectionStatus={catalog?.source === "cache" ? t("install.connection.cache") : t("install.connection.online")}
   taskStatus={task ? t("install.taskStatus.active").replace("{state}", taskStateLabel(task)) : t("shell.status.noTasks")}
   {onNavigate}
+  {runtime}
   {onMinimize}
   {onToggleMaximize}
   {onClose}
