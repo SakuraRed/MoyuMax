@@ -314,7 +314,7 @@ pub struct MetadataClient {
 
 impl MetadataClient {
     pub fn new() -> Result<Self> {
-        let client = Client::builder()
+        let client = crate::http_client_builder()
             .connect_timeout(Duration::from_secs(5))
             .timeout(Duration::from_secs(15))
             .user_agent(concat!("MoyuMax/", env!("CARGO_PKG_VERSION")))

@@ -103,6 +103,12 @@ export type SourcePolicy =
   | { kind: "officialFirst" }
   | { kind: "custom"; minecraftBase: string | null; modrinthBase: string | null };
 
+/** HTTP 代理偏好：跟随系统（默认）/ 直连 / 自定义代理，与核心 ProxyPreference 一致。 */
+export type ProxyPreference =
+  | { mode: "system" }
+  | { mode: "direct" }
+  | { mode: "custom"; url: string };
+
 export type SourceAttemptOutcome = "success" | { failed: { error: string } };
 
 export interface SourceAttempt {
@@ -1009,6 +1015,9 @@ export interface MoyuRuntime {
   setDownloadConcurrency(connections: number): Promise<void>;
   getDownloadSourcePolicy(): Promise<SourcePolicy>;
   setDownloadSourcePolicy(policy: SourcePolicy): Promise<void>;
+  /** HTTP 代理偏好；保存后新构造的客户端立即生效，已初始化的组件重启后完全切换。 */
+  getProxyPreference(): Promise<ProxyPreference>;
+  setProxyPreference(preference: ProxyPreference): Promise<void>;
   listJavaEnvironments(): Promise<JavaEnvironment[]>;
   listDeletedJavaEnvironments(): Promise<JavaEnvironment[]>;
   deleteJavaEnvironment(environmentId: string, force: boolean): Promise<JavaDeleteOutcome>;
@@ -1075,6 +1084,7 @@ const BROWSER_PENDING_INTENT_KEY = "moyumax.browser.pendingIntent";
 const BROWSER_TASKS_PAUSED_KEY = "moyumax.browser.tasksPaused";
 const BROWSER_WINDOW_STATE_KEY = "moyumax.browser.windowState";
 const BROWSER_SOURCE_POLICY_KEY = "moyumax.browser.sourcePolicy";
+const BROWSER_PROXY_PREFERENCE_KEY = "moyumax.browser.proxyPreference";
 const BROWSER_JAVA_ENVIRONMENTS_KEY = "moyumax.browser.javaEnvironments";
 const BROWSER_SPEED_LIMIT_KEY = "moyumax.browser.speedLimit";
 const BROWSER_CONCURRENCY_KEY = "moyumax.browser.downloadConcurrency";
@@ -1470,6 +1480,9 @@ function createTauriRuntime(): MoyuRuntime {
       invoke<SourcePolicy>("get_download_source_policy"),
     setDownloadSourcePolicy: (policy) =>
       invoke<void>("set_download_source_policy", { policy }),
+    getProxyPreference: () => invoke<ProxyPreference>("get_proxy_preference"),
+    setProxyPreference: (preference) =>
+      invoke<void>("set_proxy_preference", { preference }),
     listJavaEnvironments: () =>
       invoke<JavaEnvironment[]>("list_java_environments"),
     listDeletedJavaEnvironments: () =>
@@ -3304,6 +3317,37 @@ function createBrowserRuntime(): MoyuRuntime {
     },
     async setDownloadSourcePolicy(policy) {
       window.localStorage.setItem(BROWSER_SOURCE_POLICY_KEY, JSON.stringify(policy));
+    },
+    async getProxyPreference() {
+      const serialized = window.localStorage.getItem(BROWSER_PROXY_PREFERENCE_KEY);
+      return serialized
+        ? (JSON.parse(serialized) as ProxyPreference)
+        : { mode: "system" };
+    },
+    async setProxyPreference(preference) {
+      if (preference.mode === "custom") {
+        const url = preference.url.trim();
+        const supported =
+          url.startsWith("http://") ||
+          url.startsWith("https://") ||
+          url.startsWith("socks5h://");
+        if (!supported) {
+          throw new Error("代理地址必须以 http://、https:// 或 socks5h:// 开头");
+        }
+        let hostname = "";
+        try {
+          hostname = new URL(url).hostname;
+        } catch {
+          hostname = "";
+        }
+        if (!hostname) {
+          throw new Error("代理地址无效");
+        }
+      }
+      window.localStorage.setItem(
+        BROWSER_PROXY_PREFERENCE_KEY,
+        JSON.stringify(preference),
+      );
     },
     async listJavaEnvironments() {
       return browserJavaEnvironments().filter((env) => env.status !== "deleted");

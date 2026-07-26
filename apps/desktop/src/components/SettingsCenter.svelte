@@ -144,6 +144,8 @@
   let sourcePolicyKind = $state<"mirrorFirst" | "officialFirst" | "custom">("mirrorFirst");
   let customMinecraftBase = $state("");
   let customModrinthBase = $state("");
+  let proxyMode = $state<"system" | "direct" | "custom">("system");
+  let proxyUrl = $state("");
 
   onMount(() => {
     void refresh();
@@ -175,13 +177,14 @@
         runtime.listAccounts(),
       ]);
       if (!backupSettingsLoaded) {
-        const [backupSettings, cliState, updateChecksState, storedBackground, concurrency, sourcePolicy] = await Promise.all([
+        const [backupSettings, cliState, updateChecksState, storedBackground, concurrency, sourcePolicy, proxyPreference] = await Promise.all([
           runtime.getWorldBackupSettings(),
           runtime.getCliEnabled(),
           runtime.getUpdateChecksEnabled(),
           runtime.getUiBackground(),
           runtime.getDownloadConcurrency(),
           runtime.getDownloadSourcePolicy(),
+          runtime.getProxyPreference(),
         ]);
         backupInterval = backupSettings.intervalMinutes;
         backupKeep = backupSettings.keepCount;
@@ -193,6 +196,10 @@
         if (sourcePolicy.kind === "custom") {
           customMinecraftBase = sourcePolicy.minecraftBase ?? "";
           customModrinthBase = sourcePolicy.modrinthBase ?? "";
+        }
+        proxyMode = proxyPreference.mode;
+        if (proxyPreference.mode === "custom") {
+          proxyUrl = proxyPreference.url;
         }
         if (storedBackground.type === "color") backgroundColor = storedBackground.color;
         if (storedBackground.type === "themePack") {
@@ -613,6 +620,35 @@
     }
   }
 
+  async function saveProxyMode(mode: "system" | "direct" | "custom"): Promise<void> {
+    errorMessage = "";
+    notice = "";
+    proxyMode = mode;
+    if (mode === "custom") return; // 自定义需填地址后点保存
+    try {
+      await runtime.setProxyPreference({ mode });
+      notice = t("settings.download.proxySaved");
+    } catch (error) {
+      errorMessage = error instanceof Error ? error.message : String(error);
+    }
+  }
+
+  async function saveCustomProxy(): Promise<void> {
+    errorMessage = "";
+    notice = "";
+    const url = proxyUrl.trim();
+    if (!url) {
+      errorMessage = t("settings.download.proxyInvalid");
+      return;
+    }
+    try {
+      await runtime.setProxyPreference({ mode: "custom", url });
+      notice = t("settings.download.proxySaved");
+    } catch (error) {
+      errorMessage = error instanceof Error ? error.message : String(error);
+    }
+  }
+
   async function saveBackupKeep(): Promise<void> {
     errorMessage = "";
     notice = "";
@@ -1016,6 +1052,34 @@
           <small class="netplay-note">{t("settings.download.sourceCustomHint")}</small>
         </div>
       {/if}
+      <div class="backup-settings-grid">
+        <label>
+          <span>{t("settings.download.proxyLabel")}</span>
+          <select
+            aria-label={t("settings.download.proxyAria")}
+            value={proxyMode}
+            onchange={(event) => void saveProxyMode(event.currentTarget.value as "system" | "direct" | "custom")}
+          >
+            <option value="system">{t("settings.download.proxySystem")}</option>
+            <option value="direct">{t("settings.download.proxyDirect")}</option>
+            <option value="custom">{t("settings.download.proxyCustom")}</option>
+          </select>
+        </label>
+      </div>
+      {#if proxyMode === "custom"}
+        <div class="backup-settings-grid">
+          <label>
+            <span>{t("settings.download.proxyUrlLabel")}</span>
+            <input type="text" aria-label={t("settings.download.proxyUrlAria")} placeholder="http://127.0.0.1:10808" bind:value={proxyUrl} />
+          </label>
+          <div class="local-content-actions">
+            <button class="button primary compact" onclick={() => void saveCustomProxy()}>{t("settings.download.proxyCustomSave")}</button>
+          </div>
+        </div>
+      {/if}
+      <div class="backup-settings-grid">
+        <small class="netplay-note">{t("settings.download.proxyHint")}</small>
+      </div>
     </section>
         {/if}
 

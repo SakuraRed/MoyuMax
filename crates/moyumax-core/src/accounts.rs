@@ -157,7 +157,7 @@ impl YggdrasilClient {
             "SakuraRed/MoyuMax/{} (github.com/SakuraRed/MoyuMax)",
             env!("CARGO_PKG_VERSION")
         );
-        let client = Client::builder()
+        let client = crate::http_client_builder()
             .connect_timeout(Duration::from_secs(10))
             .timeout(Duration::from_secs(20))
             .user_agent(user_agent)

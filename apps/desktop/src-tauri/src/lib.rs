@@ -19,10 +19,11 @@ use moyumax_core::{
     LoaderChoice, ManagedInstanceSummary, MciMirrorClient, MetadataClient, MicrosoftAuthClient,
     MicrosoftLoginCancel, MinecraftServerStatus, ModpackInstallReport, ModpackUpdateReport,
     ModrinthClient, ModrinthSearchPage, ModrinthSearchQuery, ModrinthVersionSummary,
-    OnboardingSelection, RecoveryDecision, RecycleBinItem, RecyclePurgeResult, ReleaseInfo,
-    ResolvedInstallRequest, ResolvedLoader, ShellState, SourcePolicy, ThemePack, UiBackground,
-    UpdateClient, VersionCatalog, WindowCloseBehavior, WorldBackupSummary, YggdrasilClient,
-    auto_launch_options, min_version_block, run_launch_execution, total_physical_memory_mib,
+    OnboardingSelection, ProxyPreference, RecoveryDecision, RecycleBinItem, RecyclePurgeResult,
+    ReleaseInfo, ResolvedInstallRequest, ResolvedLoader, ShellState, SourcePolicy, ThemePack,
+    UiBackground, UpdateClient, VersionCatalog, WindowCloseBehavior, WorldBackupSummary,
+    YggdrasilClient, auto_launch_options, min_version_block, run_launch_execution,
+    total_physical_memory_mib,
 };
 use serde::Serialize;
 use tauri::{Emitter, Manager, State};
@@ -2668,6 +2669,23 @@ fn set_download_speed_limit(
 }
 
 #[tauri::command]
+fn get_proxy_preference(service: State<'_, AppService>) -> Result<ProxyPreference, String> {
+    service
+        .proxy_preference()
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+fn set_proxy_preference(
+    service: State<'_, AppService>,
+    preference: ProxyPreference,
+) -> Result<(), String> {
+    service
+        .set_proxy_preference(&preference)
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
 fn list_java_environments(
     service: State<'_, AppService>,
 ) -> Result<Vec<JavaEnvironmentSummary>, String> {
@@ -2973,7 +2991,9 @@ pub fn run() {
             get_download_concurrency,
             set_download_concurrency,
             get_download_speed_limit,
-            set_download_speed_limit
+            set_download_speed_limit,
+            get_proxy_preference,
+            set_proxy_preference
         ])
         .build(tauri::generate_context!())
         .expect("MoyuMax desktop runtime failed")

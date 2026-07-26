@@ -443,7 +443,7 @@ impl ArtifactDownloader {
                 "下载并发上限必须在 1 到 32 之间".to_owned(),
             ));
         }
-        let client = Client::builder()
+        let client = crate::http_client_builder()
             .connect_timeout(Duration::from_secs(10))
             .user_agent(concat!("MoyuMax/", env!("CARGO_PKG_VERSION")))
             .build()?;

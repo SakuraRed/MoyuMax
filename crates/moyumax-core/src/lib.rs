@@ -23,6 +23,7 @@ mod modpack_export;
 mod msauth;
 pub(crate) mod nbt;
 mod netplay;
+mod proxy;
 mod recycle;
 mod resources;
 mod screenshots;
@@ -47,6 +48,7 @@ pub use modpack::*;
 pub use modpack_export::*;
 pub use msauth::*;
 pub use netplay::*;
+pub use proxy::*;
 pub use recycle::*;
 pub use resources::*;
 pub use screenshots::*;
@@ -194,6 +196,9 @@ impl AppService {
         service.recover_interrupted_server_writes()?;
         service.recover_java_deletions()?;
         service.generate_missing_crash_reports()?;
+        // 启动时把持久化的代理偏好读入全局，之后构造的 HTTP 客户端即按偏好工作。
+        let proxy_preference = service.proxy_preference()?;
+        set_active_proxy_preference(proxy_preference);
         Ok(service)
     }
 

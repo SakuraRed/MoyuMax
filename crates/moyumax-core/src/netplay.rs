@@ -224,7 +224,7 @@ async fn ensure_wintun_dll(client: &Client, install_dir: &Path) -> Result<PathBu
 
 /// 联机下载用的 HTTP 客户端（带项目 UA 与超时）。
 pub fn netplay_http_client() -> Result<Client> {
-    Client::builder()
+    crate::http_client_builder()
         .user_agent(format!(
             "SakuraRed/MoyuMax/{} (github.com/SakuraRed/MoyuMax)",
             env!("CARGO_PKG_VERSION")

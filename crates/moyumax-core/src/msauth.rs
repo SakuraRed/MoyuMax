@@ -161,7 +161,9 @@ impl MicrosoftAuthClient {
         xsts_base_url: &str,
         mcs_base_url: &str,
     ) -> Result<Self> {
-        let client = Client::builder().timeout(Duration::from_secs(30)).build()?;
+        let client = crate::http_client_builder()
+            .timeout(Duration::from_secs(30))
+            .build()?;
         Ok(Self {
             client,
             client_id: client_id.to_owned(),
