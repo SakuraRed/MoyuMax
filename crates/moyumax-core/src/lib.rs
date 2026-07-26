@@ -20,10 +20,12 @@ mod launch;
 mod loader_install;
 mod modpack;
 mod msauth;
+pub(crate) mod nbt;
 mod netplay;
 mod recycle;
 mod resources;
 mod screenshots;
+mod servers;
 mod shell;
 mod source;
 mod theme;
@@ -46,6 +48,7 @@ pub use netplay::*;
 pub use recycle::*;
 pub use resources::*;
 pub use screenshots::*;
+pub use servers::*;
 pub use shell::*;
 pub use source::*;
 pub use theme::*;
@@ -133,6 +136,8 @@ pub enum CoreError {
     Recycle(String),
     #[error("无法备份世界存档：{0}")]
     Backup(String),
+    #[error("无法管理实例服务器：{0}")]
+    InstanceServer(String),
     #[error("账户操作失败：{0}")]
     Account(String),
     #[error("账户凭据无效或会话已过期：{0}")]
@@ -174,6 +179,7 @@ impl AppService {
         service.recover_interrupted_world_rollbacks()?;
         service.recover_interrupted_modpack_ops()?;
         service.recover_interrupted_backup_deletions()?;
+        service.recover_interrupted_server_writes()?;
         service.recover_java_deletions()?;
         service.generate_missing_crash_reports()?;
         Ok(service)

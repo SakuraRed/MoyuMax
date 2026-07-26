@@ -359,6 +359,26 @@ export interface InstanceWorldInfo {
   lastPlayedUnixSeconds: number | null;
 }
 
+export interface InstanceServerEntry {
+  name: string;
+  /** 服务器地址(NBT 中的 ip 字段),形如 host[:port]。 */
+  address: string;
+  /** 服务器图标(data:image/png;base64,...),可为空。 */
+  icon: string | null;
+  acceptTextures: boolean | null;
+}
+
+export interface MinecraftServerStatus {
+  online: boolean;
+  /** MOTD 纯文本(保留 § 格式码)。 */
+  motd: string | null;
+  playersOnline: number | null;
+  playersMax: number | null;
+  versionName: string | null;
+  /** 从发起连接到收完状态响应的耗时。 */
+  latencyMs: number | null;
+}
+
 export type BackupTrigger = "preLaunch" | "postExit" | "manual" | "scheduled";
 export type BackupState = "staging" | "ready" | "skipped" | "failed";
 export type BackupKind = "full" | "incremental";
@@ -755,6 +775,25 @@ export interface MoyuRuntime {
   deleteInstanceScreenshot(instanceId: string, fileName: string): Promise<RecycleBinItem>;
   deleteInstanceResource(resourceId: string): Promise<RecycleBinItem>;
   deleteInstanceWorld(instanceId: string, worldName: string): Promise<RecycleBinItem>;
+  /** 读取实例 servers.dat 中的服务器列表。 */
+  listInstanceServers(instanceId: string): Promise<InstanceServerEntry[]>;
+  /** 追加服务器,返回写入后的完整列表。 */
+  addInstanceServer(
+    instanceId: string,
+    name: string,
+    address: string,
+  ): Promise<InstanceServerEntry[]>;
+  /** 按序号删除服务器,返回写入后的完整列表。 */
+  removeInstanceServer(instanceId: string, index: number): Promise<InstanceServerEntry[]>;
+  /** 按序号更新服务器名称与地址,返回写入后的完整列表。 */
+  updateInstanceServer(
+    instanceId: string,
+    index: number,
+    name: string,
+    address: string,
+  ): Promise<InstanceServerEntry[]>;
+  /** 探测服务器状态;不可达返回 online=false 而非抛错。 */
+  pingMinecraftServer(address: string): Promise<MinecraftServerStatus>;
   restoreRecycledEntry(itemId: string): Promise<RecycleBinItem>;
   getWorldBackupSettings(): Promise<WorldBackupSettings>;
   setWorldBackupIntervalMinutes(minutes: number): Promise<void>;
@@ -902,6 +941,8 @@ const BROWSER_LAUNCH_OPTIONS_KEY = "moyumax.browser.launchOptions";
 const BROWSER_INSTANCE_RESOURCES_KEY = "moyumax.browser.instanceResources";
 const BROWSER_INSTANCE_WORLDS_KEY = "moyumax.browser.instanceWorlds";
 const BROWSER_WORLD_DETAILS_KEY = "moyumax.browser.worldDetails";
+const BROWSER_INSTANCE_SERVERS_KEY = "moyumax.browser.instanceServers";
+const BROWSER_OFFLINE_SERVERS_KEY = "moyumax.browser.offlineServers";
 const BROWSER_SCREENSHOTS_KEY = "moyumax.browser.screenshots";
 const BROWSER_BACKUP_SETTINGS_KEY = "moyumax.browser.backupSettings";
 const BROWSER_ACCOUNTS_KEY = "moyumax.browser.accounts";
@@ -1097,6 +1138,21 @@ function createTauriRuntime(): MoyuRuntime {
       invoke<RecycleBinItem>("delete_instance_resource", { resourceId }),
     deleteInstanceWorld: (instanceId, worldName) =>
       invoke<RecycleBinItem>("delete_instance_world", { instanceId, worldName }),
+    listInstanceServers: (instanceId) =>
+      invoke<InstanceServerEntry[]>("list_instance_servers", { instanceId }),
+    addInstanceServer: (instanceId, name, address) =>
+      invoke<InstanceServerEntry[]>("add_instance_server", { instanceId, name, address }),
+    removeInstanceServer: (instanceId, index) =>
+      invoke<InstanceServerEntry[]>("remove_instance_server", { instanceId, index }),
+    updateInstanceServer: (instanceId, index, name, address) =>
+      invoke<InstanceServerEntry[]>("update_instance_server", {
+        instanceId,
+        index,
+        name,
+        address,
+      }),
+    pingMinecraftServer: (address) =>
+      invoke<MinecraftServerStatus>("ping_minecraft_server", { address }),
     restoreRecycledEntry: (itemId) =>
       invoke<RecycleBinItem>("restore_recycled_entry", { itemId }),
     getWorldBackupSettings: () =>
@@ -2485,6 +2541,61 @@ function createBrowserRuntime(): MoyuRuntime {
         payload: null,
       });
     },
+    async listInstanceServers(instanceId) {
+      return browserInstanceServers()[instanceId] ?? [];
+    },
+    async addInstanceServer(instanceId, name, address) {
+      const entry = browserValidateServer(name, address);
+      const all = browserInstanceServers();
+      const servers = [...(all[instanceId] ?? []), entry];
+      all[instanceId] = servers;
+      window.localStorage.setItem(BROWSER_INSTANCE_SERVERS_KEY, JSON.stringify(all));
+      return servers;
+    },
+    async removeInstanceServer(instanceId, index) {
+      const all = browserInstanceServers();
+      const servers = [...(all[instanceId] ?? [])];
+      if (index < 0 || index >= servers.length) throw new Error("服务器序号超出列表范围");
+      servers.splice(index, 1);
+      all[instanceId] = servers;
+      window.localStorage.setItem(BROWSER_INSTANCE_SERVERS_KEY, JSON.stringify(all));
+      return servers;
+    },
+    async updateInstanceServer(instanceId, index, name, address) {
+      const entry = browserValidateServer(name, address);
+      const all = browserInstanceServers();
+      const servers = [...(all[instanceId] ?? [])];
+      if (index < 0 || index >= servers.length) throw new Error("服务器序号超出列表范围");
+      servers[index] = { ...servers[index], ...entry };
+      all[instanceId] = servers;
+      window.localStorage.setItem(BROWSER_INSTANCE_SERVERS_KEY, JSON.stringify(all));
+      return servers;
+    },
+    async pingMinecraftServer(address) {
+      // 与核心一致先校验地址;离线名单里的地址模拟不可达。
+      browserParseServerAddress(address);
+      const offline = JSON.parse(
+        window.localStorage.getItem(BROWSER_OFFLINE_SERVERS_KEY) ?? "[]",
+      ) as string[];
+      if (offline.includes(address)) {
+        return {
+          online: false,
+          motd: null,
+          playersOnline: null,
+          playersMax: null,
+          versionName: null,
+          latencyMs: null,
+        };
+      }
+      return {
+        online: true,
+        motd: "§aMoyuMax §7测试服务器",
+        playersOnline: 3,
+        playersMax: 20,
+        versionName: "26.2",
+        latencyMs: 42,
+      };
+    },
     async restoreRecycledEntry(itemId) {
       const entries = browserRecycleEntries();
       const index = entries.findIndex((candidate) => candidate.id === itemId);
@@ -3109,6 +3220,47 @@ function browserInstanceWorlds(): Record<string, string[]> {
 function browserWorldDetails(): Record<string, InstanceWorldInfo[]> {
   const serialized = window.localStorage.getItem(BROWSER_WORLD_DETAILS_KEY);
   return serialized ? (JSON.parse(serialized) as Record<string, InstanceWorldInfo[]>) : {};
+}
+
+function browserInstanceServers(): Record<string, InstanceServerEntry[]> {
+  const serialized = window.localStorage.getItem(BROWSER_INSTANCE_SERVERS_KEY);
+  return serialized ? (JSON.parse(serialized) as Record<string, InstanceServerEntry[]>) : {};
+}
+
+/** 与核心一致的最小校验:名称非空,地址为 host[:port],端口 1-65535。 */
+function browserValidateServer(name: string, address: string): InstanceServerEntry {
+  const trimmedName = name.trim();
+  if (!trimmedName) throw new Error("服务器名称不能为空");
+  const trimmedAddress = browserParseServerAddress(address);
+  return { name: trimmedName, address: trimmedAddress, icon: null, acceptTextures: null };
+}
+
+function browserParseServerAddress(address: string): string {
+  const trimmed = address.trim();
+  if (!trimmed || /[\s]/.test(trimmed)) throw new Error("服务器地址不能为空或包含空白");
+  let host = trimmed;
+  let portText: string | null = null;
+  if (trimmed.startsWith("[")) {
+    const end = trimmed.indexOf("]");
+    if (end < 0) throw new Error("IPv6 地址缺少右方括号");
+    host = trimmed.slice(1, end);
+    const tail = trimmed.slice(end + 1);
+    if (tail && !tail.startsWith(":")) throw new Error("IPv6 地址后只能跟 :端口");
+    portText = tail ? tail.slice(1) : null;
+  } else {
+    const colons = trimmed.split(":").length - 1;
+    if (colons > 1) throw new Error("IPv6 地址需用方括号包裹,如 [::1]:25565");
+    if (colons === 1) {
+      [host, portText] = trimmed.split(":") as [string, string];
+    }
+  }
+  if (!host) throw new Error("服务器地址缺少主机名");
+  if (portText !== null) {
+    if (!/^\d+$/.test(portText)) throw new Error("端口必须是 1-65535 的数字");
+    const port = Number(portText);
+    if (port < 1 || port > 65535) throw new Error("端口必须在 1-65535 之间");
+  }
+  return trimmed;
 }
 
 function browserScreenshots(): Record<string, InstanceScreenshot[]> {

@@ -5567,3 +5567,87 @@ summary:focus-visible {
 .instance-empty p {
   margin: 0;
 }
+
+/* 实例服务器子页(servers.dat + MOTD) */
+
+.server-add-form {
+  display: grid;
+  grid-template-columns: minmax(120px, 200px) minmax(0, 1fr) auto;
+  gap: 10px;
+  margin-bottom: 14px;
+}
+
+.server-add-form input,
+.server-edit-form input {
+  min-width: 0;
+  padding: 8px 10px;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--r-sm);
+  background: var(--surface-2);
+  color: var(--text);
+}
+
+.server-edit-form {
+  display: grid;
+  grid-template-columns: minmax(120px, 200px) minmax(0, 1fr);
+  gap: 10px;
+}
+
+.server-info {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.server-icon {
+  flex: none;
+  width: 34px;
+  height: 34px;
+  border-radius: 8px;
+  object-fit: cover;
+}
+
+.server-icon-fallback {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--text-3);
+  background: var(--surface-3);
+}
+
+.server-text {
+  min-width: 0;
+}
+
+.server-motd {
+  display: block;
+  margin-top: 4px;
+  overflow-wrap: anywhere;
+  font-size: 12px;
+  text-shadow: 1px 1px 0 rgb(0 0 0 / 45%);
+}
+
+.server-offline {
+  color: var(--danger, #e06c75);
+}
+
+.motd-bold {
+  font-weight: 700;
+}
+
+.motd-c0 { color: #000; }
+.motd-c1 { color: #0000aa; }
+.motd-c2 { color: #00aa00; }
+.motd-c3 { color: #00aaaa; }
+.motd-c4 { color: #aa0000; }
+.motd-c5 { color: #aa00aa; }
+.motd-c6 { color: #ffaa00; }
+.motd-c7 { color: #aaa; }
+.motd-c8 { color: #555; }
+.motd-c9 { color: #5555ff; }
+.motd-ca { color: #55ff55; }
+.motd-cb { color: #55ffff; }
+.motd-cc { color: #ff5555; }
+.motd-cd { color: #ff55ff; }
+.motd-ce { color: #ffff55; }
+.motd-cf { color: #fff; }

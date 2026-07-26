@@ -13,15 +13,15 @@ use moyumax_core::{
     DiagnosticExportPreview, DiagnosticExportResult, DownloadInterrupt, ExitImpactSummary,
     FabricLoaderSummary, InstallExecutor, InstallSelection, InstallTask, InstalledContent,
     InstalledModpack, InstanceIsolation, InstanceResource, InstanceResourceKind,
-    InstanceScreenshot, InstanceWorldInfo, JavaArchitecture, JavaDeleteOutcome, JavaDistribution,
-    JavaEnvironmentSummary, LaunchExecution, LaunchOptions, LaunchSessionSummary, LoaderChoice,
-    ManagedInstanceSummary, MciMirrorClient, MetadataClient, MicrosoftAuthClient,
-    MicrosoftLoginCancel, ModpackInstallReport, ModpackUpdateReport, ModrinthClient,
-    ModrinthSearchPage, ModrinthSearchQuery, ModrinthVersionSummary, OnboardingSelection,
-    RecoveryDecision, RecycleBinItem, RecyclePurgeResult, ReleaseInfo, ResolvedInstallRequest,
-    ResolvedLoader, ShellState, SourcePolicy, ThemePack, UiBackground, UpdateClient,
-    VersionCatalog, WindowCloseBehavior, WorldBackupSummary, YggdrasilClient, min_version_block,
-    run_launch_execution,
+    InstanceScreenshot, InstanceServerEntry, InstanceWorldInfo, JavaArchitecture,
+    JavaDeleteOutcome, JavaDistribution, JavaEnvironmentSummary, LaunchExecution, LaunchOptions,
+    LaunchSessionSummary, LoaderChoice, ManagedInstanceSummary, MciMirrorClient, MetadataClient,
+    MicrosoftAuthClient, MicrosoftLoginCancel, MinecraftServerStatus, ModpackInstallReport,
+    ModpackUpdateReport, ModrinthClient, ModrinthSearchPage, ModrinthSearchQuery,
+    ModrinthVersionSummary, OnboardingSelection, RecoveryDecision, RecycleBinItem,
+    RecyclePurgeResult, ReleaseInfo, ResolvedInstallRequest, ResolvedLoader, ShellState,
+    SourcePolicy, ThemePack, UiBackground, UpdateClient, VersionCatalog, WindowCloseBehavior,
+    WorldBackupSummary, YggdrasilClient, min_version_block, run_launch_execution,
 };
 use serde::Serialize;
 use tauri::{Emitter, Manager, State};
@@ -988,6 +988,63 @@ fn delete_instance_world(
 ) -> Result<RecycleBinItem, String> {
     service
         .delete_instance_world(&instance_id, &world_name)
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+fn list_instance_servers(
+    service: State<'_, AppService>,
+    instance_id: String,
+) -> Result<Vec<InstanceServerEntry>, String> {
+    service
+        .list_instance_servers(&instance_id)
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+fn add_instance_server(
+    service: State<'_, AppService>,
+    instance_id: String,
+    name: String,
+    address: String,
+) -> Result<Vec<InstanceServerEntry>, String> {
+    service
+        .add_instance_server(&instance_id, &name, &address)
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+fn remove_instance_server(
+    service: State<'_, AppService>,
+    instance_id: String,
+    index: u32,
+) -> Result<Vec<InstanceServerEntry>, String> {
+    service
+        .remove_instance_server(&instance_id, index)
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+fn update_instance_server(
+    service: State<'_, AppService>,
+    instance_id: String,
+    index: u32,
+    name: String,
+    address: String,
+) -> Result<Vec<InstanceServerEntry>, String> {
+    service
+        .update_instance_server(&instance_id, index, &name, &address)
+        .map_err(|error| error.to_string())
+}
+
+/// 探测服务器状态;同步阻塞 IO,在 Tauri 命令线程执行,前端自行限制并发。
+#[tauri::command]
+fn ping_minecraft_server(
+    service: State<'_, AppService>,
+    address: String,
+) -> Result<MinecraftServerStatus, String> {
+    service
+        .ping_minecraft_server(&address)
         .map_err(|error| error.to_string())
 }
 
@@ -2589,6 +2646,11 @@ pub fn run() {
             delete_instance_screenshot,
             delete_instance_resource,
             delete_instance_world,
+            list_instance_servers,
+            add_instance_server,
+            remove_instance_server,
+            update_instance_server,
+            ping_minecraft_server,
             restore_recycled_entry,
             get_world_backup_settings,
             set_world_backup_interval_minutes,

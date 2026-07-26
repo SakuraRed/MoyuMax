@@ -7,12 +7,14 @@
     InstanceResource,
     InstanceResourceKind,
     InstanceScreenshot,
+    InstanceServerEntry,
     InstanceWorldInfo,
     InstalledContent,
     InstalledModpack,
     JavaEnvironment,
     LaunchSession,
     ManagedInstance,
+    MinecraftServerStatus,
     MoyuRuntime,
     NavigationKey,
     OnboardingSelection,
@@ -47,7 +49,7 @@
     onClose,
   }: Props = $props();
 
-  type DetailTab = "overview" | "setup" | "mods" | "saves" | "screenshots" | "resourcepacks" | "shaders";
+  type DetailTab = "overview" | "setup" | "mods" | "saves" | "screenshots" | "resourcepacks" | "shaders" | "servers";
   type ContentFilter = "all" | "enabled" | "disabled";
 
   const NAV_GROUPS: { groupKey: string; items: { key: DetailTab; labelKey: string }[] }[] = [
@@ -66,6 +68,7 @@
         { key: "screenshots", labelKey: "instanceDetail.nav.screenshots" },
         { key: "resourcepacks", labelKey: "instanceDetail.nav.resourcepacks" },
         { key: "shaders", labelKey: "instanceDetail.nav.shaders" },
+        { key: "servers", labelKey: "instanceDetail.nav.servers" },
       ],
     },
   ];
@@ -76,6 +79,35 @@
     forge: "Forge",
     neoforge: "NeoForge",
   };
+
+  /** MOTD § 颜色码 → 样式类(0-9a-f 十六色)。 */
+  const MOTD_COLOR_CLASSES: Record<string, string> = {
+    "0": "motd-c0",
+    "1": "motd-c1",
+    "2": "motd-c2",
+    "3": "motd-c3",
+    "4": "motd-c4",
+    "5": "motd-c5",
+    "6": "motd-c6",
+    "7": "motd-c7",
+    "8": "motd-c8",
+    "9": "motd-c9",
+    a: "motd-ca",
+    b: "motd-cb",
+    c: "motd-cc",
+    d: "motd-cd",
+    e: "motd-ce",
+    f: "motd-cf",
+  };
+  const SERVER_PING_CONCURRENCY = 4;
+
+  interface MotdSegment {
+    text: string;
+    colorClass: string | null;
+    bold: boolean;
+  }
+
+  type ServerPingState = MinecraftServerStatus | "loading";
 
   let tab = $state<DetailTab>("overview");
   let loading = $state(true);
@@ -88,6 +120,16 @@
   let resources = $state<InstanceResource[]>([]);
   let worlds = $state<InstanceWorldInfo[]>([]);
   let screenshots = $state<InstanceScreenshot[]>([]);
+  let servers = $state<InstanceServerEntry[]>([]);
+  let serverStatus = $state<Record<number, ServerPingState>>({});
+  let serverFormName = $state("");
+  let serverFormAddress = $state("");
+  let addingServer = $state(false);
+  let refreshingServers = $state(false);
+  let editingServer = $state<number | null>(null);
+  let editName = $state("");
+  let editAddress = $state("");
+  let savingServer = $state(false);
   let modFilter = $state<ContentFilter>("all");
   let resourceFilter = $state<ContentFilter>("all");
   let selectedScreenshot = $state<string | null>(null);
@@ -141,7 +183,7 @@
     loading = true;
     errorMessage = "";
     try {
-      const [pack, environments, options, auto, content, resourceList, worldList, shotList] =
+      const [pack, environments, options, auto, content, resourceList, worldList, shotList, serverList] =
         await Promise.all([
           runtime.getInstanceModpack(current.id),
           runtime.listJavaEnvironments(),
@@ -151,6 +193,7 @@
           runtime.listInstanceResources(current.id),
           runtime.listInstanceWorldDetails(current.id),
           runtime.listInstanceScreenshots(current.id),
+          runtime.listInstanceServers(current.id),
         ]);
       modpack = pack;
       javaEnvironments = environments;
@@ -161,6 +204,7 @@
       resources = resourceList;
       worlds = worldList;
       screenshots = shotList;
+      servers = serverList;
     } catch (error) {
       errorMessage = error instanceof Error ? error.message : String(error);
     } finally {
@@ -172,6 +216,7 @@
     tab = next;
     pendingDelete = null;
     selectedScreenshot = null;
+    editingServer = null;
     message = "";
     errorMessage = "";
   }
@@ -575,6 +620,163 @@
       busy = false;
     }
   }
+
+  /** 解析 MOTD 的 § 格式码:颜色码切分段落并着色,§l 粗体,§r 重置,其余格式码去码不渲染。 */
+  function motdSegments(motd: string): MotdSegment[] {
+    const segments: MotdSegment[] = [];
+    let colorClass: string | null = null;
+    let bold = false;
+    let buffer = "";
+    const flush = (): void => {
+      if (buffer) {
+        segments.push({ text: buffer, colorClass, bold });
+        buffer = "";
+      }
+    };
+    for (let index = 0; index < motd.length; index += 1) {
+      const character = motd.charAt(index);
+      if (character === "§" && index + 1 < motd.length) {
+        const code = motd.charAt(index + 1).toLowerCase();
+        if (MOTD_COLOR_CLASSES[code] || code === "l" || code === "r" || "kmno".includes(code)) {
+          flush();
+          if (MOTD_COLOR_CLASSES[code]) {
+            // 颜色码会重置格式(与游戏行为一致)。
+            colorClass = MOTD_COLOR_CLASSES[code];
+            bold = false;
+          } else if (code === "l") {
+            bold = true;
+          } else if (code === "r") {
+            colorClass = null;
+            bold = false;
+          }
+          index += 1;
+          continue;
+        }
+      }
+      buffer += character;
+    }
+    flush();
+    return segments;
+  }
+
+  async function addServer(): Promise<void> {
+    const current = instance;
+    if (!current) return;
+    addingServer = true;
+    clearMessages();
+    try {
+      servers = await runtime.addInstanceServer(current.id, serverFormName, serverFormAddress);
+      message = t("instanceDetail.servers.added").replace("{name}", serverFormName.trim());
+      serverFormName = "";
+      serverFormAddress = "";
+      // 不主动联网:状态由用户点「全部刷新」或单项刷新触发。
+    } catch (error) {
+      errorMessage = error instanceof Error ? error.message : String(error);
+    } finally {
+      addingServer = false;
+    }
+  }
+
+  function startEditServer(index: number): void {
+    const server = servers[index];
+    if (!server) return;
+    editingServer = index;
+    editName = server.name;
+    editAddress = server.address;
+    pendingDelete = null;
+    clearMessages();
+  }
+
+  async function saveEditServer(index: number): Promise<void> {
+    const current = instance;
+    if (!current) return;
+    savingServer = true;
+    clearMessages();
+    try {
+      servers = await runtime.updateInstanceServer(current.id, index, editName, editAddress);
+      message = t("instanceDetail.servers.updated").replace("{name}", editName.trim());
+      editingServer = null;
+      // 地址可能变化,旧状态作废,等用户手动刷新。
+      const { [index]: _dropped, ...rest } = serverStatus;
+      serverStatus = rest;
+    } catch (error) {
+      errorMessage = error instanceof Error ? error.message : String(error);
+    } finally {
+      savingServer = false;
+    }
+  }
+
+  async function deleteServer(index: number): Promise<void> {
+    const current = instance;
+    if (!current) return;
+    const name = servers[index]?.name ?? "";
+    busy = true;
+    clearMessages();
+    try {
+      servers = await runtime.removeInstanceServer(current.id, index);
+      pendingDelete = null;
+      message = t("instanceDetail.servers.deleted").replace("{name}", name);
+      // 序号整体上移,重建状态表。
+      const shifted: Record<number, ServerPingState> = {};
+      for (const [key, value] of Object.entries(serverStatus)) {
+        const position = Number(key);
+        if (position < index) shifted[position] = value;
+        else if (position > index) shifted[position - 1] = value;
+      }
+      serverStatus = shifted;
+    } catch (error) {
+      errorMessage = error instanceof Error ? error.message : String(error);
+    } finally {
+      busy = false;
+    }
+  }
+
+  async function refreshServerStatus(index: number): Promise<void> {
+    const server = servers[index];
+    if (!server) return;
+    const address = server.address;
+    serverStatus = { ...serverStatus, [index]: "loading" };
+    let status: MinecraftServerStatus;
+    try {
+      status = await runtime.pingMinecraftServer(address);
+    } catch {
+      status = {
+        online: false,
+        motd: null,
+        playersOnline: null,
+        playersMax: null,
+        versionName: null,
+        latencyMs: null,
+      };
+    }
+    // 写入前确认该行未被编辑/删除错位。
+    if (servers[index] && servers[index].address === address) {
+      serverStatus = { ...serverStatus, [index]: status };
+    }
+  }
+
+  /** 并发上限 4;失败项显示离线,不阻塞其余。 */
+  async function refreshAllServerStatus(): Promise<void> {
+    if (refreshingServers) return;
+    refreshingServers = true;
+    try {
+      let cursor = 0;
+      const total = servers.length;
+      const workers = Array.from(
+        { length: Math.min(SERVER_PING_CONCURRENCY, total) },
+        async () => {
+          while (cursor < total) {
+            const index = cursor;
+            cursor += 1;
+            await refreshServerStatus(index);
+          }
+        },
+      );
+      await Promise.all(workers);
+    } finally {
+      refreshingServers = false;
+    }
+  }
 </script>
 
 <AppShell
@@ -863,6 +1065,136 @@
             {@render resourceSection("resourcepack", "instanceDetail.resourcepacks.title")}
           {:else if tab === "shaders"}
             {@render resourceSection("shader", "instanceDetail.shaders.title")}
+          {:else if tab === "servers"}
+            <section class="backup-settings" aria-labelledby="instance-servers-title">
+              <header>
+                <div>
+                  <h2 id="instance-servers-title">{t("instanceDetail.servers.title")}</h2>
+                  <p>{t("instanceDetail.servers.description")}</p>
+                </div>
+                <div class="local-content-actions">
+                  <button
+                    class="button ghost compact"
+                    disabled={refreshingServers || servers.length === 0}
+                    onclick={() => void refreshAllServerStatus()}
+                  >{refreshingServers ? t("instanceDetail.servers.refreshing") : t("instanceDetail.servers.refreshAll")}</button>
+                </div>
+              </header>
+              <form
+                class="server-add-form"
+                onsubmit={(event) => {
+                  event.preventDefault();
+                  void addServer();
+                }}
+              >
+                <input
+                  bind:value={serverFormName}
+                  type="text"
+                  maxlength="64"
+                  placeholder={t("instanceDetail.servers.name")}
+                  aria-label={t("instanceDetail.servers.nameAria")}
+                />
+                <input
+                  bind:value={serverFormAddress}
+                  type="text"
+                  placeholder={t("instanceDetail.servers.addressHint")}
+                  aria-label={t("instanceDetail.servers.addressAria")}
+                />
+                <button class="button primary compact" type="submit" disabled={addingServer}>
+                  {addingServer ? t("instanceDetail.servers.adding") : t("instanceDetail.servers.addAction")}
+                </button>
+              </form>
+              {#if servers.length === 0}
+                <div class="instance-empty">
+                  <p>{t("instanceDetail.servers.empty")}</p>
+                  <small>{t("instanceDetail.servers.emptyHint")}</small>
+                </div>
+              {:else}
+                <div class="backup-list">
+                  {#each servers as server, index}
+                    {@const status = serverStatus[index]}
+                    <article class="backup-row server-row">
+                      {#if editingServer === index}
+                        <div class="server-edit-form">
+                          <input
+                            bind:value={editName}
+                            type="text"
+                            maxlength="64"
+                            aria-label={t("instanceDetail.servers.nameAria")}
+                          />
+                          <input
+                            bind:value={editAddress}
+                            type="text"
+                            aria-label={t("instanceDetail.servers.addressAria")}
+                          />
+                        </div>
+                        <div class="backup-side">
+                          <button class="button primary compact" disabled={savingServer} onclick={() => void saveEditServer(index)}>{t("instanceDetail.servers.saveEdit")}</button>
+                          <button class="button ghost compact" disabled={savingServer} onclick={() => { editingServer = null; }}>{t("instanceDetail.servers.cancelEdit")}</button>
+                        </div>
+                      {:else}
+                        <div class="server-info">
+                          {#if server.icon}
+                            <img class="server-icon" src={server.icon} alt="" />
+                          {:else}
+                            <span class="server-icon server-icon-fallback"><Icon name="wifi" size={16} /></span>
+                          {/if}
+                          <div class="server-text">
+                            <div class="backup-title-line"><h3>{server.name}</h3><span>{server.address}</span></div>
+                            {#if status === "loading"}
+                              <small>{t("instanceDetail.servers.pinging")}</small>
+                            {:else if status && status.online}
+                              <span class="server-motd">
+                                {#if status.motd}
+                                  {#each motdSegments(status.motd) as segment}
+                                    <span class={segment.colorClass ?? ""} class:motd-bold={segment.bold}>{segment.text}</span>
+                                  {/each}
+                                {:else}
+                                  {t("instanceDetail.servers.noMotd")}
+                                {/if}
+                              </span>
+                              <small>
+                                {t("instanceDetail.servers.players").replace("{online}", String(status.playersOnline ?? 0)).replace("{max}", String(status.playersMax ?? 0))}
+                                · {t("instanceDetail.servers.latency").replace("{ms}", String(status.latencyMs ?? 0))}
+                                {status.versionName ? ` · ${status.versionName}` : ""}
+                              </small>
+                            {:else if status}
+                              <small class="server-offline">{t("instanceDetail.servers.offline")}</small>
+                            {:else}
+                              <small>{t("instanceDetail.servers.unpinged")}</small>
+                            {/if}
+                          </div>
+                        </div>
+                        <div class="backup-side">
+                          <button
+                            class="button ghost compact"
+                            disabled={status === "loading"}
+                            aria-label={t("instanceDetail.servers.refreshAria").replace("{name}", server.name)}
+                            onclick={() => void refreshServerStatus(index)}
+                          >{t("instanceDetail.servers.refresh")}</button>
+                          <button
+                            class="button ghost compact"
+                            aria-label={t("instanceDetail.servers.editAria").replace("{name}", server.name)}
+                            onclick={() => startEditServer(index)}
+                          >{t("instanceDetail.servers.edit")}</button>
+                          {#if pendingDelete === `server-${index}`}
+                            <button class="button danger-subtle compact" disabled={busy} onclick={() => void deleteServer(index)}>{t("common.confirmDelete")}</button>
+                            <button class="button ghost compact" disabled={busy} onclick={() => { pendingDelete = null; }}>{t("common.cancel")}</button>
+                          {:else}
+                            <button
+                              class="button danger-subtle compact"
+                              disabled={busy}
+                              aria-label={t("instanceDetail.servers.deleteAria").replace("{name}", server.name)}
+                              onclick={() => { pendingDelete = `server-${index}`; }}
+                            >{t("common.delete")}</button>
+                          {/if}
+                        </div>
+                      {/if}
+                    </article>
+                  {/each}
+                </div>
+              {/if}
+            </section>
           {/if}
         {/if}
       </div>
