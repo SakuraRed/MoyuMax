@@ -32,6 +32,7 @@
     OnboardingSelection,
     ReferencingInstance,
     ReleaseInfo,
+    SourcePolicy,
     UiBackground,
   } from "../runtime";
   import { LITTLESKIN_YGGDRASIL_URL } from "../runtime";
@@ -140,6 +141,9 @@
   let memoryLoaded = $state(false);
   let savingMemory = $state(false);
   let downloadConcurrency = $state("24");
+  let sourcePolicyKind = $state<"mirrorFirst" | "officialFirst" | "custom">("mirrorFirst");
+  let customMinecraftBase = $state("");
+  let customModrinthBase = $state("");
 
   onMount(() => {
     void refresh();
@@ -171,12 +175,13 @@
         runtime.listAccounts(),
       ]);
       if (!backupSettingsLoaded) {
-        const [backupSettings, cliState, updateChecksState, storedBackground, concurrency] = await Promise.all([
+        const [backupSettings, cliState, updateChecksState, storedBackground, concurrency, sourcePolicy] = await Promise.all([
           runtime.getWorldBackupSettings(),
           runtime.getCliEnabled(),
           runtime.getUpdateChecksEnabled(),
           runtime.getUiBackground(),
           runtime.getDownloadConcurrency(),
+          runtime.getDownloadSourcePolicy(),
         ]);
         backupInterval = backupSettings.intervalMinutes;
         backupKeep = backupSettings.keepCount;
@@ -184,6 +189,11 @@
         updateChecks = updateChecksState;
         backgroundType = storedBackground.type;
         downloadConcurrency = String(concurrency);
+        sourcePolicyKind = sourcePolicy.kind;
+        if (sourcePolicy.kind === "custom") {
+          customMinecraftBase = sourcePolicy.minecraftBase ?? "";
+          customModrinthBase = sourcePolicy.modrinthBase ?? "";
+        }
         if (storedBackground.type === "color") backgroundColor = storedBackground.color;
         if (storedBackground.type === "themePack") {
           backgroundPackName = `${storedBackground.pack.name}（${storedBackground.pack.author}）`;
@@ -556,6 +566,48 @@
     try {
       await runtime.setDownloadConcurrency(value);
       notice = t("settings.download.concurrencySaved");
+    } catch (error) {
+      errorMessage = error instanceof Error ? error.message : String(error);
+    }
+  }
+
+  async function saveSourcePolicy(kind: "mirrorFirst" | "officialFirst" | "custom"): Promise<void> {
+    errorMessage = "";
+    notice = "";
+    sourcePolicyKind = kind;
+    if (kind === "custom") return; // 自定义需填基址后点保存
+    const policy: SourcePolicy = { kind };
+    try {
+      await runtime.setDownloadSourcePolicy(policy);
+      notice = t("settings.download.sourceSaved");
+    } catch (error) {
+      errorMessage = error instanceof Error ? error.message : String(error);
+    }
+  }
+
+  async function saveCustomSourcePolicy(): Promise<void> {
+    errorMessage = "";
+    notice = "";
+    const minecraftBase = customMinecraftBase.trim();
+    const modrinthBase = customModrinthBase.trim();
+    if (!minecraftBase && !modrinthBase) {
+      errorMessage = t("settings.download.sourceCustomRequired");
+      return;
+    }
+    for (const base of [minecraftBase, modrinthBase]) {
+      if (base && !base.startsWith("https://")) {
+        errorMessage = t("settings.download.sourceCustomHttps");
+        return;
+      }
+    }
+    const policy: SourcePolicy = {
+      kind: "custom",
+      minecraftBase: minecraftBase || null,
+      modrinthBase: modrinthBase || null,
+    };
+    try {
+      await runtime.setDownloadSourcePolicy(policy);
+      notice = t("settings.download.sourceSaved");
     } catch (error) {
       errorMessage = error instanceof Error ? error.message : String(error);
     }
@@ -934,6 +986,37 @@
           />
         </label>
       </div>
+      <div class="backup-settings-grid" role="radiogroup" aria-label={t("settings.download.sourceAria")}>
+        <span>{t("settings.download.sourceLabel")}</span>
+        <label class="auto-update-toggle">
+          <input type="radio" name="source-policy" checked={sourcePolicyKind === "mirrorFirst"} onchange={() => void saveSourcePolicy("mirrorFirst")} />
+          <span>{t("settings.download.sourceMirrorFirst")}</span>
+        </label>
+        <label class="auto-update-toggle">
+          <input type="radio" name="source-policy" checked={sourcePolicyKind === "officialFirst"} onchange={() => void saveSourcePolicy("officialFirst")} />
+          <span>{t("settings.download.sourceOfficialFirst")}</span>
+        </label>
+        <label class="auto-update-toggle">
+          <input type="radio" name="source-policy" checked={sourcePolicyKind === "custom"} onchange={() => void saveSourcePolicy("custom")} />
+          <span>{t("settings.download.sourceCustom")}</span>
+        </label>
+      </div>
+      {#if sourcePolicyKind === "custom"}
+        <div class="backup-settings-grid">
+          <label>
+            <span>{t("settings.download.sourceCustomMinecraft")}</span>
+            <input type="text" aria-label={t("settings.download.sourceCustomMinecraftAria")} placeholder="https://bmclapi2.bangbang93.com" bind:value={customMinecraftBase} />
+          </label>
+          <label>
+            <span>{t("settings.download.sourceCustomModrinth")}</span>
+            <input type="text" aria-label={t("settings.download.sourceCustomModrinthAria")} placeholder="https://mod.mcimirror.top" bind:value={customModrinthBase} />
+          </label>
+          <div class="local-content-actions">
+            <button class="button primary compact" onclick={() => void saveCustomSourcePolicy()}>{t("settings.download.sourceCustomSave")}</button>
+          </div>
+          <small class="netplay-note">{t("settings.download.sourceCustomHint")}</small>
+        </div>
+      {/if}
     </section>
         {/if}
 
