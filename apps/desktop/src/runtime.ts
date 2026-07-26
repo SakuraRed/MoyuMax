@@ -403,7 +403,7 @@ export interface AccountSummary {
   lastValidatedAtUnixSeconds: number | null;
 }
 
-/** 项目版本摘要（自由下载的版本选择列表）。 */
+/** 项目版本摘要（自由下载的版本选择列表与资源详情文件列表）。 */
 export interface ModrinthVersionSummary {
   id: string;
   versionNumber: string;
@@ -411,6 +411,8 @@ export interface ModrinthVersionSummary {
   datePublished: string;
   gameVersions: string[];
   loaders: string[];
+  /** 该版本的累计下载量（资源详情文件行展示）。 */
+  downloads: number;
 }
 
 /** 联机房间的非敏感视图（不携带密码）。 */
@@ -2281,6 +2283,7 @@ function createBrowserRuntime(): MoyuRuntime {
           datePublished: "2026-06-18T10:00:00Z",
           gameVersions: ["26.2"],
           loaders: ["fabric"],
+          downloads: 342_000,
         },
         {
           id: "VER00001",
@@ -2289,6 +2292,7 @@ function createBrowserRuntime(): MoyuRuntime {
           datePublished: "2026-05-30T10:00:00Z",
           gameVersions: ["26.1", "26.2"],
           loaders: ["fabric"],
+          downloads: 128_500,
         },
       ];
     },

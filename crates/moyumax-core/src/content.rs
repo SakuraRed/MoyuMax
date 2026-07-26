@@ -131,7 +131,7 @@ pub struct ModrinthVersionFile {
     pub size: u64,
 }
 
-/// 项目版本摘要（自由下载的版本选择列表）。
+/// 项目版本摘要（自由下载的版本选择列表与资源详情文件列表）。
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ModrinthVersionSummary {
@@ -141,6 +141,9 @@ pub struct ModrinthVersionSummary {
     pub date_published: String,
     pub game_versions: Vec<String>,
     pub loaders: Vec<String>,
+    /// 该版本的累计下载量（资源详情文件行展示）。
+    #[serde(default)]
+    pub downloads: u64,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -736,6 +739,7 @@ impl ModrinthClient {
                 date_published: version.date_published,
                 game_versions: version.game_versions,
                 loaders: version.loaders,
+                downloads: version.downloads,
             })
             .collect())
     }
@@ -1918,6 +1922,8 @@ struct ModrinthVersion {
     version_type: ModrinthVersionType,
     status: ModrinthVersionStatus,
     date_published: String,
+    #[serde(default)]
+    downloads: u64,
     dependencies: Vec<ModrinthDependency>,
     files: Vec<ModrinthFile>,
 }

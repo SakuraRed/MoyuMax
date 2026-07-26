@@ -84,6 +84,50 @@ async fn catalog_search_filters_facets_by_project_type() {
 }
 
 #[tokio::test]
+async fn catalog_project_versions_carry_download_counts() {
+    // 资源详情文件行需要每个版本的下载量；摘要必须透传 API 的 downloads 字段。
+    let (base_url, _server) = spawn_api(
+        |method, path, _body| {
+            assert_eq!(method, "GET");
+            assert!(path.starts_with("/project/ABCDEFGH/version"));
+            (
+                200,
+                serde_json::json!([
+                    {
+                        "id": "rel1", "project_id": "ABCDEFGH", "version_number": "3.0.2+26.2",
+                        "game_versions": ["26.2"], "loaders": ["fabric"],
+                        "version_type": "release", "status": "listed",
+                        "date_published": "2026-06-18T10:00:00Z", "downloads": 342_000,
+                        "dependencies": [], "files": []
+                    },
+                    {
+                        "id": "beta1", "project_id": "ABCDEFGH", "version_number": "3.1.0-beta",
+                        "game_versions": ["26.2"], "loaders": ["fabric"],
+                        "version_type": "beta", "status": "listed",
+                        "date_published": "2026-06-20T10:00:00Z",
+                        "dependencies": [], "files": []
+                    }
+                ])
+                .to_string(),
+            )
+        },
+        None,
+    );
+    let client = ModrinthClient::with_base_url(&base_url).unwrap();
+
+    let versions = client
+        .project_versions("ABCDEFGH", None, None)
+        .await
+        .unwrap();
+
+    assert_eq!(versions.len(), 2);
+    assert_eq!(versions[0].id, "rel1");
+    assert_eq!(versions[0].downloads, 342_000);
+    assert_eq!(versions[1].id, "beta1");
+    assert_eq!(versions[1].downloads, 0, "缺省 downloads 应回退为 0");
+}
+
+#[tokio::test]
 async fn catalog_latest_file_prefers_release_and_validates_hashes() {
     let (base_url, _server) = spawn_api(
         |method, path, _body| {

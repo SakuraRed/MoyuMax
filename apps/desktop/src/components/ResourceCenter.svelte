@@ -2,6 +2,13 @@
   import { onMount } from "svelte";
 
   import { t, uiLanguage } from "../i18n.svelte";
+  import {
+    isFavorite,
+    listFavorites,
+    toggleFavorite,
+    type FavoriteProject,
+    type FavoriteProjectInput,
+  } from "../favorites.svelte";
   import { mcmodEntryFor, mcmodSearchUrl } from "../mcmod-zh";
   import type {
     ContentInstallPreview,
@@ -101,7 +108,8 @@
   let submitting = $state(false);
   let queued = $state(false);
 
-  let tab = $state<"catalog" | "instances">("catalog");
+  let tab = $state<"catalog" | "instances" | "favorites">("catalog");
+  let catalogView = $state<"list" | "detail">("list");
   let catalogType = $state<ModrinthProjectType>("mod");
   let catalogQuery = $state("");
   let catalogSearching = $state(false);
@@ -128,6 +136,237 @@
   let downloadLoadingVersions = $state(false);
   let downloading = $state(false);
   let downloadDone = $state("");
+
+  // ---- 资源详情副视图（PCL 3.5）：简介卡 + 版本筛选 + 按 MC 版本分组的文件列表 ----
+  const UNKNOWN_GROUP_KEY = "unknown";
+  let detailProject = $state<ModrinthProjectSummary | null>(null);
+  let detailType = $state<ModrinthProjectType>("mod");
+  let detailVersions = $state<ModrinthVersionSummary[]>([]);
+  let detailVersionsLoading = $state(false);
+  let detailVersionsError = $state("");
+  let detailGameFilter = $state("");
+  let detailLoaderFilter = $state("");
+  let detailOpenOverrides = $state<Record<string, boolean>>({});
+  let detailCopied = $state<"name" | "link" | "">("");
+
+  interface DetailVersionGroup {
+    key: string;
+    isSelected: boolean;
+    versions: ModrinthVersionSummary[];
+  }
+
+  function compareGameVersionsDescending(left: string, right: string): number {
+    const leftParts = left.split(".");
+    const rightParts = right.split(".");
+    const length = Math.max(leftParts.length, rightParts.length);
+    for (let index = 0; index < length; index += 1) {
+      const a = leftParts[index] ?? "";
+      const b = rightParts[index] ?? "";
+      const aNumber = Number(a);
+      const bNumber = Number(b);
+      if (a === b) continue;
+      if (!Number.isNaN(aNumber) && !Number.isNaN(bNumber) && aNumber !== bNumber) {
+        return bNumber - aNumber;
+      }
+      if (!Number.isNaN(aNumber)) return -1;
+      if (!Number.isNaN(bNumber)) return 1;
+      return b.localeCompare(a);
+    }
+    return 0;
+  }
+
+  /** 筛选 chip 命中规则：归并后的大版本 chip 以前缀匹配（1.21 覆盖 1.21.1）。 */
+  function gameVersionMatchesFilter(gameVersion: string, filter: string): boolean {
+    return gameVersion === filter || gameVersion.startsWith(`${filter}.`);
+  }
+
+  /** PCL 规则：不同游戏版本数 ≥9 时按大版本（1.21/1.20…）归并筛选 chip。 */
+  const detailGameOptions = $derived.by(() => {
+    const distinct = [
+      ...new Set(detailVersions.flatMap((version) => version.gameVersions)),
+    ].sort(compareGameVersionsDescending);
+    if (distinct.length < 9) return distinct;
+    const merged = new Set<string>();
+    for (const version of distinct) {
+      const parts = version.split(".");
+      const isTripleNumeric = parts.length >= 3 && parts.slice(0, 2).every((part) => /^\d+$/.test(part));
+      merged.add(isTripleNumeric ? parts.slice(0, 2).join(".") : version);
+    }
+    return [...merged].sort(compareGameVersionsDescending);
+  });
+
+  const detailGroups = $derived.by((): DetailVersionGroup[] => {
+    const filtered = detailVersions.filter((version) => {
+      const gameMatch =
+        detailGameFilter === "" ||
+        version.gameVersions.some((candidate) => gameVersionMatchesFilter(candidate, detailGameFilter));
+      const loaderMatch =
+        detailType !== "mod" || detailLoaderFilter === "" || version.loaders.includes(detailLoaderFilter);
+      return gameMatch && loaderMatch;
+    });
+    const buckets = new Map<string, ModrinthVersionSummary[]>();
+    for (const version of filtered) {
+      const targets = version.gameVersions.length > 0 ? version.gameVersions : [UNKNOWN_GROUP_KEY];
+      for (const target of targets) {
+        if (detailGameFilter !== "" && !gameVersionMatchesFilter(target, detailGameFilter)) continue;
+        const bucket = buckets.get(target) ?? [];
+        bucket.push(version);
+        buckets.set(target, bucket);
+      }
+    }
+    const selectedGameVersion = detailType === "modpack" ? "" : (selectedInstance()?.gameVersion ?? "");
+    return [...buckets.entries()]
+      .sort((a, b) => {
+        if (a[0] === UNKNOWN_GROUP_KEY) return 1;
+        if (b[0] === UNKNOWN_GROUP_KEY) return -1;
+        return compareGameVersionsDescending(a[0], b[0]);
+      })
+      .map(([key, versions]) => ({
+        key,
+        isSelected: key === selectedGameVersion,
+        versions: [...versions].sort((a, b) => b.datePublished.localeCompare(a.datePublished)),
+      }));
+  });
+
+  /** PCL 折叠卡规则：单组默认展开；带目标实例时「所选版本」组自动展开。 */
+  function detailGroupOpen(group: DetailVersionGroup, groupCount: number): boolean {
+    return detailOpenOverrides[group.key] ?? (groupCount === 1 || group.isSelected);
+  }
+
+  function toggleDetailGroup(group: DetailVersionGroup, groupCount: number): void {
+    detailOpenOverrides = {
+      ...detailOpenOverrides,
+      [group.key]: !detailGroupOpen(group, groupCount),
+    };
+  }
+
+  async function openDetail(project: ModrinthProjectSummary, type: ModrinthProjectType): Promise<void> {
+    detailProject = project;
+    detailType = type;
+    // 下载/安装流程复用目录侧状态（catalogType 与 detailType 保持一致）。
+    catalogType = type;
+    catalogView = "detail";
+    detailCopied = "";
+    detailVersions = [];
+    detailVersionsError = "";
+    detailOpenOverrides = {};
+    const instance = selectedInstance();
+    detailGameFilter = type === "modpack" ? "" : (instance?.gameVersion ?? "");
+    detailLoaderFilter = type === "mod" ? (instance?.loaderKind ?? "") : "";
+    detailVersionsLoading = true;
+    catalogError = "";
+    try {
+      detailVersions = await runtime.listModrinthVersions(project.projectId);
+    } catch (error) {
+      detailVersionsError = error instanceof Error ? error.message : String(error);
+    } finally {
+      detailVersionsLoading = false;
+    }
+  }
+
+  function closeDetail(): void {
+    catalogView = "list";
+    detailProject = null;
+  }
+
+  function modrinthProjectUrl(project: ModrinthProjectSummary): string {
+    return `https://modrinth.com/project/${project.slug}`;
+  }
+
+  async function copyDetailText(kind: "name" | "link"): Promise<void> {
+    const project = detailProject;
+    if (!project) return;
+    const text = kind === "name" ? project.title : modrinthProjectUrl(project);
+    try {
+      await navigator.clipboard.writeText(text);
+    } catch {
+      fallbackCopyText(text);
+    }
+    detailCopied = kind;
+    window.setTimeout(() => {
+      if (detailCopied === kind) detailCopied = "";
+    }, 1600);
+  }
+
+  function fallbackCopyText(text: string): void {
+    const area = document.createElement("textarea");
+    area.value = text;
+    area.style.position = "fixed";
+    area.style.opacity = "0";
+    document.body.appendChild(area);
+    area.select();
+    document.execCommand("copy");
+    area.remove();
+  }
+
+  function favoriteInputFor(project: ModrinthProjectSummary, type: ModrinthProjectType): FavoriteProjectInput {
+    return {
+      projectId: project.projectId,
+      slug: project.slug,
+      title: project.title,
+      iconUrl: project.iconUrl,
+      type,
+    };
+  }
+
+  function toggleProjectFavorite(project: ModrinthProjectSummary, type: ModrinthProjectType): void {
+    toggleFavorite(favoriteInputFor(project, type));
+  }
+
+  /** 收藏夹行内「下载」：重建摘要并进入详情（收藏不含描述与统计，简介区如实留空）。 */
+  function openFavoriteDetail(favorite: FavoriteProject): void {
+    tab = "catalog";
+    void openDetail(
+      {
+        projectId: favorite.projectId,
+        slug: favorite.slug,
+        title: favorite.title,
+        description: "",
+        downloads: 0,
+        clientSide: "",
+        serverSide: "",
+        iconUrl: favorite.iconUrl,
+        author: null,
+        dateModified: null,
+        versions: [],
+      },
+      favorite.type,
+    );
+  }
+
+  /** 详情文件行下载：整合包走安装预览；有实例走既有安装流；否则打开已定版本的自由下载。 */
+  function downloadDetailVersion(version: ModrinthVersionSummary): void {
+    const project = detailProject;
+    if (!project) return;
+    if (detailType === "modpack") {
+      void previewPack(project);
+      return;
+    }
+    const instance = selectedInstance();
+    if (instance && detailType === "mod") {
+      void createPreview(project);
+      return;
+    }
+    if (instance) {
+      void installResourceToInstance(project, version.id);
+      return;
+    }
+    openDetailDownloadDialog(version);
+  }
+
+  function openDetailDownloadDialog(version: ModrinthVersionSummary): void {
+    const project = detailProject;
+    if (!project) return;
+    downloadTarget = project;
+    downloadVersions = [version];
+    downloadVersionId = version.id;
+    downloadLoadingVersions = false;
+    catalogError = "";
+    downloadDone = "";
+    downloadDest = selectedInstance() ? "instance" : "custom";
+    const slug = project.slug || "download";
+    downloadFileName = `${slug}-${version.versionNumber}${defaultFileExtension()}`;
+  }
 
   onMount(() => {
     selectedInstanceId = eligibleInstances[0]?.id ?? "";
@@ -450,14 +689,14 @@
     }
   }
 
-  async function installResourceToInstance(project: ModrinthProjectSummary): Promise<void> {
+  async function installResourceToInstance(project: ModrinthProjectSummary, versionId?: string): Promise<void> {
     const instance = selectedInstance();
     if (!instance || (catalogType !== "shader" && catalogType !== "resourcepack")) return;
     resourceInstalling = project.projectId;
     catalogError = "";
     resourceInstallDone = "";
     try {
-      await runtime.installOnlineResource(instance.id, catalogType, project.projectId);
+      await runtime.installOnlineResource(instance.id, catalogType, project.projectId, versionId);
       resourceInstallDone = `${project.title} → ${instance.name}`;
       await loadInstalled();
     } catch (error) {
@@ -573,11 +812,13 @@
       </div>
       <nav class="resource-tabs" aria-label={t("resources.tabs.aria")}>
         <button class:active={tab === "catalog"} onclick={() => { tab = "catalog"; }}>{t("resources.tabs.catalog")}</button>
+        <button class:active={tab === "favorites"} onclick={() => { tab = "favorites"; }}>{t("resources.tabs.favorites")}</button>
         <button class:active={tab === "instances"} onclick={() => { tab = "instances"; }}>{t("resources.tabs.instances")}</button>
       </nav>
     </header>
 
     {#if tab === "catalog"}
+      {#if catalogView === "list"}
       <div class="catalog-chips" role="group" aria-label={t("resources.catalog.typeAria")}>
         {#each CATALOG_TYPES as catalogTypeOption}
           <button
@@ -666,6 +907,7 @@
           </span>
         {/if}
       </div>
+      {/if}
 
       {#if catalogError}
         <div class="error-block content-search-error" role="alert">
@@ -710,6 +952,7 @@
         </div>
       {/if}
 
+      {#if catalogView === "list"}
       {#if catalogSearching && catalogHits.length === 0}
         <div class="content-loading" aria-live="polite"><span>{t("resources.catalog.searching")}</span></div>
       {:else if catalogPage && catalogHits.length === 0}
@@ -764,7 +1007,15 @@
                       {resourceInstalling === project.projectId ? t("resources.catalog.installing") : t("resources.catalog.install")}
                     </button>
                   {/if}
+                  <button class="button ghost compact" onclick={() => void openDetail(project, catalogType)}>{t("resources.detail.open")}</button>
                   <button class="button ghost compact" disabled={downloading} onclick={() => void openDownloadDialog(project)}>{t("resources.download.button")}</button>
+                  <button
+                    class="button ghost compact favorite-toggle"
+                    class:favorite-active={isFavorite(project.projectId)}
+                    aria-pressed={isFavorite(project.projectId)}
+                    aria-label={t("resources.detail.favoriteToggleAria").replace("{name}", project.title)}
+                    onclick={() => toggleProjectFavorite(project, catalogType)}
+                  ><Icon name="star" size={14} /></button>
                 </div>
               </div>
             </article>
@@ -777,6 +1028,131 @@
             </button>
           </div>
         {/if}
+      {/if}
+      {:else if detailProject}
+        {@const project = detailProject}
+        {@const detailMcmod = mcmodEntryFor(project.slug)}
+        {@const zhRegion = uiLanguage() === "zh-CN" || uiLanguage() === "zh-TW"}
+        <div class="detail-view">
+          <button class="button ghost compact detail-back" onclick={closeDetail}>
+            <Icon name="arrow-left" size={14} />
+            {t("resources.detail.back")}
+          </button>
+
+          <section class="content-preview detail-intro" aria-labelledby="detail-intro-title">
+            <div class="detail-intro-main">
+              <div class="result-icon detail-intro-icon" aria-hidden="true">
+                {#if project.iconUrl}
+                  <img src={project.iconUrl} alt="" loading="lazy" />
+                {:else}
+                  <span>{project.title.slice(0, 1)}</span>
+                {/if}
+              </div>
+              <div class="detail-intro-copy">
+                <h2 id="detail-intro-title">{project.title}</h2>
+                {#if zhRegion && detailMcmod}
+                  <strong class="detail-zh-name">{detailMcmod.zhName}</strong>
+                {/if}
+                {#if project.author}
+                  <span class="result-author">by {project.author}</span>
+                {/if}
+                {#if project.description}
+                  <p>{project.description}</p>
+                {/if}
+                {#if zhRegion && detailMcmod && detailMcmod.zhDescription !== project.description}
+                  <p class="detail-zh-desc">{detailMcmod.zhDescription}</p>
+                {/if}
+                {#if project.downloads > 0 || project.dateModified}
+                  <div class="detail-stats">
+                    <span>{t("resources.catalog.downloads").replace("{count}", formatDownloads(project.downloads))}</span>
+                    {#if project.dateModified}<span>{formatDate(project.dateModified)}</span>{/if}
+                    <span>{t("resources.detail.source")}</span>
+                  </div>
+                {/if}
+              </div>
+            </div>
+            <div class="detail-actions">
+              <button class="button ghost compact" onclick={() => void runtime.openExternalUrl(modrinthProjectUrl(project))}>{t("resources.detail.openModrinth")}</button>
+              {#if zhRegion && detailMcmod}
+                <button class="button ghost compact" onclick={() => void runtime.openExternalUrl(detailMcmod.mcmodUrl)}>{t("resources.detail.openMcmod")}</button>
+              {/if}
+              <button class="button ghost compact" onclick={() => void copyDetailText("name")}>{detailCopied === "name" ? t("resources.detail.copied") : t("resources.detail.copyName")}</button>
+              <button class="button ghost compact" onclick={() => void copyDetailText("link")}>{detailCopied === "link" ? t("resources.detail.copied") : t("resources.detail.copyLink")}</button>
+              <button
+                class="button ghost compact favorite-toggle"
+                class:favorite-active={isFavorite(project.projectId)}
+                aria-pressed={isFavorite(project.projectId)}
+                aria-label={t("resources.detail.favoriteToggleAria").replace("{name}", project.title)}
+                onclick={() => toggleProjectFavorite(project, detailType)}
+              >
+                <Icon name="star" size={14} />
+                {isFavorite(project.projectId) ? t("resources.detail.favoriteRemove") : t("resources.detail.favoriteAdd")}
+              </button>
+            </div>
+          </section>
+
+          <section class="content-preview detail-filter" aria-labelledby="detail-filter-title">
+            <header><h2 id="detail-filter-title">{t("resources.detail.filterTitle")}</h2></header>
+            <div class="catalog-chips" role="group" aria-label={t("resources.detail.gameFilterAria")}>
+              <button class:active={detailGameFilter === ""} aria-pressed={detailGameFilter === ""} onclick={() => { detailGameFilter = ""; }}>{t("resources.catalog.filterVersionAll")}</button>
+              {#each detailGameOptions as option}
+                <button class:active={detailGameFilter === option} aria-pressed={detailGameFilter === option} onclick={() => { detailGameFilter = option; }}>{option}</button>
+              {/each}
+            </div>
+            {#if detailType === "mod"}
+              <div class="catalog-chips" role="group" aria-label={t("resources.detail.loaderFilterAria")}>
+                <button class:active={detailLoaderFilter === ""} aria-pressed={detailLoaderFilter === ""} onclick={() => { detailLoaderFilter = ""; }}>{t("resources.catalog.filterLoaderAll")}</button>
+                {#each Object.entries(LOADER_NAMES) as [kind, name]}
+                  <button class:active={detailLoaderFilter === kind} aria-pressed={detailLoaderFilter === kind} onclick={() => { detailLoaderFilter = kind; }}>{name}</button>
+                {/each}
+              </div>
+            {/if}
+          </section>
+
+          <section class="content-preview detail-files" aria-labelledby="detail-files-title">
+            <header><h2 id="detail-files-title">{t("resources.detail.filesTitle")}</h2></header>
+            {#if detailVersionsLoading}
+              <div class="content-loading" aria-live="polite"><span>{t("resources.download.loadingVersions")}</span></div>
+            {:else if detailVersionsError}
+              <div class="error-block" role="alert"><strong>{t("resources.catalog.errorTitle")}</strong><span>{detailVersionsError}</span></div>
+            {:else if detailGroups.length === 0}
+              <div class="local-content-empty">{t("resources.detail.filesEmpty")}</div>
+            {:else}
+              <div class="version-groups">
+                {#each detailGroups as group}
+                  {@const open = detailGroupOpen(group, detailGroups.length)}
+                  <div class="version-group">
+                    <button class="version-group-head" aria-expanded={open} onclick={() => toggleDetailGroup(group, detailGroups.length)}>
+                      <span class="group-chevron" class:open={open}></span>
+                      <strong>{group.key === UNKNOWN_GROUP_KEY ? t("resources.detail.unknownGroup") : `Minecraft ${group.key}`}</strong>
+                      {#if group.isSelected}
+                        <span class="detail-selected-badge">{t("resources.detail.selectedGroup")}</span>
+                      {/if}
+                      <small>{t("resources.detail.groupCount").replace("{count}", String(group.versions.length))}</small>
+                    </button>
+                    {#if open}
+                      <div class="detail-file-list">
+                        {#each group.versions as version}
+                          <article class="detail-file-row">
+                            <div class="detail-file-main">
+                              <strong>{version.versionNumber}{version.versionType !== "release" ? ` (${version.versionType})` : ""}</strong>
+                              <small>{formatDate(version.datePublished)} · {t("resources.catalog.downloads").replace("{count}", formatDownloads(version.downloads))}</small>
+                            </div>
+                            <button
+                              class="button compact"
+                              disabled={Boolean(previewingProject) || Boolean(packPreviewing) || Boolean(resourceInstalling) || packInstalling}
+                              onclick={() => downloadDetailVersion(version)}
+                            >{t("resources.download.button")}</button>
+                          </article>
+                        {/each}
+                      </div>
+                    {/if}
+                  </div>
+                {/each}
+              </div>
+            {/if}
+          </section>
+        </div>
       {/if}
 
       {#if preview}
@@ -823,6 +1199,52 @@
         <div class="content-queued" role="status">
           <div><strong>{t("resources.queuedTitle")}</strong></div>
           <button class="button primary" onclick={onOpenTasks}>{t("resources.viewTasks")}</button>
+        </div>
+      {/if}
+    {:else if tab === "favorites"}
+      {@const favoriteList = listFavorites()}
+      {#if favoriteList.length === 0}
+        <section class="resource-empty">
+          <Icon name="star" size={28} />
+          <h2>{t("resources.favorites.empty")}</h2>
+          <p>{t("resources.favorites.emptyHint")}</p>
+          <button class="button primary" onclick={() => { tab = "catalog"; }}>{t("resources.favorites.goSearch")}</button>
+        </section>
+      {:else}
+        <div class="favorites-list" aria-label={t("resources.favorites.aria")}>
+          {#each CATALOG_TYPES as favoriteType}
+            {@const group = favoriteList.filter((candidate) => candidate.type === favoriteType.key)}
+            {#if group.length > 0}
+              <section class="local-content-section favorites-group" aria-labelledby={`favorites-group-${favoriteType.key}`}>
+                <header>
+                  <div><h2 id={`favorites-group-${favoriteType.key}`}>{t(favoriteType.labelKey)}</h2></div>
+                  <span class="favorites-count">{t("resources.favorites.count").replace("{count}", String(group.length))}</span>
+                </header>
+                <div class="installed-content-list">
+                  {#each group as favorite}
+                    {@const zhEntry = uiLanguage() === "zh-CN" || uiLanguage() === "zh-TW" ? mcmodEntryFor(favorite.slug) : null}
+                    <article class="installed-content-row favorites-row">
+                      <div class="result-icon favorites-icon" aria-hidden="true">
+                        {#if favorite.iconUrl}
+                          <img src={favorite.iconUrl} alt="" loading="lazy" />
+                        {:else}
+                          <span>{favorite.title.slice(0, 1)}</span>
+                        {/if}
+                      </div>
+                      <div class="favorites-main">
+                        <strong>{zhEntry?.zhName ?? favorite.title}</strong>
+                        <small>{#if zhEntry}{favorite.title} · {/if}{t(favoriteType.labelKey)}</small>
+                      </div>
+                      <div class="resource-row-actions">
+                        <button class="button compact" onclick={() => openFavoriteDetail(favorite)}>{t("resources.download.button")}</button>
+                        <button class="button danger-subtle compact" onclick={() => toggleFavorite(favorite)}>{t("resources.favorites.remove")}</button>
+                      </div>
+                    </article>
+                  {/each}
+                </div>
+              </section>
+            {/if}
+          {/each}
         </div>
       {/if}
     {:else}

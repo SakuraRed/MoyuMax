@@ -5218,6 +5218,167 @@ summary:focus-visible {
   color: var(--text-3);
 }
 
+/* ---------- 资源详情副视图与收藏夹（PCL 详情页/收藏页复刻） ---------- */
+.detail-view {
+  display: grid;
+  gap: 14px;
+}
+
+.detail-back {
+  justify-self: start;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.detail-intro-main {
+  display: flex;
+  gap: 14px;
+  align-items: flex-start;
+}
+
+.detail-intro-icon {
+  width: 56px;
+  height: 56px;
+  font-size: 22px;
+}
+
+.detail-intro-copy {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.detail-intro-copy h2 {
+  margin: 0;
+  font-size: 17px;
+}
+
+.detail-zh-name {
+  color: var(--accent);
+  font-size: 13px;
+}
+
+.detail-intro-copy p {
+  margin: 0;
+  color: var(--text-2);
+  font-size: 13px;
+  overflow-wrap: anywhere;
+}
+
+.detail-zh-desc {
+  font-size: 12.5px;
+}
+
+.detail-stats {
+  display: flex;
+  gap: 14px;
+  flex-wrap: wrap;
+  margin-top: 4px;
+  color: var(--text-2);
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+}
+
+.detail-actions {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin-top: 14px;
+  padding-top: 12px;
+  border-top: 1px solid var(--border);
+}
+
+.favorite-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+}
+
+.favorite-active {
+  color: var(--accent);
+}
+
+.favorite-active svg {
+  fill: currentColor;
+}
+
+.detail-selected-badge {
+  padding: 1px 8px;
+  border-radius: 999px;
+  background: var(--accent-dim);
+  color: var(--accent);
+  font-size: 11px;
+  font-weight: 600;
+}
+
+.version-group .detail-file-list {
+  margin-top: 6px;
+  overflow: hidden;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+}
+
+.detail-file-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: var(--frame-row-inset-block) var(--frame-row-inset-inline);
+  border-bottom: 1px solid var(--border);
+}
+
+.detail-file-row:last-child {
+  border-bottom: 0;
+}
+
+.detail-file-main {
+  min-width: 0;
+}
+
+.detail-file-main strong,
+.detail-file-main small {
+  display: block;
+}
+
+.detail-file-main small {
+  margin-top: 2px;
+  color: var(--text-3);
+  font-size: 11.5px;
+  font-variant-numeric: tabular-nums;
+}
+
+.favorites-list {
+  display: grid;
+  gap: 14px;
+}
+
+.favorites-count {
+  color: var(--text-3);
+  font-size: 12px;
+}
+
+.favorites-row {
+  gap: 12px;
+}
+
+.favorites-icon {
+  width: 36px;
+  height: 36px;
+  font-size: 15px;
+}
+
+.favorites-main {
+  flex: 1;
+  min-width: 0;
+}
+
+.resource-empty .button {
+  margin-top: 10px;
+}
+
 /* ---------- 联机房间悬浮窗 ---------- */
 .netplay-float {
   position: fixed;

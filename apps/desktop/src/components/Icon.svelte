@@ -10,9 +10,11 @@
     | "wifi"
     | "disk"
     | "arrow-right"
+    | "arrow-left"
     | "check"
     | "play"
-    | "info";
+    | "info"
+    | "star";
 
   let { name, size = 17 } = $props<{ name: IconName; size?: number }>();
 </script>
@@ -58,6 +60,8 @@
     <path d="M8 9h8M8 14h4" />
   {:else if name === "arrow-right"}
     <path d="M5 12h14M14 7l5 5-5 5" />
+  {:else if name === "arrow-left"}
+    <path d="M19 12H5M10 7l-5 5 5 5" />
   {:else if name === "check"}
     <path d="m5 12 4 4L19 6" />
   {:else if name === "play"}
@@ -65,5 +69,7 @@
   {:else if name === "info"}
     <circle cx="12" cy="12" r="9" />
     <path d="M12 11v6M12 7h.01" />
+  {:else if name === "star"}
+    <path d="m12 3.6 2.6 5.3 5.8.8-4.2 4.1 1 5.8-5.2-2.7-5.2 2.7 1-5.8L3.6 9.7l5.8-.8Z" />
   {/if}
 </svg>
