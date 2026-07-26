@@ -698,6 +698,79 @@ impl AppService {
         Ok(())
     }
 
+    /// 取消安装任务：排队、暂停或运行中 → 已取消（事务写入）。
+    /// 运行中任务由桌面协调器先触发下载中断；执行器收尾不会覆盖已取消状态。
+    /// 已终态（completed/failed/cancelled）与提交中、等待恢复确认的任务拒绝取消：
+    /// 提交中是短暂原子窗口，等待恢复确认请走恢复决策（放弃即取消）。
+    pub fn cancel_install_task(&self, task_id: &str) -> Result<()> {
+        let mut connection = self.connection()?;
+        let transaction = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let changed = transaction.execute(
+            "
+            UPDATE install_tasks
+            SET state = 'cancelled', paused_by = NULL, updated_at_unix_seconds = ?2
+            WHERE id = ?1 AND state IN ('queued', 'paused', 'running')
+            ",
+            params![task_id, unix_timestamp()],
+        )?;
+        if changed == 0 {
+            return Err(CoreError::InvalidInstallRequest(
+                "任务不存在或当前状态不能取消".to_owned(),
+            ));
+        }
+        transaction.execute(
+            "
+            UPDATE task_progress
+            SET current_item = '已取消', error_summary = NULL
+            WHERE task_id = ?1
+            ",
+            params![task_id],
+        )?;
+        transaction.commit()?;
+        Ok(())
+    }
+
+    /// 删除终态安装任务（failed/completed/cancelled）：先递归清理受管暂存目录，
+    /// 再删除任务记录（进度与 Java 关联随外键级联删除）。
+    /// 暂存路径必须等于受管安装暂存区中的任务目录，防止路径穿越；
+    /// 目录清理失败时报错且任务记录保留。
+    pub fn delete_install_task(&self, task_id: &str) -> Result<()> {
+        Uuid::parse_str(task_id)
+            .map_err(|_| CoreError::InvalidInstallRequest("安装任务 ID 格式无效".to_owned()))?;
+        let expected_staging = self
+            .selected_data_directory()?
+            .join(".staging")
+            .join("install")
+            .join(task_id);
+        let connection = self.connection()?;
+        let (state, staging_directory) = connection
+            .query_row(
+                "SELECT state, staging_directory FROM install_tasks WHERE id = ?1",
+                params![task_id],
+                |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?)),
+            )
+            .optional()?
+            .ok_or_else(|| CoreError::InvalidInstallRequest("安装任务不存在".to_owned()))?;
+        if !matches!(
+            TaskState::from_database(&state)?,
+            TaskState::Failed | TaskState::Completed | TaskState::Cancelled
+        ) {
+            return Err(CoreError::InvalidInstallRequest(
+                "任务不存在或当前状态不能删除".to_owned(),
+            ));
+        }
+        if Path::new(&staging_directory) != expected_staging {
+            return Err(CoreError::InvalidStoredState(
+                "任务暂存路径不在受管安装暂存区中，已拒绝清理".to_owned(),
+            ));
+        }
+        if expected_staging.exists() {
+            fs::remove_dir_all(&expected_staging)?;
+        }
+        connection.execute("DELETE FROM install_tasks WHERE id = ?1", params![task_id])?;
+        Ok(())
+    }
+
     /// 调整排队任务的优先级；只影响后续出队顺序。
     pub fn set_install_task_priority(&self, task_id: &str, priority: i64) -> Result<()> {
         let changed = self.connection()?.execute(
@@ -955,11 +1028,13 @@ impl AppService {
     ) -> Result<()> {
         let mut connection = self.connection()?;
         let transaction = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        // 已取消任务不得被阶段推进覆盖：取消优先。返回 TaskPaused 让执行器
+        // 走中断收尾路径（暂停标记有状态守卫，不会改写已取消任务）。
         let changed = transaction.execute(
             "
             UPDATE install_tasks
             SET state = ?2, current_stage = ?3, updated_at_unix_seconds = ?4
-            WHERE id = ?1
+            WHERE id = ?1 AND state <> 'cancelled'
             ",
             params![
                 task_id,
@@ -969,6 +1044,16 @@ impl AppService {
             ],
         )?;
         if changed == 0 {
+            let stored = transaction
+                .query_row(
+                    "SELECT state FROM install_tasks WHERE id = ?1",
+                    params![task_id],
+                    |row| row.get::<_, String>(0),
+                )
+                .optional()?;
+            if stored.as_deref() == Some(TaskState::Cancelled.database_value()) {
+                return Err(CoreError::TaskPaused);
+            }
             return Err(CoreError::InvalidInstallRequest(
                 "安装任务不存在".to_owned(),
             ));
@@ -1031,11 +1116,12 @@ impl AppService {
         let summary: String = error.chars().take(4_000).collect();
         let mut connection = self.connection()?;
         let transaction = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        // 已取消任务不得被失败收尾覆盖：取消优先。
         transaction.execute(
             "
             UPDATE install_tasks
             SET state = 'failed', updated_at_unix_seconds = ?2
-            WHERE id = ?1
+            WHERE id = ?1 AND state <> 'cancelled'
             ",
             params![task_id, unix_timestamp()],
         )?;

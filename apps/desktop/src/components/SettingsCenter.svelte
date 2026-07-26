@@ -41,6 +41,7 @@
   type SettingsPage =
     | "general"
     | "appearance"
+    | "download"
     | "memory"
     | "java"
     | "accounts"
@@ -55,6 +56,7 @@
       items: [
         { key: "general", labelKey: "settings.nav.general" },
         { key: "appearance", labelKey: "settings.nav.appearance" },
+        { key: "download", labelKey: "settings.nav.download" },
       ],
     },
     {
@@ -137,6 +139,7 @@
   let autoMemory = $state<LaunchOptions | null>(null);
   let memoryLoaded = $state(false);
   let savingMemory = $state(false);
+  let downloadConcurrency = $state("24");
 
   onMount(() => {
     void refresh();
@@ -168,17 +171,19 @@
         runtime.listAccounts(),
       ]);
       if (!backupSettingsLoaded) {
-        const [backupSettings, cliState, updateChecksState, storedBackground] = await Promise.all([
+        const [backupSettings, cliState, updateChecksState, storedBackground, concurrency] = await Promise.all([
           runtime.getWorldBackupSettings(),
           runtime.getCliEnabled(),
           runtime.getUpdateChecksEnabled(),
           runtime.getUiBackground(),
+          runtime.getDownloadConcurrency(),
         ]);
         backupInterval = backupSettings.intervalMinutes;
         backupKeep = backupSettings.keepCount;
         cliEnabled = cliState;
         updateChecks = updateChecksState;
         backgroundType = storedBackground.type;
+        downloadConcurrency = String(concurrency);
         if (storedBackground.type === "color") backgroundColor = storedBackground.color;
         if (storedBackground.type === "themePack") {
           backgroundPackName = `${storedBackground.pack.name}（${storedBackground.pack.author}）`;
@@ -540,6 +545,22 @@
     }
   }
 
+  async function saveDownloadConcurrency(): Promise<void> {
+    errorMessage = "";
+    notice = "";
+    const value = Number(downloadConcurrency);
+    if (!Number.isInteger(value) || value < 1 || value > 32) {
+      errorMessage = t("settings.download.concurrencyInvalid");
+      return;
+    }
+    try {
+      await runtime.setDownloadConcurrency(value);
+      notice = t("settings.download.concurrencySaved");
+    } catch (error) {
+      errorMessage = error instanceof Error ? error.message : String(error);
+    }
+  }
+
   async function saveBackupKeep(): Promise<void> {
     errorMessage = "";
     notice = "";
@@ -888,6 +909,30 @@
             <small class="background-pack-name">{t("appearance.background.packActive")} {backgroundPackName}</small>
           {/if}
         </div>
+      </div>
+    </section>
+        {/if}
+
+        {#if subPage === "download"}
+    <section class="backup-settings" aria-labelledby="download-title">
+      <header>
+        <div>
+          <h2 id="download-title">{t("settings.download.title")}</h2>
+          <p>{t("settings.download.description")}</p>
+        </div>
+      </header>
+      <div class="backup-settings-grid">
+        <label>
+          <span>{t("settings.download.concurrencyLabel")}</span>
+          <input
+            type="number"
+            min="1"
+            max="32"
+            aria-label={t("settings.download.concurrencyAria")}
+            bind:value={downloadConcurrency}
+            onchange={() => void saveDownloadConcurrency()}
+          />
+        </label>
       </div>
     </section>
         {/if}

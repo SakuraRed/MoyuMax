@@ -46,6 +46,7 @@
 
   let changingTask = $state("");
   let pauseChanging = $state(false);
+  let pendingDeleteTask = $state("");
   let errorMessage = $state("");
   let speedLimitMib = $state("");
   let speedLimitBytes = $state(0);
@@ -84,6 +85,37 @@
     } finally {
       changingTask = "";
     }
+  }
+
+  async function cancelOne(taskId: string, kind: "install" | "content"): Promise<void> {
+    changingTask = taskId;
+    errorMessage = "";
+    try {
+      await runtime.cancelTask(taskId, kind);
+      await onTasksChanged();
+    } catch (error) {
+      errorMessage = error instanceof Error ? error.message : String(error);
+    } finally {
+      changingTask = "";
+    }
+  }
+
+  async function deleteOne(taskId: string, kind: "install" | "content"): Promise<void> {
+    changingTask = taskId;
+    errorMessage = "";
+    try {
+      await runtime.deleteTask(taskId, kind);
+      pendingDeleteTask = "";
+      await onTasksChanged();
+    } catch (error) {
+      errorMessage = error instanceof Error ? error.message : String(error);
+    } finally {
+      changingTask = "";
+    }
+  }
+
+  function isTerminalState(state: TaskState): boolean {
+    return state === "failed" || state === "completed" || state === "cancelled";
   }
 
   async function movePriority(
@@ -347,6 +379,17 @@
                   <button class="button ghost compact" aria-label={t("tasks.action.moveDownAria")} disabled={changingTask === task.id} onclick={() => void movePriority(task, "install", -1)}>{t("tasks.action.moveDown")}</button>
                   <span class="task-priority">{t("tasks.priority").replace("{value}", String(task.priority))}</span>
                 {/if}
+                {#if task.state === "queued" || task.state === "running" || task.state === "paused"}
+                  <button class="button ghost compact" disabled={changingTask === task.id} onclick={() => void cancelOne(task.id, "install")}>{t("tasks.action.cancel")}</button>
+                {/if}
+                {#if isTerminalState(task.state)}
+                  {#if pendingDeleteTask === task.id}
+                    <button class="button danger-subtle compact" disabled={changingTask === task.id} onclick={() => void deleteOne(task.id, "install")}>{t("common.confirmDelete")}</button>
+                    <button class="button ghost compact" disabled={changingTask === task.id} onclick={() => { pendingDeleteTask = ""; }}>{t("common.cancel")}</button>
+                  {:else}
+                    <button class="button danger-subtle compact" disabled={changingTask === task.id} onclick={() => { pendingDeleteTask = task.id; }}>{t("common.delete")}</button>
+                  {/if}
+                {/if}
               </div>
             {/if}
             {#if sourceDetailLine(task)}
@@ -404,6 +447,17 @@
                   <button class="button ghost compact" aria-label={t("tasks.action.moveUpAria")} disabled={changingTask === task.id} onclick={() => void movePriority(task, "content", 1)}>{t("tasks.action.moveUp")}</button>
                   <button class="button ghost compact" aria-label={t("tasks.action.moveDownAria")} disabled={changingTask === task.id} onclick={() => void movePriority(task, "content", -1)}>{t("tasks.action.moveDown")}</button>
                   <span class="task-priority">{t("tasks.priority").replace("{value}", String(task.priority))}</span>
+                {/if}
+                {#if task.state === "queued" || task.state === "running" || task.state === "paused"}
+                  <button class="button ghost compact" disabled={changingTask === task.id} onclick={() => void cancelOne(task.id, "content")}>{t("tasks.action.cancel")}</button>
+                {/if}
+                {#if isTerminalState(task.state)}
+                  {#if pendingDeleteTask === task.id}
+                    <button class="button danger-subtle compact" disabled={changingTask === task.id} onclick={() => void deleteOne(task.id, "content")}>{t("common.confirmDelete")}</button>
+                    <button class="button ghost compact" disabled={changingTask === task.id} onclick={() => { pendingDeleteTask = ""; }}>{t("common.cancel")}</button>
+                  {:else}
+                    <button class="button danger-subtle compact" disabled={changingTask === task.id} onclick={() => { pendingDeleteTask = task.id; }}>{t("common.delete")}</button>
+                  {/if}
                 {/if}
               </div>
             {/if}

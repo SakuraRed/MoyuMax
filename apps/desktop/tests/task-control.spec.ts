@@ -140,3 +140,74 @@ test("UI-A11Y-001 任务控制区在 960x600 与 200% 放大下不溢出", async
   expect(overflow.horizontal).toBe(false);
   expect(overflow.bars).toBe(false);
 });
+
+test("M33-TASK-001 取消排队任务", async ({ page }) => {
+  await seed(page, [installTask("task-cancel-queued", "queued")]);
+
+  await page.getByRole("button", { name: "取消", exact: true }).click();
+  await expect(page.getByText("已取消", { exact: true }).first()).toBeVisible();
+  await expect(page.getByRole("button", { name: "删除", exact: true })).toBeVisible();
+});
+
+test("M33-TASK-001 取消运行中任务", async ({ page }) => {
+  await seed(page, [installTask("task-cancel-running", "running")]);
+
+  await page.getByRole("button", { name: "取消", exact: true }).click();
+  await expect(page.getByText("已取消", { exact: true }).first()).toBeVisible();
+});
+
+test("M33-TASK-002 删除失败任务需二次确认", async ({ page }) => {
+  await seed(page, [installTask("task-delete", "failed")]);
+
+  await page.getByRole("button", { name: "删除", exact: true }).click();
+  await page.getByRole("button", { name: "确认删除", exact: true }).click();
+  await expect(page.getByText("没有任务")).toBeVisible();
+});
+
+test("M33-TASK-002 删除在确认前可撤回", async ({ page }) => {
+  await seed(page, [installTask("task-keep", "failed")]);
+
+  await page.getByRole("button", { name: "删除", exact: true }).click();
+  await page.getByRole("button", { name: "取消", exact: true }).click();
+  await expect(page.getByRole("button", { name: "删除", exact: true })).toBeVisible();
+  await expect(page.getByText("失败", { exact: true }).first()).toBeVisible();
+});
+
+test("M33-TASK-002 非终态任务没有删除入口", async ({ page }) => {
+  await seed(page, [installTask("task-active", "queued")]);
+
+  await expect(page.getByRole("button", { name: "删除", exact: true })).toHaveCount(0);
+});
+
+test("M33-TASK-003 下载线程数保存并回读", async ({ page }) => {
+  await seed(page, []);
+  await page.getByRole("button", { name: "设置", exact: true }).click();
+  await page.locator(".sn-item", { hasText: "下载" }).click();
+  await expect(page.getByRole("heading", { name: "下载" })).toBeVisible();
+
+  const input = page.getByRole("spinbutton", { name: "下载线程数" });
+  await expect(input).toHaveValue("24");
+  await input.fill("16");
+  await input.blur();
+  await expect(page.getByText("下载线程数已保存，重启应用后生效。")).toBeVisible();
+
+  await page.reload();
+  await page.getByRole("button", { name: "设置", exact: true }).click();
+  await page.locator(".sn-item", { hasText: "下载" }).click();
+  await expect(page.getByRole("spinbutton", { name: "下载线程数" })).toHaveValue("16");
+});
+
+test("M33-TASK-003 下载线程数越界被拒绝", async ({ page }) => {
+  await seed(page, []);
+  await page.getByRole("button", { name: "设置", exact: true }).click();
+  await page.locator(".sn-item", { hasText: "下载" }).click();
+
+  const input = page.getByRole("spinbutton", { name: "下载线程数" });
+  await input.fill("64");
+  await input.blur();
+  await expect(page.getByText("下载线程数必须是 1 到 32 的整数")).toBeVisible();
+  const stored = await page.evaluate(() =>
+    window.localStorage.getItem("moyumax.browser.downloadConcurrency"),
+  );
+  expect(stored).toBeNull();
+});

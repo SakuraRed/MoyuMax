@@ -358,6 +358,9 @@ const SEGMENT_MIN_SIZE_BYTES: u64 = 8 * 1024 * 1024;
 const SEGMENT_TARGET_BYTES: u64 = 16 * 1024 * 1024;
 const SEGMENT_MAX_COUNT: u32 = 8;
 
+/// 同一候选的瞬态失败重试退避（毫秒）：最多重试 2 次，节奏 0.5s、1.5s。
+const TRANSIENT_RETRY_BACKOFF_MS: [u64; 2] = [500, 1500];
+
 fn segment_plan(total: u64, target_bytes: u64) -> Vec<(u64, u64)> {
     let count = total
         .div_ceil(target_bytes)
@@ -567,7 +570,14 @@ impl ArtifactDownloader {
         let mut last_error: Option<CoreError> = None;
         for candidate in candidates {
             match self
-                .fetch_from_candidate(artifact, staging_root, shared_root, candidate, interrupt)
+                .fetch_from_candidate(
+                    artifact,
+                    staging_root,
+                    shared_root,
+                    candidate,
+                    interrupt,
+                    &mut attempts,
+                )
                 .await
             {
                 Ok(mut report) => {
@@ -601,7 +611,54 @@ impl ArtifactDownloader {
         Err(last_error.unwrap_or_else(|| CoreError::Download("没有可用的下载来源".to_owned())))
     }
 
+    /// 单候选获取：瞬态网络错误（连接、超时、中断流、HTTP 5xx）在同一候选
+    /// 最多重试 2 次（退避 0.5s、1.5s，可被暂停中断打断），每次重试都记录到
+    /// `attempts`。哈希校验失败等确定性错误不重试，交给调用方切换下一候选。
     async fn fetch_from_candidate(
+        &self,
+        artifact: &ResolvedArtifact,
+        staging_root: &Path,
+        shared_root: &Path,
+        candidate: &DownloadCandidate,
+        interrupt: Option<&DownloadInterrupt>,
+        attempts: &mut Vec<SourceAttempt>,
+    ) -> Result<FetchReport> {
+        let mut retried = 0_usize;
+        loop {
+            match self
+                .fetch_from_candidate_once(
+                    artifact,
+                    staging_root,
+                    shared_root,
+                    candidate,
+                    interrupt,
+                )
+                .await
+            {
+                Ok(report) => return Ok(report),
+                Err(CoreError::TaskPaused) => return Err(CoreError::TaskPaused),
+                Err(error)
+                    if error.is_transient_download()
+                        && retried < TRANSIENT_RETRY_BACKOFF_MS.len() =>
+                {
+                    attempts.push(SourceAttempt {
+                        url: candidate.url.clone(),
+                        label: candidate.label.clone(),
+                        channel: candidate.channel,
+                        outcome: SourceAttemptOutcome::Failed {
+                            error: error.to_string(),
+                        },
+                    });
+                    let backoff = Duration::from_millis(TRANSIENT_RETRY_BACKOFF_MS[retried]);
+                    retried += 1;
+                    transient_retry_backoff(backoff, interrupt).await?;
+                }
+                Err(error) => return Err(error),
+            }
+        }
+    }
+
+    async fn fetch_from_candidate_once(
         &self,
         artifact: &ResolvedArtifact,
         staging_root: &Path,
@@ -873,7 +930,7 @@ impl ArtifactDownloader {
                     .fetch_without_resume(artifact, url, &partial_file, staged_file, interrupt)
                     .await;
             } else {
-                return Err(CoreError::Download(format!("{} 返回 HTTP {}", url, status)));
+                return Err(http_status_error(url, status));
             };
 
             write_response(
@@ -920,11 +977,7 @@ impl ArtifactDownloader {
         }
         let response = self.client.get(url).send().await?;
         if response.status() != StatusCode::OK {
-            return Err(CoreError::Download(format!(
-                "{} 重新下载时返回 HTTP {}",
-                url,
-                response.status()
-            )));
+            return Err(http_status_error(url, response.status()));
         }
         write_response(response, partial_file, false, interrupt, &self.rate_limiter).await?;
         verify_file(partial_file, artifact).await?;
@@ -1026,9 +1079,11 @@ async fn download_segment(
     }
     if status != StatusCode::PARTIAL_CONTENT {
         adaptive.record(0.0, false);
-        return Err(CoreError::Download(format!(
-            "{url} 分段请求返回 HTTP {status}"
-        )));
+        let message = format!("{url} 分段请求返回 HTTP {status}");
+        if status.is_server_error() {
+            return Err(CoreError::TransientDownload(message));
+        }
+        return Err(CoreError::Download(message));
     }
     let (range_begin, range_total) = parse_content_range(response.headers())?;
     if range_begin != range_start || range_total != total {
@@ -2844,6 +2899,39 @@ fn extract_validated_archive(
         }
     }
     Ok(())
+}
+
+/// HTTP 状态错误分类：5xx 视为来源临时不可用（同一候选可瞬态重试），
+/// 其余状态（如 404）为确定性错误，直接切换候选。
+fn http_status_error(url: &str, status: StatusCode) -> CoreError {
+    let message = format!("{url} 返回 HTTP {status}");
+    if status.is_server_error() {
+        CoreError::TransientDownload(message)
+    } else {
+        CoreError::Download(message)
+    }
+}
+
+/// 瞬态重试退避：等待可被暂停中断打断，中断时立即上抛 TaskPaused。
+async fn transient_retry_backoff(
+    delay: Duration,
+    interrupt: Option<&DownloadInterrupt>,
+) -> Result<()> {
+    if interrupt.is_some_and(DownloadInterrupt::is_interrupted) {
+        return Err(CoreError::TaskPaused);
+    }
+    match interrupt {
+        Some(signal) => {
+            tokio::select! {
+                () = tokio::time::sleep(delay) => Ok(()),
+                () = signal.wait() => Err(CoreError::TaskPaused),
+            }
+        }
+        None => {
+            tokio::time::sleep(delay).await;
+            Ok(())
+        }
+    }
 }
 
 async fn write_response(

@@ -12,11 +12,17 @@ const SETTING_WINDOW_CLOSE_BEHAVIOR: &str = "window_close_behavior";
 const SETTING_SHELL_STATE: &str = "shell_state";
 const SETTING_TASKS_PAUSED: &str = "tasks_paused";
 const SETTING_DOWNLOAD_SPEED_LIMIT: &str = "download_speed_limit_bytes";
+const SETTING_DOWNLOAD_CONCURRENCY: &str = "download_concurrency";
 const SETTING_UI_THEME: &str = "ui_theme";
 const SETTING_UI_LANGUAGE: &str = "ui_language";
 const SETTING_UI_MOTION: &str = "ui_motion";
 const SETTING_UI_CONTRAST: &str = "ui_contrast";
 const SETTING_CLI_ENABLED: &str = "cli_enabled";
+
+/// 下载并发连接数的合法范围与默认值。任务执行器在启动时按此构造。
+pub const MIN_DOWNLOAD_CONCURRENCY: usize = 1;
+pub const MAX_DOWNLOAD_CONCURRENCY: usize = 32;
+pub const DEFAULT_DOWNLOAD_CONCURRENCY: usize = 24;
 
 /// 关闭主窗口时的行为。默认每次询问。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
@@ -170,6 +176,42 @@ impl AppService {
             &bytes_per_sec.to_string(),
         )?;
         crate::global_rate_limiter().set_rate(bytes_per_sec);
+        Ok(())
+    }
+
+    /// 任务执行器的下载并发连接数（默认 24，合法范围 1..=32）。
+    /// 启动时读取并构造执行器；调整后在下次启动生效。
+    pub fn download_concurrency(&self) -> Result<usize> {
+        let connection = self.connection()?;
+        match read_setting(&connection, SETTING_DOWNLOAD_CONCURRENCY)? {
+            None => Ok(DEFAULT_DOWNLOAD_CONCURRENCY),
+            Some(text) => {
+                let value = text
+                    .parse::<usize>()
+                    .map_err(|_| CoreError::InvalidStoredState("下载并发设置已损坏".to_owned()))?;
+                if !(MIN_DOWNLOAD_CONCURRENCY..=MAX_DOWNLOAD_CONCURRENCY).contains(&value) {
+                    return Err(CoreError::InvalidStoredState(
+                        "下载并发设置已损坏".to_owned(),
+                    ));
+                }
+                Ok(value)
+            }
+        }
+    }
+
+    /// 持久化下载并发连接数；越界值拒绝写入。
+    pub fn set_download_concurrency(&self, connections: usize) -> Result<()> {
+        if !(MIN_DOWNLOAD_CONCURRENCY..=MAX_DOWNLOAD_CONCURRENCY).contains(&connections) {
+            return Err(CoreError::InvalidInstallRequest(
+                "下载并发连接数必须在 1 到 32 之间".to_owned(),
+            ));
+        }
+        let connection = self.connection()?;
+        write_setting(
+            &connection,
+            SETTING_DOWNLOAD_CONCURRENCY,
+            &connections.to_string(),
+        )?;
         Ok(())
     }
 

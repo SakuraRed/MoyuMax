@@ -998,8 +998,15 @@ export interface MoyuRuntime {
   pauseTask(taskId: string, kind: TaskKind): Promise<void>;
   resumeTask(taskId: string, kind: TaskKind): Promise<void>;
   setTaskPriority(taskId: string, kind: TaskKind, priority: number): Promise<void>;
+  /** 取消排队、暂停或运行中的任务；运行中任务在下载边界中断后保持已取消。 */
+  cancelTask(taskId: string, kind: TaskKind): Promise<void>;
+  /** 删除终态任务（failed/completed/cancelled）并清理其受管暂存目录。 */
+  deleteTask(taskId: string, kind: TaskKind): Promise<void>;
   getDownloadSpeedLimit(): Promise<number>;
   setDownloadSpeedLimit(bytesPerSec: number): Promise<void>;
+  /** 下载并发连接数（1-32，默认 24）；持久化，重启后构造执行器时生效。 */
+  getDownloadConcurrency(): Promise<number>;
+  setDownloadConcurrency(connections: number): Promise<void>;
   getDownloadSourcePolicy(): Promise<SourcePolicy>;
   setDownloadSourcePolicy(policy: SourcePolicy): Promise<void>;
   listJavaEnvironments(): Promise<JavaEnvironment[]>;
@@ -1070,6 +1077,7 @@ const BROWSER_WINDOW_STATE_KEY = "moyumax.browser.windowState";
 const BROWSER_SOURCE_POLICY_KEY = "moyumax.browser.sourcePolicy";
 const BROWSER_JAVA_ENVIRONMENTS_KEY = "moyumax.browser.javaEnvironments";
 const BROWSER_SPEED_LIMIT_KEY = "moyumax.browser.speedLimit";
+const BROWSER_CONCURRENCY_KEY = "moyumax.browser.downloadConcurrency";
 const browserPreviews = new Map<string, InstallSelection>();
 const browserContentPreviews = new Map<string, ContentInstallPlan>();
 const browserDiagnosticPreviews = new Map<string, string>();
@@ -1444,9 +1452,20 @@ function createTauriRuntime(): MoyuRuntime {
     resumeTask: (taskId, kind) => invoke<void>("resume_task", { taskId, kind }),
     setTaskPriority: (taskId, kind, priority) =>
       invoke<void>("set_task_priority", { taskId, kind, priority }),
+    cancelTask: (taskId, kind) =>
+      invoke<void>(kind === "content" ? "cancel_content_task" : "cancel_install_task", {
+        taskId,
+      }),
+    deleteTask: (taskId, kind) =>
+      invoke<void>(kind === "content" ? "delete_content_task" : "delete_install_task", {
+        taskId,
+      }),
     getDownloadSpeedLimit: () => invoke<number>("get_download_speed_limit"),
     setDownloadSpeedLimit: (bytesPerSec) =>
       invoke<void>("set_download_speed_limit", { bytesPerSec }),
+    getDownloadConcurrency: () => invoke<number>("get_download_concurrency"),
+    setDownloadConcurrency: (connections) =>
+      invoke<void>("set_download_concurrency", { connections }),
     getDownloadSourcePolicy: () =>
       invoke<SourcePolicy>("get_download_source_policy"),
     setDownloadSourcePolicy: (policy) =>
@@ -3237,12 +3256,45 @@ function createBrowserRuntime(): MoyuRuntime {
       task.priority = priority;
       window.localStorage.setItem(key, JSON.stringify(tasks));
     },
+    async cancelTask(taskId, kind) {
+      const key = kind === "content" ? BROWSER_CONTENT_TASKS_KEY : BROWSER_TASKS_KEY;
+      const tasks = kind === "content" ? browserContentTasks() : browserInstallTasks();
+      const task = tasks.find((entry) => entry.id === taskId);
+      if (!task || !["queued", "paused", "running"].includes(task.state)) {
+        throw new Error("任务不存在或当前状态不能取消");
+      }
+      task.state = "cancelled";
+      task.pausedBy = null;
+      window.localStorage.setItem(key, JSON.stringify(tasks));
+    },
+    async deleteTask(taskId, kind) {
+      const key = kind === "content" ? BROWSER_CONTENT_TASKS_KEY : BROWSER_TASKS_KEY;
+      const tasks = kind === "content" ? browserContentTasks() : browserInstallTasks();
+      const task = tasks.find((entry) => entry.id === taskId);
+      if (!task || !["failed", "completed", "cancelled"].includes(task.state)) {
+        throw new Error("任务不存在或当前状态不能删除");
+      }
+      window.localStorage.setItem(
+        key,
+        JSON.stringify(tasks.filter((entry) => entry.id !== taskId)),
+      );
+    },
     async getDownloadSpeedLimit() {
       const value = window.localStorage.getItem(BROWSER_SPEED_LIMIT_KEY);
       return value ? Number(value) : 0;
     },
     async setDownloadSpeedLimit(bytesPerSec) {
       window.localStorage.setItem(BROWSER_SPEED_LIMIT_KEY, String(bytesPerSec));
+    },
+    async getDownloadConcurrency() {
+      const value = window.localStorage.getItem(BROWSER_CONCURRENCY_KEY);
+      return value ? Number(value) : 24;
+    },
+    async setDownloadConcurrency(connections) {
+      if (!Number.isInteger(connections) || connections < 1 || connections > 32) {
+        throw new Error("下载并发连接数必须在 1 到 32 之间");
+      }
+      window.localStorage.setItem(BROWSER_CONCURRENCY_KEY, String(connections));
     },
     async getDownloadSourcePolicy() {
       const serialized = window.localStorage.getItem(BROWSER_SOURCE_POLICY_KEY);

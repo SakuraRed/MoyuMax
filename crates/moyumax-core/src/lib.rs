@@ -126,6 +126,8 @@ pub enum CoreError {
     Network(#[from] reqwest::Error),
     #[error("下载未完成：{0}")]
     Download(String),
+    #[error("来源暂时不可用：{0}")]
+    TransientDownload(String),
     #[error("压缩包不安全或无法解包：{0}")]
     Archive(String),
     #[error("无法启动游戏：{0}")]
@@ -150,6 +152,14 @@ pub enum CoreError {
     AccountLoginCancelled(String),
     #[error("任务已暂停，可在恢复全部任务后继续")]
     TaskPaused,
+}
+
+impl CoreError {
+    /// 同一候选可安全重试的瞬态失败：连接、超时、中断的响应流与 HTTP 5xx。
+    /// 哈希校验失败、HTTP 4xx 等确定性错误不属于瞬态，不应重试。
+    pub(crate) fn is_transient_download(&self) -> bool {
+        matches!(self, Self::Network(_) | Self::TransientDownload(_))
+    }
 }
 
 pub type Result<T> = std::result::Result<T, CoreError>;

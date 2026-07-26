@@ -138,10 +138,12 @@ enum TaskKind {
 }
 
 impl TaskCoordinator {
-    fn new(scheduling_enabled: bool) -> Result<Self, String> {
+    fn new(scheduling_enabled: bool, download_concurrency: usize) -> Result<Self, String> {
         Ok(Self {
-            install_executor: InstallExecutor::new(4).map_err(|error| error.to_string())?,
-            content_executor: ContentExecutor::new(4).map_err(|error| error.to_string())?,
+            install_executor: InstallExecutor::new(download_concurrency)
+                .map_err(|error| error.to_string())?,
+            content_executor: ContentExecutor::new(download_concurrency)
+                .map_err(|error| error.to_string())?,
             task_permits: Arc::new(Semaphore::new(1)),
             scheduling_enabled: Arc::new(AtomicBool::new(scheduling_enabled)),
             current_interrupt: Arc::new(Mutex::new(None)),
@@ -332,6 +334,40 @@ impl TaskCoordinator {
                     .map_err(|error| error.to_string())?;
                 self.submit_content(service.clone(), task_id.to_owned());
             }
+        }
+        Ok(())
+    }
+
+    /// 单任务取消：先以事务标记已取消（取消优先，执行器收尾不会覆盖）,
+    /// 若该任务正在当前执行槽中运行，则触发中断让下载在分段边界停止。
+    fn cancel_task(
+        &self,
+        service: &AppService,
+        task_id: &str,
+        kind: TaskKind,
+    ) -> Result<(), String> {
+        match kind {
+            TaskKind::Install => service
+                .cancel_install_task(task_id)
+                .map_err(|error| error.to_string())?,
+            TaskKind::Content => service
+                .cancel_content_task(task_id)
+                .map_err(|error| error.to_string())?,
+        }
+        let is_current = self
+            .current_task
+            .lock()
+            .map(|current| {
+                current
+                    .as_ref()
+                    .is_some_and(|(id, k)| id == task_id && *k == kind)
+            })
+            .unwrap_or(false);
+        if is_current
+            && let Ok(current) = self.current_interrupt.lock()
+            && let Some(interrupt) = current.as_ref()
+        {
+            interrupt.interrupt();
         }
         Ok(())
     }
@@ -2554,6 +2590,55 @@ fn set_task_priority(
 }
 
 #[tauri::command]
+fn cancel_install_task(
+    service: State<'_, AppService>,
+    tasks: State<'_, TaskCoordinator>,
+    task_id: String,
+) -> Result<(), String> {
+    tasks.cancel_task(&service, &task_id, TaskKind::Install)
+}
+
+#[tauri::command]
+fn cancel_content_task(
+    service: State<'_, AppService>,
+    tasks: State<'_, TaskCoordinator>,
+    task_id: String,
+) -> Result<(), String> {
+    tasks.cancel_task(&service, &task_id, TaskKind::Content)
+}
+
+#[tauri::command]
+fn delete_install_task(service: State<'_, AppService>, task_id: String) -> Result<(), String> {
+    service
+        .delete_install_task(&task_id)
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+fn delete_content_task(service: State<'_, AppService>, task_id: String) -> Result<(), String> {
+    service
+        .delete_content_task(&task_id)
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+fn get_download_concurrency(service: State<'_, AppService>) -> Result<usize, String> {
+    service
+        .download_concurrency()
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+fn set_download_concurrency(
+    service: State<'_, AppService>,
+    connections: usize,
+) -> Result<(), String> {
+    service
+        .set_download_concurrency(connections)
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
 fn get_download_speed_limit(service: State<'_, AppService>) -> Result<u64, String> {
     service
         .download_speed_limit()
@@ -2687,7 +2772,9 @@ pub fn run() {
             let tasks_paused = service.tasks_paused()?;
             let speed_limit = service.download_speed_limit()?;
             moyumax_core::global_rate_limiter().set_rate(speed_limit);
-            let coordinator = TaskCoordinator::new(!tasks_paused).map_err(std::io::Error::other)?;
+            let download_concurrency = service.download_concurrency()?;
+            let coordinator = TaskCoordinator::new(!tasks_paused, download_concurrency)
+                .map_err(std::io::Error::other)?;
             for task_id in service.queued_install_tasks_by_priority()? {
                 coordinator.submit_install(service.clone(), task_id);
             }
@@ -2867,6 +2954,12 @@ pub fn run() {
             pause_task,
             resume_task,
             set_task_priority,
+            cancel_install_task,
+            cancel_content_task,
+            delete_install_task,
+            delete_content_task,
+            get_download_concurrency,
+            set_download_concurrency,
             get_download_speed_limit,
             set_download_speed_limit
         ])
@@ -2929,7 +3022,7 @@ mod tests {
 
     #[tokio::test]
     async fn install_and_content_tasks_share_one_background_slot() {
-        let coordinator = TaskCoordinator::new(true).unwrap();
+        let coordinator = TaskCoordinator::new(true, 4).unwrap();
         assert_eq!(coordinator.task_permits.available_permits(), 1);
 
         let permit = coordinator
@@ -2946,7 +3039,7 @@ mod tests {
 
     #[test]
     fn paused_coordinator_keeps_scheduling_disabled() {
-        let coordinator = TaskCoordinator::new(false).unwrap();
+        let coordinator = TaskCoordinator::new(false, 4).unwrap();
         assert!(!coordinator.scheduling_enabled());
         coordinator.interrupt_running_for_exit();
         assert!(!coordinator.scheduling_enabled());
