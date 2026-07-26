@@ -1,22 +1,32 @@
 use std::path::PathBuf;
 
-use moyumax_core::{AppService, LaunchOptions};
+use moyumax_core::{
+    AppService, GlobalLaunchPreference, LaunchOptions, auto_launch_options,
+    total_physical_memory_mib,
+};
 use rusqlite::{Connection, params};
 use tempfile::TempDir;
 
 #[test]
-fn m33_launch_mem_001_unset_falls_back_to_default() {
+fn m33_launch_mem_001_unset_follows_global_auto() {
     let fixture = LaunchOptionsFixture::new();
     fixture.register_instance("instance-a", "实例甲");
 
-    let options = fixture
-        .service
-        .instance_launch_options("instance-a")
-        .unwrap();
-    assert_eq!(options.minimum_memory_mib, 512, "未设置时最小内存回退默认");
     assert_eq!(
-        options.maximum_memory_mib, 2_048,
-        "未设置时最大内存回退默认"
+        fixture
+            .service
+            .instance_launch_options("instance-a")
+            .unwrap(),
+        None,
+        "实例未自定义时必须返回 None(跟随全局)"
+    );
+    assert_eq!(
+        fixture
+            .service
+            .resolved_launch_options("instance-a")
+            .unwrap(),
+        auto_launch_options(total_physical_memory_mib()),
+        "实例跟随全局且全局默认自动时,解析结果必须等于自动分配"
     );
 }
 
@@ -46,17 +56,13 @@ fn m33_launch_mem_002_invalid_values_rejected_without_write() {
         assert!(error.to_string().contains("256 MiB"), "{error}");
     }
 
-    let persisted = fixture
-        .service
-        .instance_launch_options("instance-a")
-        .unwrap();
     assert_eq!(
-        persisted,
-        LaunchOptions {
-            minimum_memory_mib: 512,
-            maximum_memory_mib: 2_048,
-        },
-        "拒绝后不得写入,仍应回退默认"
+        fixture
+            .service
+            .instance_launch_options("instance-a")
+            .unwrap(),
+        None,
+        "拒绝后不得写入,仍应跟随全局"
     );
 }
 
@@ -78,14 +84,14 @@ fn m33_launch_mem_003_set_persists_and_survives_reopen() {
             .service
             .instance_launch_options("instance-a")
             .unwrap(),
-        options,
+        Some(options),
         "写入后必须立即回读一致"
     );
 
     let reopened = AppService::open(&fixture.database_path, &fixture.data_directory).unwrap();
     assert_eq!(
         reopened.instance_launch_options("instance-a").unwrap(),
-        options,
+        Some(options),
         "重新打开数据库后配置必须保持"
     );
 }
@@ -108,6 +114,16 @@ fn m33_launch_mem_004_unknown_instance_rejected() {
             },
         )
         .expect_err("未知实例写入必须报错");
+    assert!(error.to_string().contains("实例不存在"), "{error}");
+    let error = fixture
+        .service
+        .clear_instance_launch_options("missing-instance")
+        .expect_err("未知实例清除必须报错");
+    assert!(error.to_string().contains("实例不存在"), "{error}");
+    let error = fixture
+        .service
+        .resolved_launch_options("missing-instance")
+        .expect_err("未知实例解析必须报错");
     assert!(error.to_string().contains("实例不存在"), "{error}");
 }
 
@@ -140,6 +156,224 @@ fn m33_launch_mem_005_content_enable_toggle_persists() {
         .set_installed_content_enabled("missing-content", true)
         .expect_err("未知内容必须报错");
     assert!(error.to_string().contains("内容项不存在"), "{error}");
+}
+
+#[test]
+fn m33_launch_mem_006_clear_restores_follow_global() {
+    let fixture = LaunchOptionsFixture::new();
+    fixture.register_instance("instance-a", "实例甲");
+    fixture
+        .service
+        .set_instance_launch_options(
+            "instance-a",
+            &LaunchOptions {
+                minimum_memory_mib: 1_024,
+                maximum_memory_mib: 8_192,
+            },
+        )
+        .unwrap();
+
+    fixture
+        .service
+        .clear_instance_launch_options("instance-a")
+        .expect("清除应成功");
+    assert_eq!(
+        fixture
+            .service
+            .instance_launch_options("instance-a")
+            .unwrap(),
+        None,
+        "清除后必须恢复跟随全局"
+    );
+    assert_eq!(
+        fixture
+            .service
+            .resolved_launch_options("instance-a")
+            .unwrap(),
+        auto_launch_options(total_physical_memory_mib()),
+        "清除后解析结果必须回落到自动分配"
+    );
+}
+
+#[test]
+fn m33_launch_mem_007_global_preference_defaults_to_auto() {
+    let fixture = LaunchOptionsFixture::new();
+    assert_eq!(
+        fixture.service.global_launch_preference().unwrap(),
+        GlobalLaunchPreference::Auto,
+        "未设置时全局偏好必须默认为自动分配"
+    );
+}
+
+#[test]
+fn m33_launch_mem_008_global_custom_persists_and_survives_reopen() {
+    let fixture = LaunchOptionsFixture::new();
+    fixture.register_instance("instance-a", "实例甲");
+    let preference = GlobalLaunchPreference::Custom {
+        min_mib: 1_024,
+        max_mib: 6_144,
+    };
+
+    fixture
+        .service
+        .set_global_launch_preference(&preference)
+        .expect("合法全局自定义应写入");
+    assert_eq!(
+        fixture.service.global_launch_preference().unwrap(),
+        preference,
+        "写入后必须立即回读一致"
+    );
+    assert_eq!(
+        fixture
+            .service
+            .resolved_launch_options("instance-a")
+            .unwrap(),
+        LaunchOptions {
+            minimum_memory_mib: 1_024,
+            maximum_memory_mib: 6_144,
+        },
+        "实例跟随全局时,全局自定义必须生效"
+    );
+
+    let reopened = AppService::open(&fixture.database_path, &fixture.data_directory).unwrap();
+    assert_eq!(
+        reopened.global_launch_preference().unwrap(),
+        preference,
+        "重新打开数据库后全局偏好必须保持"
+    );
+}
+
+#[test]
+fn m33_launch_mem_009_global_custom_invalid_rejected() {
+    let fixture = LaunchOptionsFixture::new();
+    for preference in [
+        GlobalLaunchPreference::Custom {
+            min_mib: 128,
+            max_mib: 2_048,
+        },
+        GlobalLaunchPreference::Custom {
+            min_mib: 4_096,
+            max_mib: 2_048,
+        },
+        GlobalLaunchPreference::Custom {
+            min_mib: 512,
+            max_mib: 70_000,
+        },
+    ] {
+        let error = fixture
+            .service
+            .set_global_launch_preference(&preference)
+            .expect_err("非法全局自定义必须拒绝");
+        assert!(error.to_string().contains("256 MiB"), "{error}");
+    }
+    assert_eq!(
+        fixture.service.global_launch_preference().unwrap(),
+        GlobalLaunchPreference::Auto,
+        "拒绝后不得写入,仍应保持默认自动分配"
+    );
+}
+
+#[test]
+fn m33_launch_mem_010_resolution_chain_priority() {
+    let fixture = LaunchOptionsFixture::new();
+    fixture.register_instance("instance-a", "实例甲");
+    let global_custom = GlobalLaunchPreference::Custom {
+        min_mib: 1_024,
+        max_mib: 6_144,
+    };
+    fixture
+        .service
+        .set_global_launch_preference(&global_custom)
+        .unwrap();
+    let instance_custom = LaunchOptions {
+        minimum_memory_mib: 2_048,
+        maximum_memory_mib: 8_192,
+    };
+    fixture
+        .service
+        .set_instance_launch_options("instance-a", &instance_custom)
+        .unwrap();
+
+    assert_eq!(
+        fixture
+            .service
+            .resolved_launch_options("instance-a")
+            .unwrap(),
+        instance_custom,
+        "实例自定义必须优先于全局自定义"
+    );
+
+    fixture
+        .service
+        .clear_instance_launch_options("instance-a")
+        .unwrap();
+    assert_eq!(
+        fixture
+            .service
+            .resolved_launch_options("instance-a")
+            .unwrap(),
+        LaunchOptions {
+            minimum_memory_mib: 1_024,
+            maximum_memory_mib: 6_144,
+        },
+        "实例无自定义时全局自定义必须其次生效"
+    );
+
+    fixture
+        .service
+        .set_global_launch_preference(&GlobalLaunchPreference::Auto)
+        .unwrap();
+    assert_eq!(
+        fixture
+            .service
+            .resolved_launch_options("instance-a")
+            .unwrap(),
+        auto_launch_options(total_physical_memory_mib()),
+        "全局自动时必须回落到自动分配"
+    );
+}
+
+#[test]
+fn m33_launch_mem_011_auto_rule_boundaries() {
+    let expected = |minimum_memory_mib, maximum_memory_mib| LaunchOptions {
+        minimum_memory_mib,
+        maximum_memory_mib,
+    };
+    assert_eq!(
+        auto_launch_options(None),
+        expected(512, 4_096),
+        "取不到物理内存时回退 512/4096"
+    );
+    assert_eq!(
+        auto_launch_options(Some(2_048)),
+        expected(512, 2_048),
+        "物理内存过小时 Xmx 夹到下限 2048"
+    );
+    assert_eq!(
+        auto_launch_options(Some(8_192)),
+        expected(512, 2_048),
+        "物理内存的四分之一不足 2048 时夹到下限"
+    );
+    assert_eq!(
+        auto_launch_options(Some(16_384)),
+        expected(512, 4_096),
+        "16 GiB 物理内存分配四分之一"
+    );
+    assert_eq!(
+        auto_launch_options(Some(32_768)),
+        expected(512, 8_192),
+        "32 GiB 物理内存到达上限 8192"
+    );
+    assert_eq!(
+        auto_launch_options(Some(1_048_576)),
+        expected(512, 8_192),
+        "物理内存过大时 Xmx 夹到上限 8192"
+    );
+    assert_eq!(
+        auto_launch_options(Some(u64::MAX)),
+        expected(512, 8_192),
+        "极端值不得溢出,夹到上限 8192"
+    );
 }
 
 struct LaunchOptionsFixture {

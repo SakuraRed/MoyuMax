@@ -25,6 +25,7 @@
     DeviceCodeInfo,
     JavaDeleteOutcome,
     JavaEnvironment,
+    LaunchOptions,
     ManagedInstance,
     MoyuRuntime,
     NavigationKey,
@@ -40,6 +41,7 @@
   type SettingsPage =
     | "general"
     | "appearance"
+    | "memory"
     | "java"
     | "accounts"
     | "backups"
@@ -58,6 +60,7 @@
     {
       groupKey: "settings.nav.groupGame",
       items: [
+        { key: "memory", labelKey: "settings.nav.memory" },
         { key: "java", labelKey: "settings.nav.java" },
         { key: "accounts", labelKey: "settings.nav.accounts" },
         { key: "backups", labelKey: "settings.nav.backups" },
@@ -128,6 +131,12 @@
   let backgroundPackName = $state("");
   let backgroundBusy = $state(false);
   let uiPreferencesLoaded = $state(false);
+  let memoryMode = $state<"auto" | "custom">("auto");
+  let memoryMin = $state("");
+  let memoryMax = $state("");
+  let autoMemory = $state<LaunchOptions | null>(null);
+  let memoryLoaded = $state(false);
+  let savingMemory = $state(false);
 
   onMount(() => {
     void refresh();
@@ -175,6 +184,19 @@
           backgroundPackName = `${storedBackground.pack.name}（${storedBackground.pack.author}）`;
         }
         backupSettingsLoaded = true;
+      }
+      if (!memoryLoaded) {
+        const [preference, auto] = await Promise.all([
+          runtime.getGlobalLaunchPreference(),
+          runtime.getAutoLaunchOptions(),
+        ]);
+        autoMemory = auto;
+        if (preference.mode === "custom") {
+          memoryMode = "custom";
+          memoryMin = String(preference.minMib);
+          memoryMax = String(preference.maxMib);
+        }
+        memoryLoaded = true;
       }
       if (!uiPreferencesLoaded) {
         const preferences = await runtime.getUiPreferences();
@@ -530,6 +552,57 @@
       notice = t("settings.backup.keepSaved").replace("{count}", String(Math.floor(backupKeep)));
     } catch (error) {
       errorMessage = error instanceof Error ? error.message : String(error);
+    }
+  }
+
+  async function selectMemoryMode(mode: "auto" | "custom"): Promise<void> {
+    if (mode === memoryMode) return;
+    errorMessage = "";
+    notice = "";
+    if (mode === "auto") {
+      savingMemory = true;
+      try {
+        await runtime.setGlobalLaunchPreference({ mode: "auto" });
+        memoryMode = "auto";
+        notice = t("settings.memory.savedAuto");
+      } catch (error) {
+        errorMessage = error instanceof Error ? error.message : String(error);
+      } finally {
+        savingMemory = false;
+      }
+      return;
+    }
+    // 切到自定义:用当前自动分配值预填,保存后才写入全局自定义。
+    memoryMode = "custom";
+    if (!memoryMin || !memoryMax) {
+      memoryMin = String(autoMemory?.minimumMemoryMib ?? 512);
+      memoryMax = String(autoMemory?.maximumMemoryMib ?? 4096);
+    }
+  }
+
+  async function saveMemory(): Promise<void> {
+    errorMessage = "";
+    notice = "";
+    const minimum = Number(memoryMin.trim());
+    const maximum = Number(memoryMax.trim());
+    if (
+      !Number.isInteger(minimum) ||
+      !Number.isInteger(maximum) ||
+      minimum < 256 ||
+      maximum < minimum ||
+      maximum > 65536
+    ) {
+      errorMessage = t("settings.memory.invalid");
+      return;
+    }
+    savingMemory = true;
+    try {
+      await runtime.setGlobalLaunchPreference({ mode: "custom", minMib: minimum, maxMib: maximum });
+      notice = t("settings.memory.saved");
+    } catch (error) {
+      errorMessage = error instanceof Error ? error.message : String(error);
+    } finally {
+      savingMemory = false;
     }
   }
 
@@ -1050,6 +1123,56 @@
           />
         </label>
       </div>
+    </section>
+        {/if}
+
+        {#if subPage === "memory"}
+    <section class="backup-settings" aria-labelledby="memory-title">
+      <header>
+        <div>
+          <h2 id="memory-title">{t("settings.memory.title")}</h2>
+          <p>{t("settings.memory.description")}</p>
+        </div>
+      </header>
+      <label class="auto-update-toggle">
+        <input
+          type="radio"
+          name="global-memory-mode"
+          checked={memoryMode === "auto"}
+          disabled={savingMemory}
+          onchange={() => void selectMemoryMode("auto")}
+        />
+        <span>
+          <strong>{t("settings.memory.modeAuto")}</strong>
+          <small>{t("settings.memory.autoSummary").replace("{min}", String(autoMemory?.minimumMemoryMib ?? "…")).replace("{max}", String(autoMemory?.maximumMemoryMib ?? "…"))}</small>
+        </span>
+      </label>
+      <label class="auto-update-toggle">
+        <input
+          type="radio"
+          name="global-memory-mode"
+          checked={memoryMode === "custom"}
+          disabled={savingMemory}
+          onchange={() => void selectMemoryMode("custom")}
+        />
+        <span>
+          <strong>{t("settings.memory.modeCustom")}</strong>
+          <small>{t("settings.memory.customHint")}</small>
+        </span>
+      </label>
+      {#if memoryMode === "custom"}
+        <div class="instance-memory-inputs">
+          <label>
+            <span>{t("settings.memory.minLabel")}</span>
+            <input bind:value={memoryMin} type="text" inputmode="numeric" aria-label={t("settings.memory.minAria")} />
+          </label>
+          <label>
+            <span>{t("settings.memory.maxLabel")}</span>
+            <input bind:value={memoryMax} type="text" inputmode="numeric" aria-label={t("settings.memory.maxAria")} />
+          </label>
+          <button class="button primary compact" disabled={savingMemory} onclick={() => void saveMemory()}>{savingMemory ? t("settings.memory.saving") : t("settings.memory.save")}</button>
+        </div>
+      {/if}
     </section>
         {/if}
 

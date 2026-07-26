@@ -16,11 +16,12 @@ use uuid::Uuid;
 
 use crate::{
     AppService, BackupTrigger, CoreError, ManagedInstanceSummary, Result, WorldBackupSummary,
-    append_launch_diagnostic_event, remove_launch_diagnostic_files, unix_timestamp,
-    write_launch_diagnostic_files,
+    append_launch_diagnostic_event, read_setting, remove_launch_diagnostic_files, unix_timestamp,
+    write_launch_diagnostic_files, write_setting,
 };
 
 const WINDOWS_VERSION: &str = "10.0.19045";
+const SETTING_GLOBAL_LAUNCH_PREFERENCE: &str = "global_launch_preference";
 
 #[derive(Clone, PartialEq, Eq)]
 pub struct LaunchAccount {
@@ -132,6 +133,21 @@ impl Default for LaunchOptions {
             maximum_memory_mib: 4_096,
         }
     }
+}
+
+/// 全局启动内存偏好：自动分配（默认）或自定义区间；实例可选择跟随全局或自定义覆盖。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(
+    rename_all = "camelCase",
+    tag = "mode",
+    rename_all_fields = "camelCase"
+)]
+pub enum GlobalLaunchPreference {
+    /// 按物理内存自动分配，规则见 [`auto_launch_options`]。
+    #[default]
+    Auto,
+    /// 全局自定义区间（MiB），写入前复用启动内存校验规则。
+    Custom { min_mib: u32, max_mib: u32 },
 }
 
 #[derive(Clone)]
@@ -390,8 +406,8 @@ impl AppService {
         Ok(LaunchExecution { session, prepared })
     }
 
-    /// 实例的启动内存配置；实例未单独设置时回退默认 512/2048 MiB。
-    pub fn instance_launch_options(&self, instance_id: &str) -> Result<LaunchOptions> {
+    /// 实例自定义的启动内存配置；返回 `None` 表示跟随全局设置。
+    pub fn instance_launch_options(&self, instance_id: &str) -> Result<Option<LaunchOptions>> {
         let connection = self.connection()?;
         let row = connection
             .query_row(
@@ -412,9 +428,9 @@ impl AppService {
                         .map_err(|_| CoreError::Launch("实例启动内存配置损坏".to_owned()))?,
                 };
                 validate_launch_options(&options)?;
-                Ok(options)
+                Ok(Some(options))
             }
-            _ => Ok(fallback_launch_options()),
+            _ => Ok(None),
         }
     }
 
@@ -440,6 +456,58 @@ impl AppService {
         }
         transaction.commit()?;
         Ok(())
+    }
+
+    /// 清除实例的自定义启动内存（列置 NULL），恢复为跟随全局设置。
+    pub fn clear_instance_launch_options(&self, instance_id: &str) -> Result<()> {
+        let mut connection = self.connection()?;
+        let transaction = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let changed = transaction.execute(
+            "UPDATE instances SET launch_min_memory_mib = NULL, launch_max_memory_mib = NULL WHERE id = ?1",
+            params![instance_id],
+        )?;
+        if changed == 0 {
+            return Err(CoreError::Launch("实例不存在".to_owned()));
+        }
+        transaction.commit()?;
+        Ok(())
+    }
+
+    /// 全局启动内存偏好；未设置时默认为自动分配。
+    pub fn global_launch_preference(&self) -> Result<GlobalLaunchPreference> {
+        let connection = self.connection()?;
+        read_setting(&connection, SETTING_GLOBAL_LAUNCH_PREFERENCE)?
+            .map(|serialized| serde_json::from_str(&serialized).map_err(CoreError::from))
+            .transpose()
+            .map(|preference| preference.unwrap_or_default())
+    }
+
+    /// 持久化全局启动内存偏好；自定义区间复用启动校验规则，非法值拒绝。
+    pub fn set_global_launch_preference(&self, preference: &GlobalLaunchPreference) -> Result<()> {
+        if let GlobalLaunchPreference::Custom { min_mib, max_mib } = *preference {
+            validate_launch_options(&LaunchOptions {
+                minimum_memory_mib: min_mib,
+                maximum_memory_mib: max_mib,
+            })?;
+        }
+        let serialized = serde_json::to_string(preference)?;
+        let connection = self.connection()?;
+        write_setting(&connection, SETTING_GLOBAL_LAUNCH_PREFERENCE, &serialized)?;
+        Ok(())
+    }
+
+    /// 实例启动内存的最终解析链：实例自定义 → 全局自定义 → 自动分配。
+    pub fn resolved_launch_options(&self, instance_id: &str) -> Result<LaunchOptions> {
+        if let Some(options) = self.instance_launch_options(instance_id)? {
+            return Ok(options);
+        }
+        match self.global_launch_preference()? {
+            GlobalLaunchPreference::Custom { min_mib, max_mib } => Ok(LaunchOptions {
+                minimum_memory_mib: min_mib,
+                maximum_memory_mib: max_mib,
+            }),
+            GlobalLaunchPreference::Auto => Ok(auto_launch_options(total_physical_memory_mib())),
+        }
     }
 
     pub fn list_launch_sessions(&self) -> Result<Vec<LaunchSessionSummary>> {
@@ -1042,11 +1110,42 @@ fn validate_launch_options(options: &LaunchOptions) -> Result<()> {
     Ok(())
 }
 
-/// 实例未单独配置启动内存时的回退值（与桌面端历史默认一致）。
-fn fallback_launch_options() -> LaunchOptions {
+/// 自动分配规则：Xmx = clamp(物理内存 / 4, 2048, 8192) MiB,Xms = 512 MiB;
+/// 取不到物理内存（非 Windows 或查询失败）时回退 Xmx 4096 / Xms 512 MiB。
+#[must_use]
+pub fn auto_launch_options(total_physical_mib: Option<u64>) -> LaunchOptions {
+    let Some(total) = total_physical_mib else {
+        return LaunchOptions {
+            minimum_memory_mib: 512,
+            maximum_memory_mib: 4_096,
+        };
+    };
+    let quarter = u32::try_from(total / 4).unwrap_or(u32::MAX);
     LaunchOptions {
         minimum_memory_mib: 512,
-        maximum_memory_mib: 2_048,
+        maximum_memory_mib: quarter.clamp(2_048, 8_192),
+    }
+}
+
+/// 当前机器的物理内存总量（MiB）；仅 Windows 支持查询，其他平台返回 `None`。
+#[must_use]
+pub fn total_physical_memory_mib() -> Option<u64> {
+    #[cfg(windows)]
+    {
+        use windows_sys::Win32::System::SystemInformation::{GlobalMemoryStatusEx, MEMORYSTATUSEX};
+
+        // SAFETY: status 是有效的 MEMORYSTATUSEX 缓冲区,dwLength 已按 API 约定初始化。
+        let mut status: MEMORYSTATUSEX = unsafe { std::mem::zeroed() };
+        status.dwLength = std::mem::size_of::<MEMORYSTATUSEX>() as u32;
+        // SAFETY: 入参为指向有效 MEMORYSTATUSEX 的指针,符合 API 约定。
+        if unsafe { GlobalMemoryStatusEx(&mut status) } == 0 {
+            return None;
+        }
+        Some(status.ullTotalPhys / (1024 * 1024))
+    }
+    #[cfg(not(windows))]
+    {
+        None
     }
 }
 

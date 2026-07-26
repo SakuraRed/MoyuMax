@@ -163,11 +163,16 @@ export interface ManagedInstance {
   state: string;
 }
 
-/** 实例级启动内存配置（MiB）；未设置时核心回退 512/2048。 */
+/** 启动内存配置（MiB）。 */
 export interface LaunchOptions {
   minimumMemoryMib: number;
   maximumMemoryMib: number;
 }
+
+/** 全局启动内存偏好：自动分配（默认）或自定义区间（MiB）。 */
+export type GlobalLaunchPreference =
+  | { mode: "auto" }
+  | { mode: "custom"; minMib: number; maxMib: number };
 
 export type RecycleItemKind = "instance" | "screenshot" | "resource" | "world";
 export type RecycleItemState = "moving" | "ready" | "restoring" | "purging" | "failed";
@@ -797,9 +802,16 @@ export interface MoyuRuntime {
   setInstanceContentAutoUpdate(instanceId: string, enabled: boolean): Promise<void>;
   /** 启用或停用实例已安装内容（Mod 等）；只更新索引标记。 */
   setInstalledContentEnabled(contentId: string, enabled: boolean): Promise<InstalledContent>;
-  /** 实例级启动内存配置；未单独设置时返回回退默认 512/2048。 */
-  getInstanceLaunchOptions(instanceId: string): Promise<LaunchOptions>;
+  /** 实例自定义的启动内存配置；返回 null 表示跟随全局设置。 */
+  getInstanceLaunchOptions(instanceId: string): Promise<LaunchOptions | null>;
   setInstanceLaunchOptions(instanceId: string, options: LaunchOptions): Promise<void>;
+  /** 清除实例自定义启动内存，恢复为跟随全局设置。 */
+  clearInstanceLaunchOptions(instanceId: string): Promise<void>;
+  /** 全局启动内存偏好；未设置时默认为自动分配。 */
+  getGlobalLaunchPreference(): Promise<GlobalLaunchPreference>;
+  setGlobalLaunchPreference(preference: GlobalLaunchPreference): Promise<void>;
+  /** 当前机器按自动规则计算出的启动内存（供界面展示"自动分配"取值）。 */
+  getAutoLaunchOptions(): Promise<LaunchOptions>;
   listInstanceWorlds(instanceId: string): Promise<string[]>;
   listInstanceResources(instanceId: string): Promise<InstanceResource[]>;
   /** 打开原生文件选择器挑选要导入的资源文件；用户取消时返回 null。 */
@@ -1016,6 +1028,7 @@ const BROWSER_INSTALLED_CONTENT_KEY = "moyumax.browser.installedContent";
 const BROWSER_CONTENT_UPDATES_KEY = "moyumax.browser.contentUpdates";
 const BROWSER_CONTENT_AUTO_UPDATE_KEY = "moyumax.browser.contentAutoUpdate";
 const BROWSER_LAUNCH_OPTIONS_KEY = "moyumax.browser.launchOptions";
+const BROWSER_GLOBAL_LAUNCH_PREFERENCE_KEY = "moyumax.browser.globalLaunchPreference";
 const BROWSER_INSTANCE_RESOURCES_KEY = "moyumax.browser.instanceResources";
 const BROWSER_INSTANCE_WORLDS_KEY = "moyumax.browser.instanceWorlds";
 const BROWSER_WORLD_DETAILS_KEY = "moyumax.browser.worldDetails";
@@ -1124,9 +1137,16 @@ function createTauriRuntime(): MoyuRuntime {
     setInstalledContentEnabled: (contentId, enabled) =>
       invoke<InstalledContent>("set_installed_content_enabled", { contentId, enabled }),
     getInstanceLaunchOptions: (instanceId) =>
-      invoke<LaunchOptions>("get_instance_launch_options", { instanceId }),
+      invoke<LaunchOptions | null>("get_instance_launch_options", { instanceId }),
     setInstanceLaunchOptions: (instanceId, options) =>
       invoke<void>("set_instance_launch_options", { instanceId, options }),
+    clearInstanceLaunchOptions: (instanceId) =>
+      invoke<void>("clear_instance_launch_options", { instanceId }),
+    getGlobalLaunchPreference: () =>
+      invoke<GlobalLaunchPreference>("get_global_launch_preference"),
+    setGlobalLaunchPreference: (preference) =>
+      invoke<void>("set_global_launch_preference", { preference }),
+    getAutoLaunchOptions: () => invoke<LaunchOptions>("get_auto_launch_options"),
     listInstanceWorlds: (instanceId) =>
       invoke<string[]>("list_instance_worlds", { instanceId }),
     listInstanceResources: (instanceId) =>
@@ -1856,32 +1876,45 @@ function createBrowserRuntime(): MoyuRuntime {
       if (!browserInstances().some((candidate) => candidate.id === instanceId)) {
         throw new Error("实例不存在");
       }
-      return (
-        browserLaunchOptions()[instanceId] ?? {
-          minimumMemoryMib: 512,
-          maximumMemoryMib: 2048,
-        }
-      );
+      return browserLaunchOptions()[instanceId] ?? null;
     },
     async setInstanceLaunchOptions(instanceId, options) {
       if (!browserInstances().some((candidate) => candidate.id === instanceId)) {
         throw new Error("实例不存在");
       }
-      if (
-        !Number.isInteger(options.minimumMemoryMib) ||
-        !Number.isInteger(options.maximumMemoryMib) ||
-        options.minimumMemoryMib < 256 ||
-        options.maximumMemoryMib < options.minimumMemoryMib ||
-        options.maximumMemoryMib > 65536
-      ) {
-        throw new Error("内存设置必须满足 256 MiB <= 最小值 <= 最大值 <= 65536 MiB");
-      }
+      assertValidLaunchOptions(options);
       const all = browserLaunchOptions();
       all[instanceId] = {
         minimumMemoryMib: options.minimumMemoryMib,
         maximumMemoryMib: options.maximumMemoryMib,
       };
       window.localStorage.setItem(BROWSER_LAUNCH_OPTIONS_KEY, JSON.stringify(all));
+    },
+    async clearInstanceLaunchOptions(instanceId) {
+      if (!browserInstances().some((candidate) => candidate.id === instanceId)) {
+        throw new Error("实例不存在");
+      }
+      const all = browserLaunchOptions();
+      delete all[instanceId];
+      window.localStorage.setItem(BROWSER_LAUNCH_OPTIONS_KEY, JSON.stringify(all));
+    },
+    async getGlobalLaunchPreference() {
+      return browserGlobalLaunchPreference();
+    },
+    async setGlobalLaunchPreference(preference) {
+      if (preference.mode === "custom") {
+        assertValidLaunchOptions({
+          minimumMemoryMib: preference.minMib,
+          maximumMemoryMib: preference.maxMib,
+        });
+      }
+      window.localStorage.setItem(
+        BROWSER_GLOBAL_LAUNCH_PREFERENCE_KEY,
+        JSON.stringify(preference),
+      );
+    },
+    async getAutoLaunchOptions() {
+      return { minimumMemoryMib: 512, maximumMemoryMib: 4096 };
     },
     async listInstanceWorlds(instanceId) {
       return browserInstanceWorlds()[instanceId] ?? [];
@@ -3370,6 +3403,23 @@ function browserContentAutoUpdate(): Record<string, boolean> {
 function browserLaunchOptions(): Record<string, LaunchOptions> {
   const serialized = window.localStorage.getItem(BROWSER_LAUNCH_OPTIONS_KEY);
   return serialized ? (JSON.parse(serialized) as Record<string, LaunchOptions>) : {};
+}
+
+function browserGlobalLaunchPreference(): GlobalLaunchPreference {
+  const serialized = window.localStorage.getItem(BROWSER_GLOBAL_LAUNCH_PREFERENCE_KEY);
+  return serialized ? (JSON.parse(serialized) as GlobalLaunchPreference) : { mode: "auto" };
+}
+
+function assertValidLaunchOptions(options: LaunchOptions): void {
+  if (
+    !Number.isInteger(options.minimumMemoryMib) ||
+    !Number.isInteger(options.maximumMemoryMib) ||
+    options.minimumMemoryMib < 256 ||
+    options.maximumMemoryMib < options.minimumMemoryMib ||
+    options.maximumMemoryMib > 65536
+  ) {
+    throw new Error("内存设置必须满足 256 MiB <= 最小值 <= 最大值 <= 65536 MiB");
+  }
 }
 
 function browserInstanceResources(): InstanceResource[] {

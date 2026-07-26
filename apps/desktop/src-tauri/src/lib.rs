@@ -11,10 +11,10 @@ use moyumax_core::{
     AccountSummary, AppService, ArtifactDownloader, BootstrapState, ContentExecutor,
     ContentInstallPlan, ContentInstallTask, ContentUpdateInfo, CrashReportSummary,
     DiagnosticExportPreview, DiagnosticExportResult, DownloadInterrupt, ExitImpactSummary,
-    ExportModpackOptions, ExportModpackReport, FabricLoaderSummary, InstallExecutor,
-    InstallSelection, InstallTask, InstalledContent, InstalledModpack, InstanceIsolation,
-    InstanceResource, InstanceResourceKind, InstanceScreenshot, InstanceServerEntry,
-    InstanceWorldInfo, JavaArchitecture, JavaDeleteOutcome, JavaDistribution,
+    ExportModpackOptions, ExportModpackReport, FabricLoaderSummary, GlobalLaunchPreference,
+    InstallExecutor, InstallSelection, InstallTask, InstalledContent, InstalledModpack,
+    InstanceIsolation, InstanceResource, InstanceResourceKind, InstanceScreenshot,
+    InstanceServerEntry, InstanceWorldInfo, JavaArchitecture, JavaDeleteOutcome, JavaDistribution,
     JavaEnvironmentSummary, LaunchExecution, LaunchLogRead, LaunchOptions, LaunchSessionSummary,
     LoaderChoice, ManagedInstanceSummary, MciMirrorClient, MetadataClient, MicrosoftAuthClient,
     MicrosoftLoginCancel, MinecraftServerStatus, ModpackInstallReport, ModpackUpdateReport,
@@ -22,7 +22,7 @@ use moyumax_core::{
     OnboardingSelection, RecoveryDecision, RecycleBinItem, RecyclePurgeResult, ReleaseInfo,
     ResolvedInstallRequest, ResolvedLoader, ShellState, SourcePolicy, ThemePack, UiBackground,
     UpdateClient, VersionCatalog, WindowCloseBehavior, WorldBackupSummary, YggdrasilClient,
-    min_version_block, run_launch_execution,
+    auto_launch_options, min_version_block, run_launch_execution, total_physical_memory_mib,
 };
 use serde::Serialize;
 use tauri::{Emitter, Manager, State};
@@ -572,6 +572,10 @@ async fn preview_install(
         game_version: trusted_version,
         ..selection
     };
+    let metadata = metadata
+        .inner()
+        .clone()
+        .with_source_policy(service.download_source_policy().unwrap_or_default());
     let request = metadata
         .resolve_install_request(&trusted_selection)
         .await
@@ -741,7 +745,7 @@ fn set_installed_content_enabled(
 fn get_instance_launch_options(
     service: State<'_, AppService>,
     instance_id: String,
-) -> Result<LaunchOptions, String> {
+) -> Result<Option<LaunchOptions>, String> {
     service
         .instance_launch_options(&instance_id)
         .map_err(|error| error.to_string())
@@ -756,6 +760,40 @@ fn set_instance_launch_options(
     service
         .set_instance_launch_options(&instance_id, &options)
         .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+fn clear_instance_launch_options(
+    service: State<'_, AppService>,
+    instance_id: String,
+) -> Result<(), String> {
+    service
+        .clear_instance_launch_options(&instance_id)
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+fn get_global_launch_preference(
+    service: State<'_, AppService>,
+) -> Result<GlobalLaunchPreference, String> {
+    service
+        .global_launch_preference()
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+fn set_global_launch_preference(
+    service: State<'_, AppService>,
+    preference: GlobalLaunchPreference,
+) -> Result<(), String> {
+    service
+        .set_global_launch_preference(&preference)
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+fn get_auto_launch_options() -> LaunchOptions {
+    auto_launch_options(total_physical_memory_mib())
 }
 
 #[tauri::command]
@@ -1991,6 +2029,9 @@ async fn create_modpack_instance(
         isolation: InstanceIsolation::Full,
     };
     emit_modpack_progress(app, "game", 0, 1, "解析游戏安装计划");
+    let metadata = metadata
+        .clone()
+        .with_source_policy(service.download_source_policy().unwrap_or_default());
     let request = metadata
         .resolve_install_request(&selection)
         .await
@@ -2195,8 +2236,8 @@ async fn start_instance(
         .map_err(|error| error.to_string())?;
     let preparation_service = service.clone();
     let execution = tauri::async_runtime::spawn_blocking(move || {
-        // 实例级启动内存配置；未单独设置时核心回退默认 512/2048 MiB。
-        let options = preparation_service.instance_launch_options(&instance_id)?;
+        // 启动内存解析链:实例自定义 → 全局自定义 → 自动分配。
+        let options = preparation_service.resolved_launch_options(&instance_id)?;
         preparation_service.create_launch_execution(&instance_id, &account, &options)
     })
     .await
@@ -2711,6 +2752,10 @@ pub fn run() {
             set_installed_content_enabled,
             get_instance_launch_options,
             set_instance_launch_options,
+            clear_instance_launch_options,
+            get_global_launch_preference,
+            set_global_launch_preference,
+            get_auto_launch_options,
             check_content_updates,
             plan_content_update,
             get_instance_content_auto_update,

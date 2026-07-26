@@ -4,6 +4,7 @@
   import { t, uiLanguage } from "../i18n.svelte";
   import { shellAccount } from "../accounts.svelte";
   import type {
+    GlobalLaunchPreference,
     InstanceResource,
     InstanceResourceKind,
     InstanceScreenshot,
@@ -13,6 +14,7 @@
     InstalledModpack,
     ExportModpackReport,
     JavaEnvironment,
+    LaunchOptions,
     LaunchSession,
     LaunchSessionState,
     ManagedInstance,
@@ -122,6 +124,9 @@
   let javaEnvironments = $state<JavaEnvironment[]>([]);
   let memoryMin = $state("");
   let memoryMax = $state("");
+  let memoryMode = $state<"global" | "custom">("global");
+  let globalPreference = $state<GlobalLaunchPreference>({ mode: "auto" });
+  let autoOptions = $state<LaunchOptions>({ minimumMemoryMib: 512, maximumMemoryMib: 4096 });
   let autoUpdate = $state(false);
   let mods = $state<InstalledContent[]>([]);
   let resources = $state<InstanceResource[]>([]);
@@ -235,7 +240,7 @@
     loading = true;
     errorMessage = "";
     try {
-      const [pack, environments, options, auto, content, resourceList, worldList, shotList, serverList] =
+      const [pack, environments, options, auto, content, resourceList, worldList, shotList, serverList, preference, autoMemory] =
         await Promise.all([
           runtime.getInstanceModpack(current.id),
           runtime.listJavaEnvironments(),
@@ -246,11 +251,22 @@
           runtime.listInstanceWorldDetails(current.id),
           runtime.listInstanceScreenshots(current.id),
           runtime.listInstanceServers(current.id),
+          runtime.getGlobalLaunchPreference(),
+          runtime.getAutoLaunchOptions(),
         ]);
       modpack = pack;
       javaEnvironments = environments;
-      memoryMin = String(options.minimumMemoryMib);
-      memoryMax = String(options.maximumMemoryMib);
+      globalPreference = preference;
+      autoOptions = autoMemory;
+      if (options) {
+        memoryMode = "custom";
+        memoryMin = String(options.minimumMemoryMib);
+        memoryMax = String(options.maximumMemoryMib);
+      } else {
+        memoryMode = "global";
+        memoryMin = "";
+        memoryMax = "";
+      }
       autoUpdate = auto;
       mods = content;
       resources = resourceList;
@@ -632,6 +648,47 @@
     } finally {
       assigningJava = false;
     }
+  }
+
+  /** 当前全局设置下实例跟随全局时的生效摘要（自动分配或全局自定义值）。 */
+  function globalMemorySummary(): string {
+    if (globalPreference.mode === "custom") {
+      return t("instanceDetail.setup.memoryGlobalCustom")
+        .replace("{min}", String(globalPreference.minMib))
+        .replace("{max}", String(globalPreference.maxMib));
+    }
+    return t("instanceDetail.setup.memoryGlobalAuto")
+      .replace("{min}", String(autoOptions.minimumMemoryMib))
+      .replace("{max}", String(autoOptions.maximumMemoryMib));
+  }
+
+  async function selectMemoryMode(mode: "global" | "custom"): Promise<void> {
+    const current = instance;
+    if (!current || mode === memoryMode) return;
+    clearMessages();
+    if (mode === "global") {
+      savingMemory = true;
+      try {
+        await runtime.clearInstanceLaunchOptions(current.id);
+        memoryMode = "global";
+        memoryMin = "";
+        memoryMax = "";
+        message = t("instanceDetail.setup.memoryFollowSaved");
+      } catch (error) {
+        errorMessage = error instanceof Error ? error.message : String(error);
+      } finally {
+        savingMemory = false;
+      }
+      return;
+    }
+    // 切到自定义:用当前跟随全局的生效值预填,保存后才写入实例覆盖。
+    memoryMode = "custom";
+    const source =
+      globalPreference.mode === "custom"
+        ? { minimumMemoryMib: globalPreference.minMib, maximumMemoryMib: globalPreference.maxMib }
+        : autoOptions;
+    memoryMin = String(source.minimumMemoryMib);
+    memoryMax = String(source.maximumMemoryMib);
   }
 
   async function saveMemory(): Promise<void> {
@@ -1112,17 +1169,33 @@
                   <p>{t("instanceDetail.setup.memoryDescription")}</p>
                 </div>
               </header>
-              <div class="instance-memory-inputs">
-                <label>
-                  <span>{t("instanceDetail.setup.memoryMin")}</span>
-                  <input bind:value={memoryMin} type="text" inputmode="numeric" aria-label={t("instanceDetail.setup.memoryMinAria")} />
-                </label>
-                <label>
-                  <span>{t("instanceDetail.setup.memoryMax")}</span>
-                  <input bind:value={memoryMax} type="text" inputmode="numeric" aria-label={t("instanceDetail.setup.memoryMaxAria")} />
-                </label>
-                <button class="button primary compact" disabled={savingMemory} onclick={() => void saveMemory()}>{savingMemory ? t("instanceDetail.setup.memorySaving") : t("instanceDetail.setup.memorySave")}</button>
-              </div>
+              <label class="auto-update-toggle">
+                <input type="radio" name="instance-memory-mode" checked={memoryMode === "global"} disabled={savingMemory} onchange={() => void selectMemoryMode("global")} />
+                <span>
+                  <strong>{t("instanceDetail.setup.memoryFollowGlobal")}</strong>
+                  <small>{globalMemorySummary()}</small>
+                </span>
+              </label>
+              <label class="auto-update-toggle">
+                <input type="radio" name="instance-memory-mode" checked={memoryMode === "custom"} disabled={savingMemory} onchange={() => void selectMemoryMode("custom")} />
+                <span>
+                  <strong>{t("instanceDetail.setup.memoryCustom")}</strong>
+                  <small>{t("instanceDetail.setup.memoryCustomHint")}</small>
+                </span>
+              </label>
+              {#if memoryMode === "custom"}
+                <div class="instance-memory-inputs">
+                  <label>
+                    <span>{t("instanceDetail.setup.memoryMin")}</span>
+                    <input bind:value={memoryMin} type="text" inputmode="numeric" aria-label={t("instanceDetail.setup.memoryMinAria")} />
+                  </label>
+                  <label>
+                    <span>{t("instanceDetail.setup.memoryMax")}</span>
+                    <input bind:value={memoryMax} type="text" inputmode="numeric" aria-label={t("instanceDetail.setup.memoryMaxAria")} />
+                  </label>
+                  <button class="button primary compact" disabled={savingMemory} onclick={() => void saveMemory()}>{savingMemory ? t("instanceDetail.setup.memorySaving") : t("instanceDetail.setup.memorySave")}</button>
+                </div>
+              {/if}
             </section>
 
             <section class="backup-settings" aria-labelledby="instance-setup-autoupdate">

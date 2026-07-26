@@ -160,14 +160,21 @@ test("M33-DET-001 首页卡片进入详情并切换七个子页", async ({ page 
   await expect(page.getByRole("button", { name: "管理“详情测试”" })).toBeVisible();
 });
 
-test("M33-DET-002 启动内存保存、回读与非法值拒绝", async ({ page }) => {
+test("M33-DET-002 启动内存跟随全局与自定义切换", async ({ page }) => {
   await openDetail(page);
   await page.locator(".settings-nav").getByRole("button", { name: "设置", exact: true }).click();
 
+  // 默认跟随全局,展示全局自动分配摘要,不出现输入框
+  await expect(page.getByRole("radio", { name: "跟随全局" })).toBeChecked();
+  await expect(page.getByText("当前生效：全局自动分配 512-4096 MiB")).toBeVisible();
+  await expect(page.getByRole("textbox", { name: "最小内存 MiB" })).toHaveCount(0);
+
+  // 切到自定义,用当前生效值预填
+  await page.getByRole("radio", { name: "自定义" }).click();
   const minInput = page.getByRole("textbox", { name: "最小内存 MiB" });
   const maxInput = page.getByRole("textbox", { name: "最大内存 MiB" });
   await expect(minInput).toHaveValue("512");
-  await expect(maxInput).toHaveValue("2048");
+  await expect(maxInput).toHaveValue("4096");
 
   await minInput.fill("1024");
   await maxInput.fill("8192");
@@ -181,6 +188,7 @@ test("M33-DET-002 启动内存保存、回读与非法值拒绝", async ({ page 
   await page.getByRole("button", { name: "返回首页" }).click();
   await openDetail(page);
   await page.locator(".settings-nav").getByRole("button", { name: "设置", exact: true }).click();
+  await expect(page.getByRole("radio", { name: "自定义" })).toBeChecked();
   await expect(page.getByRole("textbox", { name: "最小内存 MiB" })).toHaveValue("1024");
   await expect(page.getByRole("textbox", { name: "最大内存 MiB" })).toHaveValue("8192");
 
@@ -191,6 +199,20 @@ test("M33-DET-002 启动内存保存、回读与非法值拒绝", async ({ page 
     JSON.parse(window.localStorage.getItem("moyumax.browser.launchOptions") ?? "{}"),
   );
   expect(afterInvalid["instance-id"]).toEqual({ minimumMemoryMib: 1024, maximumMemoryMib: 8192 });
+
+  // 切回跟随全局,清除实例覆盖
+  await page.getByRole("radio", { name: "跟随全局" }).click();
+  await expect(page.locator(".toast").getByText("已切换为跟随全局", { exact: true })).toBeVisible();
+  await expect(page.getByRole("textbox", { name: "最小内存 MiB" })).toHaveCount(0);
+  const cleared = await page.evaluate(() =>
+    JSON.parse(window.localStorage.getItem("moyumax.browser.launchOptions") ?? "{}"),
+  );
+  expect(cleared["instance-id"]).toBeUndefined();
+
+  await page.getByRole("button", { name: "返回首页" }).click();
+  await openDetail(page);
+  await page.locator(".settings-nav").getByRole("button", { name: "设置", exact: true }).click();
+  await expect(page.getByRole("radio", { name: "跟随全局" })).toBeChecked();
 });
 
 test("M33-DET-003 Mod 启停用与筛选", async ({ page }) => {
