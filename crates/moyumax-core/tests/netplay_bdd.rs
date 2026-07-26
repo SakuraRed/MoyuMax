@@ -79,6 +79,10 @@ fn net_003_easytier_args_host_static_ip_and_join_dhcp() {
     assert!(host.contains(&"--use-smoltcp".to_owned()));
     assert!(
         host.windows(2)
+            .any(|pair| pair == ["--hostname", "H|MoyuMax"])
+    );
+    assert!(
+        host.windows(2)
             .any(|pair| pair == ["--rpc-portal", "127.0.0.1:15991"])
     );
 
@@ -92,6 +96,10 @@ fn net_003_easytier_args_host_static_ip_and_join_dhcp() {
     );
     assert!(join.contains(&"--dhcp".to_owned()));
     assert!(!join.contains(&"--ipv4".to_owned()));
+    assert!(
+        join.windows(2)
+            .any(|pair| pair == ["--hostname", "J|MoyuMax"])
+    );
     assert!(
         join.windows(2)
             .any(|pair| pair == ["--private-mode", "true"])
@@ -123,6 +131,48 @@ fn net_003c_mc_lan_announcement_port_parsing() {
     );
     assert_eq!(moyumax_core::parse_mc_lan_port("garbage"), None);
     assert_eq!(moyumax_core::parse_mc_lan_port("[AD]notaport[/AD]"), None);
+}
+
+#[test]
+fn net_007_peer_parsing_filters_local_and_public_server() {
+    // 实测样例（EasyTier v2.6.4）：本机节点 cost=="Local"，公共服务器节点
+    // hostname 以 PublicServer_ 开头，两者都不进入成员列表。
+    let payload = serde_json::json!([
+        {"cidr":"10.144.144.1/24","ipv4":"10.144.144.1","hostname":"H|MoyuMax","cost":"Local","lat_ms":"-","loss_rate":"-","rx_bytes":"-","tx_bytes":"-","tunnel_proto":"-","nat_type":"PortRestricted","id":"890732056","version":"2.6.4-8428a89d"},
+        {"cidr":"","ipv4":"10.144.144.2","hostname":"J|MoyuMax","cost":"p2p","lat_ms":"23.4","loss_rate":"0","rx_bytes":"1","tx_bytes":"2","tunnel_proto":"tcp,tcp6","nat_type":"PortRestricted","id":"1","version":"2.6.4"},
+        {"cidr":"","ipv4":"192.168.23.2","hostname":"PublicServer_hangzhou","cost":"relay(1)","lat_ms":"12.0","loss_rate":"0","rx_bytes":"1","tx_bytes":"2","tunnel_proto":"tcp","nat_type":"NoNat","id":"2","version":"2.6.4"},
+        {"cidr":"","ipv4":"10.144.144.3","hostname":"J|MoyuMax","cost":"relay(2)","lat_ms":"-","loss_rate":"0","rx_bytes":"1","tx_bytes":"2","tunnel_proto":"udp","nat_type":"Symmetric","id":"3","version":"2.6.4"}
+    ]);
+
+    let peers = moyumax_core::parse_easytier_peers(&payload);
+
+    assert_eq!(peers.len(), 2, "本机与公共服务器节点必须过滤");
+    let p2p = &peers[0];
+    assert_eq!(p2p.ipv4, "10.144.144.2");
+    assert_eq!(p2p.hostname, "MoyuMax", "显示名必须去掉角色前缀");
+    assert!(!p2p.is_host);
+    assert_eq!(p2p.latency_ms, Some(23.4));
+    assert_eq!(p2p.connection, "p2p");
+    let relay = &peers[1];
+    assert_eq!(relay.latency_ms, None, "lat_ms 非数字必须留空");
+    assert_eq!(relay.connection, "relay", "非 p2p 一律记为中继");
+}
+
+#[test]
+fn net_007b_peer_parsing_marks_host_by_hostname_prefix() {
+    let payload = serde_json::json!([
+        {"ipv4":"10.144.144.1","hostname":"H|MoyuMax","cost":"p2p","lat_ms":"18"},
+        {"ipv4":"10.144.144.9","hostname":"other-machine","cost":"p2p","lat_ms":"42"}
+    ]);
+
+    let peers = moyumax_core::parse_easytier_peers(&payload);
+
+    assert!(peers[0].is_host, "H| 前缀必须判定为主机");
+    assert_eq!(peers[0].hostname, "MoyuMax");
+    assert!(!peers[1].is_host, "无前缀节点按成员处理");
+    assert_eq!(peers[1].hostname, "other-machine");
+    // 非数组输入安全返回空列表（RPC 异常输出不panic）。
+    assert!(moyumax_core::parse_easytier_peers(&serde_json::json!({})).is_empty());
 }
 
 #[test]

@@ -1485,6 +1485,38 @@ fn get_netplay_status(
     Ok(None)
 }
 
+/// 当前房间成员列表（经 easytier-cli peer 解析；不在房间时返回空列表）。
+#[tauri::command]
+async fn list_netplay_peers(
+    coordinator: State<'_, NetplayCoordinator>,
+) -> Result<Vec<moyumax_core::EasyTierPeerView>, String> {
+    let (cli_path, rpc_port) = {
+        let room = coordinator
+            .room
+            .lock()
+            .map_err(|_| "联机状态不可用".to_owned())?;
+        let Some(process) = room.as_ref() else {
+            return Ok(Vec::new());
+        };
+        (process.cli_path.clone(), process.rpc_port)
+    };
+    let output = tokio::task::spawn_blocking(move || {
+        std::process::Command::new(cli_path)
+            .args(["-p", &format!("127.0.0.1:{rpc_port}"), "-o", "json", "peer"])
+            .output()
+    })
+    .await
+    .map_err(|error| error.to_string())?
+    .map_err(|error| format!("无法查询房间成员：{error}"))?;
+    if !output.status.success() {
+        let detail = String::from_utf8_lossy(&output.stderr);
+        return Err(format!("房间成员查询失败：{}", detail.trim()));
+    }
+    let payload: serde_json::Value = serde_json::from_slice(&output.stdout)
+        .map_err(|error| format!("房间成员信息无法解析：{error}"))?;
+    Ok(moyumax_core::parse_easytier_peers(&payload))
+}
+
 /// 简化 NAT 检测（STUN，仅手动触发）。
 #[tauri::command]
 async fn detect_nat_type() -> Result<NatReportView, String> {
@@ -2721,6 +2753,7 @@ pub fn run() {
             start_netplay_room,
             stop_netplay_room,
             get_netplay_status,
+            list_netplay_peers,
             set_netplay_forward,
             detect_nat_type,
             get_ui_preferences,

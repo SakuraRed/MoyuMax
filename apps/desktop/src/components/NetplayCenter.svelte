@@ -7,6 +7,7 @@
     MoyuRuntime,
     NatReportView,
     NavigationKey,
+    NetplayPeerView,
     OnboardingSelection,
   } from "../runtime";
   import AppShell from "./AppShell.svelte";
@@ -51,6 +52,7 @@
   let natBusy = $state(false);
   let errorMessage = $state("");
   let notice = $state("");
+  let peers = $state<NetplayPeerView[]>([]);
 
   onMount(() => {
     void refreshNetplayRoom(runtime);
@@ -58,6 +60,26 @@
       downloadProgress = event.total > 0 ? event : null;
     });
   });
+
+  // 成员列表由本页自己轮询（5s）：在房间中启动，离开房间或离开页面即清理。
+  const inRoom = $derived(room !== null);
+  $effect(() => {
+    if (!inRoom) {
+      peers = [];
+      return;
+    }
+    void refreshPeers();
+    const timer = setInterval(() => void refreshPeers(), 5000);
+    return () => clearInterval(timer);
+  });
+
+  async function refreshPeers(): Promise<void> {
+    try {
+      peers = await runtime.listNetplayPeers();
+    } catch {
+      // 成员读取失败静默，下一轮轮询重试。
+    }
+  }
 
   function generateRoomName(): void {
     const alphabet = "abcdefghjkmnpqrstuvwxyz23456789";
@@ -246,6 +268,26 @@
                     <button class="button primary compact" disabled={forwardBusy || !forwardPort.trim()} onclick={() => void submitForward()}>{forwardBusy ? t("settings.network.room.forwardStarting") : t("settings.network.room.forwardStart")}</button>
                   </div>
                 {/if}
+                <div class="netplay-members">
+                  <h3>{t("settings.network.room.membersTitle")}</h3>
+                  {#if peers.length === 0}
+                    <small class="netplay-note">{t("settings.network.room.membersEmpty")}</small>
+                  {:else}
+                    <ul class="netplay-member-list">
+                      {#each peers as peer}
+                        <li class="netplay-member-row">
+                          <code class="netplay-member-ip">{peer.ipv4}</code>
+                          <span class="netplay-member-name">{peer.hostname}</span>
+                          <span class="netplay-badge">{peer.isHost ? t("settings.network.room.hostBadge") : t("settings.network.room.memberBadge")}</span>
+                          {#if peer.latencyMs !== null}
+                            <span class="netplay-member-latency">{t("settings.network.room.latency").replace("{ms}", String(Math.round(peer.latencyMs)))}</span>
+                          {/if}
+                          <span class="netplay-badge" class:warn={peer.connection !== "p2p"}>{peer.connection === "p2p" ? t("settings.network.room.connP2p") : t("settings.network.room.connRelay")}</span>
+                        </li>
+                      {/each}
+                    </ul>
+                  {/if}
+                </div>
               </article>
             {:else}
               <div class="account-form" role="group" aria-label={t("settings.network.room.title")}>

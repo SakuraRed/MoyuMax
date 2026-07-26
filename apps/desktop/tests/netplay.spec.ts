@@ -97,6 +97,45 @@ test("NET-004 NAT 检测展示结果", async ({ page }) => {
   await expect(page.getByText("你在 NAT 之后", { exact: false })).toBeVisible();
 });
 
+test("NET-007 房间成员列表展示角色延迟与连接方式", async ({ page }) => {
+  await page.evaluate(() => {
+    window.localStorage.setItem(
+      "moyumax.browser.netplayPeers",
+      JSON.stringify([
+        { ipv4: "10.144.144.2", hostname: "队友A", isHost: false, latencyMs: 23, connection: "p2p" },
+        { ipv4: "10.144.144.3", hostname: "队友B", isHost: false, latencyMs: 61, connection: "relay" },
+      ]),
+    );
+  });
+  await page.getByRole("textbox", { name: "房间号" }).fill("tundra-01");
+  await page.getByRole("textbox", { name: "房间密码" }).fill("secret-12345");
+  await page.getByRole("button", { name: "创建房间" }).click();
+  await expect(page.locator(".netplay-room-name")).toHaveText("tundra-01");
+
+  const members = page.locator(".netplay-members");
+  await expect(members.getByText("房间成员", { exact: true })).toBeVisible();
+  await expect(members.locator(".netplay-member-row")).toHaveCount(2);
+  await expect(members.locator(".netplay-badge", { hasText: "成员" })).toHaveCount(2);
+  await expect(members.getByText("10.144.144.2")).toBeVisible();
+  await expect(members.getByText("队友A")).toBeVisible();
+  await expect(members.getByText("23 ms", { exact: true })).toBeVisible();
+  await expect(members.getByText("直连", { exact: true })).toBeVisible();
+  await expect(members.getByText("中继", { exact: true })).toBeVisible();
+});
+
+test("NET-008 房间无成员时显示等待提示", async ({ page }) => {
+  await page.evaluate(() => {
+    window.localStorage.setItem("moyumax.browser.netplayPeers", "[]");
+  });
+  await page.getByRole("textbox", { name: "房间号" }).fill("tundra-01");
+  await page.getByRole("textbox", { name: "房间密码" }).fill("secret-12345");
+  await page.getByRole("button", { name: "创建房间" }).click();
+  await expect(page.locator(".netplay-room-name")).toHaveText("tundra-01");
+  await expect(
+    page.locator(".netplay-members").getByText("等待成员加入", { exact: false }),
+  ).toBeVisible();
+});
+
 test("NET-UI-001 联机页在 960x600 和 200% 放大下不溢出", async ({ page }) => {
   await page.setViewportSize({ width: 960, height: 600 });
   await page.evaluate(() => {

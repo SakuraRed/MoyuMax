@@ -453,6 +453,18 @@ export interface NatReportView {
   impact: string;
 }
 
+/** 联机房间成员（EasyTier peer 的非敏感视图）。 */
+export interface NetplayPeerView {
+  ipv4: string;
+  /** 显示名（已去掉 H|/J| 角色前缀）。 */
+  hostname: string;
+  isHost: boolean;
+  /** 往返延迟（毫秒）；对端未上报时为 null。 */
+  latencyMs: number | null;
+  /** 连接方式：p2p 直连 / relay 中继。 */
+  connection: "p2p" | "relay" | "local";
+}
+
 /** Microsoft 设备码登录的展示信息（用户码与验证地址）。 */
 export interface DeviceCodeInfo {
   userCode: string;
@@ -869,6 +881,8 @@ export interface MoyuRuntime {
   stopNetplayRoom(): Promise<void>;
   /** 当前联机房间状态。 */
   getNetplayStatus(): Promise<NetplayRoomView | null>;
+  /** 当前房间成员列表（不在房间时返回空列表）。 */
+  listNetplayPeers(): Promise<NetplayPeerView[]>;
   /** 客机建立到主机 MC 端口的本机回环转发；返回游戏内直连的本机端口。 */
   setNetplayForward(mcPort: number): Promise<number>;
   /** 简化 NAT 检测（STUN，仅手动触发）。 */
@@ -1253,6 +1267,7 @@ function createTauriRuntime(): MoyuRuntime {
       invoke<NetplayRoomView>("start_netplay_room", { networkName, networkSecret, isHost }),
     stopNetplayRoom: () => invoke<void>("stop_netplay_room"),
     getNetplayStatus: () => invoke<NetplayRoomView | null>("get_netplay_status"),
+    listNetplayPeers: () => invoke<NetplayPeerView[]>("list_netplay_peers"),
     setNetplayForward: (mcPort) => invoke<number>("set_netplay_forward", { mcPort }),
     detectNatType: () => invoke<NatReportView>("detect_nat_type"),
     onNetplayDownloadProgress: (handler) => {
@@ -2233,6 +2248,21 @@ function createBrowserRuntime(): MoyuRuntime {
     async getNetplayStatus() {
       const serialized = window.localStorage.getItem("moyumax.browser.netplayRoom");
       return serialized ? (JSON.parse(serialized) as NetplayRoomView) : null;
+    },
+    async listNetplayPeers() {
+      const serialized = window.localStorage.getItem("moyumax.browser.netplayRoom");
+      if (!serialized) {
+        return [];
+      }
+      const seeded = window.localStorage.getItem("moyumax.browser.netplayPeers");
+      if (seeded) {
+        return JSON.parse(seeded) as NetplayPeerView[];
+      }
+      const room = JSON.parse(serialized) as NetplayRoomView;
+      // 默认种子：主机房看到一名直连成员，客机看到主机（经中继）。
+      return room.isHost
+        ? [{ ipv4: "10.144.144.2", hostname: "MoyuMax", isHost: false, latencyMs: 23, connection: "p2p" as const }]
+        : [{ ipv4: "10.144.144.1", hostname: "MoyuMax", isHost: true, latencyMs: 18, connection: "relay" as const }];
     },
     async setNetplayForward(mcPort) {
       if (!Number.isInteger(mcPort) || mcPort < 1 || mcPort > 65535) {

@@ -15,6 +15,7 @@ use std::{
 
 use futures_util::StreamExt;
 use reqwest::Client;
+use serde::Serialize;
 use sha2::{Digest, Sha256};
 
 use crate::{CoreError, Result};
@@ -353,6 +354,7 @@ pub fn validate_room_secret(secret: &str) -> Result<String> {
 /// - 主机固定 10.144.144.1；加入者 DHCP 自动分配，实际地址经 RPC `node info` 读回。
 /// - `--private-mode` 只允许同密钥节点；`--relay-network-whitelist` 限制中转范围。
 /// - `--rpc-portal` 固定到 127.0.0.1 的随机空闲端口，避免与本机其他 EasyTier 实例冲突。
+/// - `--hostname` 以 `H|`/`J|` 前缀标记主机/客机角色，成员列表据此判定角色。
 pub fn easytier_args(config: &NetplayRoomConfig, rpc_port: u16) -> Vec<String> {
     let mut args = vec![
         "--no-tun".to_owned(),
@@ -378,6 +380,12 @@ pub fn easytier_args(config: &NetplayRoomConfig, rpc_port: u16) -> Vec<String> {
     } else {
         args.push("--dhcp".to_owned());
     }
+    args.push("--hostname".to_owned());
+    args.push(if config.is_host {
+        "H|MoyuMax".to_owned()
+    } else {
+        "J|MoyuMax".to_owned()
+    });
     args.push("--rpc-portal".to_owned());
     args.push(format!("127.0.0.1:{rpc_port}"));
     args
@@ -393,6 +401,71 @@ pub fn parse_easytier_node_ipv4(payload: &serde_json::Value) -> Option<String> {
     }
     ip.parse::<Ipv4Addr>().ok()?;
     Some(ip.to_owned())
+}
+
+/// 联机房间成员视图（`easytier-cli peer` 解析后的非敏感信息）。
+#[derive(Debug, Clone, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct EasyTierPeerView {
+    /// 成员的虚拟 IPv4。
+    pub ipv4: String,
+    /// 显示名（已去掉 `H|`/`J|` 角色前缀）。
+    pub hostname: String,
+    /// 是否房间主机（hostname 以 `H|` 前缀标记）。
+    pub is_host: bool,
+    /// 往返延迟（毫秒）；对端未上报时为空。
+    pub latency_ms: Option<f64>,
+    /// 连接方式：p2p 直连 / relay 中继（本机节点已在解析时过滤）。
+    pub connection: String,
+}
+
+/// 解析 `easytier-cli -o json peer` 输出为房间成员列表。
+/// 过滤本机节点（cost 为 Local）与公共服务器节点（hostname 以 `PublicServer_` 开头）；
+/// cost 为 `p2p` 记为直连，其余记为中继；`lat_ms` 非数字时延迟留空。
+pub fn parse_easytier_peers(payload: &serde_json::Value) -> Vec<EasyTierPeerView> {
+    let Some(entries) = payload.as_array() else {
+        return Vec::new();
+    };
+    entries.iter().filter_map(parse_easytier_peer).collect()
+}
+
+fn parse_easytier_peer(entry: &serde_json::Value) -> Option<EasyTierPeerView> {
+    let cost = entry
+        .get("cost")
+        .and_then(|value| value.as_str())
+        .unwrap_or("");
+    if cost.eq_ignore_ascii_case("local") {
+        return None;
+    }
+    let raw_hostname = entry
+        .get("hostname")
+        .and_then(|value| value.as_str())
+        .unwrap_or("");
+    if raw_hostname.starts_with("PublicServer_") {
+        return None;
+    }
+    let (is_host, display) = if let Some(name) = raw_hostname.strip_prefix("H|") {
+        (true, name)
+    } else if let Some(name) = raw_hostname.strip_prefix("J|") {
+        (false, name)
+    } else {
+        (false, raw_hostname)
+    };
+    let latency_ms = entry
+        .get("lat_ms")
+        .and_then(|value| value.as_str())
+        .and_then(|text| text.parse::<f64>().ok());
+    Some(EasyTierPeerView {
+        ipv4: entry
+            .get("ipv4")
+            .and_then(|value| value.as_str())
+            .unwrap_or("")
+            .to_owned(),
+        hostname: display.to_owned(),
+        is_host,
+        latency_ms,
+        connection: if cost == "p2p" { "p2p" } else { "relay" }.to_owned(),
+    })
 }
 
 /// 在本机回环上取一个空闲 TCP 端口（用于 RPC 门户与客机转发绑定）。

@@ -5023,6 +5023,49 @@ summary:focus-visible {
   font-size: 12px;
 }
 
+.netplay-members {
+  display: grid;
+  gap: 8px;
+  flex: 1 1 100%;
+  padding-top: 12px;
+  border-top: 1px dashed var(--border);
+}
+
+.netplay-members h3 {
+  margin: 0;
+  font-size: 13px;
+  color: var(--text-2);
+}
+
+.netplay-member-list {
+  display: grid;
+  gap: 6px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.netplay-member-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  font-size: 12px;
+}
+
+.netplay-member-ip {
+  color: var(--accent);
+  font-weight: 600;
+}
+
+.netplay-member-name {
+  font-weight: 600;
+}
+
+.netplay-member-latency {
+  color: var(--text-3);
+}
+
 .nat-report {
   display: grid;
   gap: 8px;
