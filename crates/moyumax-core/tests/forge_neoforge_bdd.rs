@@ -302,6 +302,8 @@ async fn m12_loader_005_resolve_neoforge_loader_with_fixture_server() {
         &[],
     );
     let installer_sha1 = digest_sha1(&installer);
+    // BMCLAPI 的 installerPath 带 /maven 前缀(相对镜像根);客户端必须剥掉
+    // 再拼上游 maven 根,fixture 按剥离后的真实上游路径提供文件。
     let server = ExecutorServer::new(HashMap::from([
         (
             "/neoforge/list/test-release".to_owned(),
@@ -312,7 +314,7 @@ async fn m12_loader_005_resolve_neoforge_loader_with_fixture_server() {
             .unwrap(),
         ),
         (
-            "/maven/net/neoforged/neoforge/21.8.54/neoforge-21.8.54-installer.jar".to_owned(),
+            "/net/neoforged/neoforge/21.8.54/neoforge-21.8.54-installer.jar".to_owned(),
             installer.clone(),
         ),
     ]));
@@ -343,6 +345,10 @@ async fn m12_loader_005_resolve_neoforge_loader_with_fixture_server() {
     assert_eq!(version, "21.8.54");
     assert_eq!(sha1, installer_sha1);
     assert!(installer_url.ends_with("neoforge-21.8.54-installer.jar"));
+    assert!(
+        !installer_url.contains("/maven/"),
+        "上游 URL 不得包含镜像专用的 /maven 段:{installer_url}"
+    );
 }
 
 enum PatchOutcome {

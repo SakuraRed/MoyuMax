@@ -749,7 +749,14 @@ impl MetadataClient {
                     "NeoForge {loader_version} 不在 Minecraft {game_version} 的兼容列表中"
                 ))
             })?;
-        let installer_url = format!("{}{}", self.neoforge_maven_base, selected.installer_path);
+        // BMCLAPI 的 installerPath 以 `/maven` 开头(相对镜像根),上游
+        // maven.neoforged.net/releases 下没有这一段,直接拼接必然 404
+        // (实测 21.1.233);镜像路由会把 /releases 重写回 /maven,两侧都正确。
+        let installer_path = selected
+            .installer_path
+            .strip_prefix("/maven")
+            .unwrap_or(&selected.installer_path);
+        let installer_url = format!("{}{}", self.neoforge_maven_base, installer_path);
         let (profile, version_json, installer_sha1, installer_size) =
             self.download_installer(&installer_url).await?;
         validate_installer_target(&profile, game_version, &selected.version, "NeoForge")?;
