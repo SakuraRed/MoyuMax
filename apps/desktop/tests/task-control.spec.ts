@@ -211,3 +211,29 @@ test("M33-TASK-003 下载线程数越界被拒绝", async ({ page }) => {
   );
   expect(stored).toBeNull();
 });
+
+test("M34-TASK-001 整合包文件阶段并入安装任务进度", async ({ page }) => {
+  await seed(page, [
+    installTask("task-pack-files", "running", {
+      currentStage: "modpackFiles",
+      plan: {
+        schemaVersion: 1,
+        instanceId: INSTANCE.id,
+        instanceName: INSTANCE.name,
+        targetDirectory: "D:\\MoyuMax\\data\\instances\\instance-id",
+        stages: ["prepare", "downloadGameFiles", "modpackFiles"],
+        estimatedDownloadBytes: 1024,
+      },
+      progress: {
+        completedBytes: 512,
+        totalBytes: 1024,
+        currentItem: "正在下载整合包文件",
+        errorSummary: null,
+      },
+    }),
+  ]);
+
+  const card = page.locator(".task-card", { hasText: INSTANCE.name });
+  await expect(card.getByText("整合包文件", { exact: true })).toBeVisible();
+  await expect(card).toContainText("正在下载整合包文件");
+});

@@ -515,6 +515,7 @@ export const en: Record<string, string> = {
   "modpack.updating": "Updating",
   "modpack.updateDone": "\"{name}\" updated from {from} to {to}",
   "modpack.installingHint": "Installing modpack files; the game can only start after it finishes…",
+  "modpack.stateInstalling": "Modpack installing",
   "modpack.keptNote": "; modified files kept untouched: {files}",
 
   // Accounts section (SettingsCenter)
@@ -663,6 +664,7 @@ export const en: Record<string, string> = {
   "install.stage.applyLoader": "Applying loader",
   "install.stage.commitChanges": "Committing changes",
   "install.stage.createRollbackPoint": "Creating rollback point",
+  "install.stage.modpackFiles": "Modpack files",
 
   // Resource center (ResourceCenter)
   "resources.connection.offline": "Online catalog temporarily unavailable",

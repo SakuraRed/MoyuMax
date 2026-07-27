@@ -65,6 +65,7 @@
   let recycleCandidate = $state<ManagedInstance | null>(null);
   let recycleDialog = $state<HTMLElement | null>(null);
   let modpacks = $state<Record<string, InstalledModpack>>({});
+  let packIcons = $state<Record<string, string>>({});
   let installingPacks = $state<Record<string, boolean>>({});
   let updatingPack = $state<string | null>(null);
   let packReport = $state<ModpackUpdateReport | null>(null);
@@ -88,16 +89,22 @@
 
   async function loadModpacks(list: ManagedInstance[]): Promise<void> {
     const next: Record<string, InstalledModpack> = {};
+    const iconsNext: Record<string, string> = {};
     const installingNext: Record<string, boolean> = {};
     for (const instance of list) {
       const [pack, installing] = await Promise.all([
         runtime.getInstanceModpack(instance.id).catch(() => null),
         runtime.isModpackInstalling(instance.id).catch(() => false),
       ]);
-      if (pack) next[instance.id] = pack;
+      if (pack) {
+        next[instance.id] = pack;
+        const icon = await runtime.getModpackIconDataUrl(instance.id).catch(() => null);
+        if (icon) iconsNext[instance.id] = icon;
+      }
       if (installing) installingNext[instance.id] = true;
     }
     modpacks = next;
+    packIcons = iconsNext;
     installingPacks = installingNext;
   }
 
@@ -361,12 +368,12 @@
             {@const crashReport = crashReportForSession(latest)}
             {@const pack = modpacks[instance.id]}
             <article class:running={active?.state === "running"} class:crashed={Boolean(crashReport)} class:instance-hero={index === 0} class="instance-card">
-              <div class="instance-cover" class:hero-cover={index === 0} aria-hidden="true">{instance.name.slice(0, 1)}</div>
+              <div class="instance-cover" class:hero-cover={index === 0} aria-hidden="true">{#if packIcons[instance.id]}<img src={packIcons[instance.id]} alt="" />{:else}{instance.name.slice(0, 1)}{/if}</div>
               <div class="instance-copy">
                 <div class="instance-title-line">
                   <h2>{instance.name}</h2>
                   <span class:active={Boolean(active)} class="instance-state">
-                    {active ? sessionStateLabel(active.state) : instance.state === "ready" ? t("home.instance.ready") : instance.state}
+                    {installingPacks[instance.id] ? t("modpack.stateInstalling") : active ? sessionStateLabel(active.state) : instance.state === "ready" ? t("home.instance.ready") : instance.state}
                   </span>
                 </div>
                 <p>{t("home.instance.summary").replace("{version}", instance.gameVersion).replace("{loader}", loaderLabel(instance))}</p>

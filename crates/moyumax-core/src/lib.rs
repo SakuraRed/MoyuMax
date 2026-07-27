@@ -599,6 +599,16 @@ impl AppService {
                 ",
             )?;
         }
+        // v19:整合包图标（在线项目 iconUrl 或包内提取的本地图标路径,NULL 表示无）。
+        let version: i64 = connection.query_row("PRAGMA user_version", [], |row| row.get(0))?;
+        if version < 19 {
+            connection.execute_batch(
+                "
+                ALTER TABLE instance_modpacks ADD COLUMN icon_url TEXT;
+                PRAGMA user_version = 19;
+                ",
+            )?;
+        }
         Ok(())
     }
 

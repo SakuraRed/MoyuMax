@@ -82,7 +82,8 @@ export type InstallStage =
   | "installGameEnvironment"
   | "applyLoader"
   | "commitChanges"
-  | "createRollbackPoint";
+  | "createRollbackPoint"
+  | "modpackFiles";
 
 export type TaskState =
   | "queued"
@@ -552,6 +553,7 @@ export interface InstalledModpack {
   loaderKind: string;
   managedFiles: { relativePath: string; sha512: string; size: number }[];
   installedAtUnixSeconds: number;
+  iconUrl: string | null;
 }
 
 export interface ModpackInstallReport {
@@ -946,6 +948,10 @@ export interface MoyuRuntime {
   getInstanceModpack(instanceId: string): Promise<InstalledModpack | null>;
   /** 该实例的整合包文件是否正在安装中（安装中禁止启动）。 */
   isModpackInstalling(instanceId: string): Promise<boolean>;
+  /** 读取实例整合包图标：https 原样返回，本地图标转 data URL；无图标返回 null。 */
+  getModpackIconDataUrl(instanceId: string): Promise<string | null>;
+  /** 登记实例整合包图标（在线项目 iconUrl 或本地绝对路径）。 */
+  setModpackIconUrl(instanceId: string, iconUrl: string): Promise<void>;
   /** 打开原生保存对话框选择整合包导出位置；用户取消时返回 null。 */
   pickModpackExportPath(packName: string, version: string): Promise<string | null>;
   /** 把实例导出为 Modrinth mrpack 到指定路径。 */
@@ -1379,6 +1385,10 @@ function createTauriRuntime(): MoyuRuntime {
     getInstanceModpack: (instanceId) =>
       invoke<InstalledModpack | null>("get_instance_modpack", { instanceId }),
     isModpackInstalling: (instanceId) => invoke<boolean>("is_modpack_installing", { instanceId }),
+    getModpackIconDataUrl: (instanceId) =>
+      invoke<string | null>("get_modpack_icon_data_url", { instanceId }),
+    setModpackIconUrl: (instanceId, iconUrl) =>
+      invoke<void>("set_modpack_icon_url", { instanceId, iconUrl }),
     pickModpackExportPath: async (packName, version) => {
       const { save } = await import("@tauri-apps/plugin-dialog");
       return await save({
@@ -2610,6 +2620,7 @@ function createBrowserRuntime(): MoyuRuntime {
           loaderKind: preview.loaderKind,
           managedFiles: [],
           installedAtUnixSeconds: Math.floor(Date.now() / 1000),
+          iconUrl: null,
         };
         window.localStorage.setItem(BROWSER_MODPACKS_KEY, JSON.stringify(modpacks));
       }
@@ -2650,6 +2661,17 @@ function createBrowserRuntime(): MoyuRuntime {
       const raw = window.localStorage.getItem("moyumax.browser.modpackInstalling") ?? "[]";
       const list = JSON.parse(raw) as string[];
       return list.includes(instanceId);
+    },
+    async getModpackIconDataUrl(instanceId) {
+      return browserModpacks()[instanceId]?.iconUrl ?? null;
+    },
+    async setModpackIconUrl(instanceId, iconUrl) {
+      const packs = browserModpacks();
+      const pack = packs[instanceId];
+      if (pack) {
+        pack.iconUrl = iconUrl;
+        window.localStorage.setItem(BROWSER_MODPACKS_KEY, JSON.stringify(packs));
+      }
     },
     async pickModpackExportPath(packName, version) {
       return (

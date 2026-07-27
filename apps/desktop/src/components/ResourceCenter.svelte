@@ -122,6 +122,7 @@
   let filterLoader = $state("");
   let filterCategory = $state("");
   let packPreview = $state<ModpackPreviewResponse | null>(null);
+  let packPreviewIcon = $state("");
   let packPreviewing = $state("");
   let packInstalling = $state(false);
   let packDone = $state("");
@@ -523,6 +524,7 @@
     catalogHits = [];
     catalogError = "";
     packPreview = null;
+    packPreviewIcon = "";
     packDone = "";
     resourceInstallDone = "";
     preview = null;
@@ -543,6 +545,7 @@
       catalogPage = null;
       catalogHits = [];
       packPreview = null;
+      packPreviewIcon = "";
       packDone = "";
       resourceInstallDone = "";
       preview = null;
@@ -666,6 +669,7 @@
     packDone = "";
     try {
       packPreview = await runtime.previewOnlineModpack(project.projectId);
+      packPreviewIcon = project.iconUrl ?? "";
     } catch (error) {
       catalogError = error instanceof Error ? error.message : String(error);
     } finally {
@@ -679,8 +683,16 @@
     catalogError = "";
     try {
       const report = await runtime.installModpack(packPreview.id);
+      // 包内图标优先；没有内置图标时回填在线项目图标。
+      if (packPreviewIcon) {
+        const installed = await runtime.getInstanceModpack(report.instanceId).catch(() => null);
+        if (!installed?.iconUrl) {
+          await runtime.setModpackIconUrl(report.instanceId, packPreviewIcon).catch(() => {});
+        }
+      }
       packDone = report.packName;
       packPreview = null;
+      packPreviewIcon = "";
       await onTasksChanged();
     } catch (error) {
       catalogError = error instanceof Error ? error.message : String(error);
@@ -941,7 +953,7 @@
           </div>
           <div class="content-preview-actions">
             <button class="button primary" disabled={packInstalling} onclick={() => void confirmPackInstall()}>{packInstalling ? t("resources.catalog.installing") : t("resources.catalog.confirmInstall")}</button>
-            <button class="button ghost" disabled={packInstalling} onclick={() => { packPreview = null; }}>{t("common.cancel")}</button>
+            <button class="button ghost" disabled={packInstalling} onclick={() => { packPreview = null; packPreviewIcon = ""; }}>{t("common.cancel")}</button>
           </div>
         </section>
       {/if}

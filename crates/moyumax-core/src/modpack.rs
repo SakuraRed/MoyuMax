@@ -109,6 +109,8 @@ pub struct InstalledModpack {
     pub loader_kind: String,
     pub managed_files: Vec<ManagedPackFile>,
     pub installed_at_unix_seconds: i64,
+    /// 整合包图标：在线项目 iconUrl(https)或包内提取的本地图标绝对路径。
+    pub icon_url: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -545,6 +547,35 @@ pub fn modpack_preview(plan: &ModpackPlan) -> ModpackPreview {
     }
 }
 
+/// 从整合包压缩包提取内置图标到实例目录；按常见约定顺序取第一个命中项。
+/// 返回写出的图标绝对路径；没有任何图标时返回 None。
+pub fn extract_modpack_icon(archive_path: &Path, instance_root: &Path) -> Option<PathBuf> {
+    const CANDIDATES: [&str; 4] = [
+        "icon.png",
+        "overrides/icon.png",
+        "overrides/kubejs/config/packicon.png",
+        "overrides/PCL/Logo.png",
+    ];
+    let file = fs::File::open(archive_path).ok()?;
+    let mut archive = ZipArchive::new(file).ok()?;
+    for name in CANDIDATES {
+        let Ok(mut entry) = archive.by_name(name) else {
+            continue;
+        };
+        let mut bytes = Vec::with_capacity(entry.size() as usize);
+        if std::io::Read::read_to_end(&mut entry, &mut bytes).is_err() || bytes.is_empty() {
+            continue;
+        }
+        let target = instance_root.join(".moyumax").join("pack-icon.png");
+        if let Some(parent) = target.parent() {
+            let _ = fs::create_dir_all(parent);
+        }
+        fs::write(&target, &bytes).ok()?;
+        return Some(target);
+    }
+    None
+}
+
 impl AppService {
     pub fn installed_modpack(&self, instance_id: &str) -> Result<Option<InstalledModpack>> {
         let connection = self.connection()?;
@@ -552,7 +583,7 @@ impl AppService {
             .query_row(
                 "
                 SELECT provider, pack_name, pack_version, game_version, loader_kind,
-                       managed_files_json, installed_at_unix_seconds
+                       managed_files_json, installed_at_unix_seconds, icon_url
                 FROM instance_modpacks WHERE instance_id = ?1
                 ",
                 params![instance_id],
@@ -565,12 +596,21 @@ impl AppService {
                         row.get::<_, String>(4)?,
                         row.get::<_, String>(5)?,
                         row.get::<_, i64>(6)?,
+                        row.get::<_, Option<String>>(7)?,
                     ))
                 },
             )
             .optional()?;
-        let Some((provider, name, version, game_version, loader_kind, managed_json, installed_at)) =
-            row
+        let Some((
+            provider,
+            name,
+            version,
+            game_version,
+            loader_kind,
+            managed_json,
+            installed_at,
+            icon_url,
+        )) = row
         else {
             return Ok(None);
         };
@@ -584,7 +624,73 @@ impl AppService {
             loader_kind,
             managed_files,
             installed_at_unix_seconds: installed_at,
+            icon_url,
         }))
+    }
+
+    /// 设置实例整合包图标(在线项目 iconUrl 或包内提取的本地图标路径)。
+    pub fn set_instance_modpack_icon(&self, instance_id: &str, icon_url: &str) -> Result<()> {
+        if icon_url.trim().is_empty() {
+            return Err(CoreError::Content("图标地址不能为空".to_owned()));
+        }
+        self.connection()?.execute(
+            "UPDATE instance_modpacks SET icon_url = ?2 WHERE instance_id = ?1",
+            params![instance_id, icon_url],
+        )?;
+        Ok(())
+    }
+
+    /// 读取实例整合包图标文件并返回 data URL(仅 https 与本地文件路径;
+    /// 图标过大或读取失败返回 None,不回传超大 payload)。
+    pub fn modpack_icon_data_url(&self, instance_id: &str) -> Result<Option<String>> {
+        let Some(pack) = self.installed_modpack(instance_id)? else {
+            return Ok(None);
+        };
+        let Some(icon) = pack.icon_url else {
+            return Ok(None);
+        };
+        if icon.starts_with("https://") {
+            return Ok(Some(icon));
+        }
+        const MAX_ICON_BYTES: u64 = 2 * 1024 * 1024;
+        let path = Path::new(&icon);
+        let metadata = fs::metadata(path)?;
+        if metadata.len() > MAX_ICON_BYTES {
+            return Ok(None);
+        }
+        let bytes = fs::read(path)?;
+        let mime = if icon.to_ascii_lowercase().ends_with(".jpg")
+            || icon.to_ascii_lowercase().ends_with(".jpeg")
+        {
+            "image/jpeg"
+        } else if icon.to_ascii_lowercase().ends_with(".gif") {
+            "image/gif"
+        } else if icon.to_ascii_lowercase().ends_with(".webp") {
+            "image/webp"
+        } else {
+            "image/png"
+        };
+        const BASE64: &[u8] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+        let mut encoded = String::with_capacity(bytes.len() * 4 / 3 + 4);
+        for chunk in bytes.chunks(3) {
+            let b0 = u32::from(chunk[0]);
+            let b1 = u32::from(*chunk.get(1).unwrap_or(&0));
+            let b2 = u32::from(*chunk.get(2).unwrap_or(&0));
+            let value = (b0 << 16) | (b1 << 8) | b2;
+            encoded.push(BASE64[(value >> 18) as usize & 63] as char);
+            encoded.push(BASE64[(value >> 12) as usize & 63] as char);
+            encoded.push(if chunk.len() > 1 {
+                BASE64[(value >> 6) as usize & 63] as char
+            } else {
+                '='
+            });
+            encoded.push(if chunk.len() > 2 {
+                BASE64[value as usize & 63] as char
+            } else {
+                '='
+            });
+        }
+        Ok(Some(format!("data:{mime};base64,{encoded}")))
     }
 
     /// 安装整合包文件到已就绪实例（游戏与加载器由调用方先行安装）。

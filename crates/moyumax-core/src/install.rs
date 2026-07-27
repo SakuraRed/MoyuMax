@@ -249,6 +249,8 @@ pub enum InstallStage {
     ApplyLoader,
     CommitChanges,
     CreateRollbackPoint,
+    /// 整合包文件阶段(游戏本体完成后,同一任务继续展示文件进度)。
+    ModpackFiles,
 }
 
 impl InstallStage {
@@ -261,6 +263,7 @@ impl InstallStage {
             Self::ApplyLoader => "apply_loader",
             Self::CommitChanges => "commit_changes",
             Self::CreateRollbackPoint => "create_rollback_point",
+            Self::ModpackFiles => "modpack_files",
         }
     }
 
@@ -273,6 +276,7 @@ impl InstallStage {
             "apply_loader" => Ok(Self::ApplyLoader),
             "commit_changes" => Ok(Self::CommitChanges),
             "create_rollback_point" => Ok(Self::CreateRollbackPoint),
+            "modpack_files" => Ok(Self::ModpackFiles),
             _ => Err(CoreError::InvalidStoredState(format!(
                 "未知安装阶段：{value}"
             ))),
@@ -764,6 +768,84 @@ impl AppService {
     /// 再删除任务记录（进度与 Java 关联随外键级联删除）。
     /// 暂存路径必须等于受管安装暂存区中的任务目录，防止路径穿越；
     /// 目录清理失败时报错且任务记录保留。
+    /// 把已完成的游戏安装任务重新打开为"整合包文件"阶段:
+    /// 整合包安装(游戏本体+文件)在同一任务里统一展示进度,不再独立游离。
+    pub fn reopen_install_task_for_modpack_files(&self, task_id: &str) -> Result<()> {
+        let mut connection = self.connection()?;
+        let transaction = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let changed = transaction.execute(
+            "
+            UPDATE install_tasks
+            SET state = 'running', current_stage = 'modpack_files',
+                updated_at_unix_seconds = ?2
+            WHERE id = ?1 AND state = 'completed'
+            ",
+            params![task_id, unix_timestamp()],
+        )?;
+        if changed == 0 {
+            return Err(CoreError::InvalidInstallRequest(
+                "游戏安装任务不存在或尚未完成".to_owned(),
+            ));
+        }
+        transaction.execute(
+            "
+            UPDATE task_progress
+            SET completed_bytes = 0, total_bytes = NULL,
+                current_item = '正在安装整合包文件', error_summary = NULL
+            WHERE task_id = ?1
+            ",
+            params![task_id],
+        )?;
+        transaction.commit()?;
+        Ok(())
+    }
+
+    /// 更新安装任务进度(整合包文件阶段由桌面侧驱动上报)。
+    pub fn report_install_task_progress(
+        &self,
+        task_id: &str,
+        completed: u64,
+        total: u64,
+        current_item: &str,
+    ) -> Result<()> {
+        let completed = sqlite_integer(completed, "已完成计数")?;
+        let total = sqlite_integer(total, "总计数")?;
+        self.connection()?.execute(
+            "
+            UPDATE task_progress
+            SET completed_bytes = ?2, total_bytes = ?3, current_item = ?4
+            WHERE task_id = ?1
+            ",
+            params![task_id, completed, total, current_item],
+        )?;
+        Ok(())
+    }
+
+    /// 标记安装任务完成(整合包文件全部落位后调用)。
+    pub fn complete_install_task(&self, task_id: &str) -> Result<()> {
+        let mut connection = self.connection()?;
+        let transaction = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        transaction.execute(
+            "
+            UPDATE install_tasks
+            SET state = 'completed', current_stage = 'create_rollback_point',
+                updated_at_unix_seconds = ?2
+            WHERE id = ?1 AND state <> 'cancelled'
+            ",
+            params![task_id, unix_timestamp()],
+        )?;
+        transaction.execute(
+            "
+            UPDATE task_progress
+            SET completed_bytes = total_bytes, current_item = '已完成'
+            WHERE task_id = ?1
+            ",
+            params![task_id],
+        )?;
+        transaction.commit()?;
+        Ok(())
+    }
+
     /// 清理已完成的安装任务及其暂存目录。启动时调用,避免任务队列堆积。
     pub fn purge_completed_install_tasks(&self) -> Result<usize> {
         let ids: Vec<String> = {
@@ -1183,7 +1265,7 @@ impl AppService {
         Ok(())
     }
 
-    pub(crate) fn mark_task_failed(&self, task_id: &str, error: &str) -> Result<()> {
+    pub fn mark_task_failed(&self, task_id: &str, error: &str) -> Result<()> {
         let summary: String = error.chars().take(4_000).collect();
         let mut connection = self.connection()?;
         let transaction = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;

@@ -49,3 +49,6 @@
 .DS_Store
 Thumbs.db
 desktop.ini
+
+# 安装器运行日志（本地产物）
+*.jar.log

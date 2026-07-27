@@ -51,6 +51,7 @@ export function installStageLabel(stage: InstallStage): string {
     applyLoader: "install.stage.applyLoader",
     commitChanges: "install.stage.commitChanges",
     createRollbackPoint: "install.stage.createRollbackPoint",
+    modpackFiles: "install.stage.modpackFiles",
   };
   return t(keys[stage]);
 }

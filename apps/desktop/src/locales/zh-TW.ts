@@ -515,6 +515,7 @@ export const zhTW: Record<string, string> = {
   "modpack.updating": "正在更新",
   "modpack.updateDone": "「{name}」已從 {from} 更新到 {to}",
   "modpack.installingHint": "整合包檔案安裝中，完成後才能啟動…",
+  "modpack.stateInstalling": "整合包安裝中",
   "modpack.keptNote": "；以下已修改檔案保留未覆蓋：{files}",
 
   // 帳戶區（SettingsCenter）
@@ -663,6 +664,7 @@ export const zhTW: Record<string, string> = {
   "install.stage.applyLoader": "套用載入器",
   "install.stage.commitChanges": "提交變更",
   "install.stage.createRollbackPoint": "建立還原點",
+  "install.stage.modpackFiles": "整合包檔案",
 
   // 資源中心（ResourceCenter）
   "resources.connection.offline": "線上目錄暫時不可用",

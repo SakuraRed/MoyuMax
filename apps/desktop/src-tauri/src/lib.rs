@@ -1,6 +1,6 @@
 use std::{
     collections::HashMap,
-    path::PathBuf,
+    path::{Path, PathBuf},
     sync::{
         Arc, Mutex,
         atomic::{AtomicBool, Ordering},
@@ -1867,8 +1867,8 @@ async fn install_modpack(
             .map(|_| uuid_dir.to_path_buf())
     });
     let instance = create_modpack_instance(&app, &service, &metadata, &coordinator, &plan).await;
-    let instance = match instance {
-        Ok(instance) => instance,
+    let (instance, game_task_id) = match instance {
+        Ok(parts) => parts,
         Err(error) => {
             if let Some(staging) = online_staging {
                 let _ = std::fs::remove_dir_all(staging);
@@ -1883,9 +1883,20 @@ async fn install_modpack(
         plan.files.len() as u64,
         "准备下载整合包文件",
     );
+    // 文件阶段并入同一任务:游戏安装任务重开为"整合包文件"阶段,
+    // 进度由下载回调上报,全部落位后才标记完成。
+    if let Err(error) = service.reopen_install_task_for_modpack_files(&game_task_id) {
+        if let Some(staging) = online_staging {
+            let _ = std::fs::remove_dir_all(staging);
+        }
+        return Err(format!("无法接管安装任务进度：{error}"));
+    }
     modpack_guard.begin(&instance.id);
     let mci = MciMirrorClient::new().map_err(|error| error.to_string())?;
     let progress_app = app.clone();
+    let progress_service = service.inner().clone();
+    let progress_task = game_task_id.clone();
+    let file_total = plan.files.len() as u64;
     let guard_result = service
         .install_modpack_files(
             &plan,
@@ -1894,10 +1905,32 @@ async fn install_modpack(
             &mci,
             &|current, total, item| {
                 emit_modpack_progress(&progress_app, "files", current, total, item);
+                let _ = progress_service.report_install_task_progress(
+                    &progress_task,
+                    current,
+                    total.max(file_total),
+                    item,
+                );
             },
         )
         .await;
     modpack_guard.finish(&instance.id);
+    match &guard_result {
+        Ok(_) => {
+            let _ = service.complete_install_task(&game_task_id);
+            // 包内自带图标优先落库；没有则保留空值,由在线源或首字占位兜底。
+            if let Some(icon_path) = moyumax_core::extract_modpack_icon(
+                &archive_path,
+                Path::new(&instance.root_directory),
+            ) {
+                let _ =
+                    service.set_instance_modpack_icon(&instance.id, &icon_path.to_string_lossy());
+            }
+        }
+        Err(error) => {
+            let _ = service.mark_task_failed(&game_task_id, &error.to_string());
+        }
+    }
     if let Some(staging) = online_staging {
         let _ = std::fs::remove_dir_all(staging);
     }
@@ -1943,6 +1976,31 @@ fn is_modpack_installing(
     instance_id: String,
 ) -> Result<bool, String> {
     Ok(modpack_guard.is_installing(&instance_id))
+}
+
+#[tauri::command]
+fn get_modpack_icon_data_url(
+    service: State<'_, AppService>,
+    instance_id: String,
+) -> Result<Option<String>, String> {
+    service
+        .modpack_icon_data_url(&instance_id)
+        .map_err(|error| error.to_string())
+}
+
+/// 在线整合包安装完成后登记项目图标(仅接受 https 远程地址或本地绝对路径)。
+#[tauri::command]
+fn set_modpack_icon_url(
+    service: State<'_, AppService>,
+    instance_id: String,
+    icon_url: String,
+) -> Result<(), String> {
+    if !icon_url.starts_with("https://") && !std::path::Path::new(&icon_url).is_absolute() {
+        return Err("图标地址必须是 https 地址或本地绝对路径".to_owned());
+    }
+    service
+        .set_instance_modpack_icon(&instance_id, &icon_url)
+        .map_err(|error| error.to_string())
 }
 
 #[tauri::command]
@@ -2094,7 +2152,7 @@ async fn create_modpack_instance(
     metadata: &MetadataClient,
     coordinator: &TaskCoordinator,
     plan: &moyumax_core::ModpackPlan,
-) -> Result<ManagedInstanceSummary, String> {
+) -> Result<(ManagedInstanceSummary, String), String> {
     let catalog = service
         .cached_version_catalog()
         .map_err(|error| error.to_string())?
@@ -2207,12 +2265,13 @@ async fn create_modpack_instance(
             }
         }
     }
-    service
+    let instance = service
         .list_instances()
         .map_err(|error| error.to_string())?
         .into_iter()
         .find(|instance| instance.name == selection.instance_name)
-        .ok_or_else(|| "游戏安装完成但实例未登记".to_owned())
+        .ok_or_else(|| "游戏安装完成但实例未登记".to_owned())?;
+    Ok((instance, task.id.clone()))
 }
 
 fn emit_modpack_progress(
@@ -3063,6 +3122,8 @@ pub fn run() {
             update_modpack,
             is_modpack_installing,
             get_instance_modpack,
+            get_modpack_icon_data_url,
+            set_modpack_icon_url,
             preview_online_modpack,
             install_online_resource,
             list_modrinth_versions,
