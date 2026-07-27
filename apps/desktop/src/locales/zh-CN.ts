@@ -698,6 +698,8 @@ export const zhCN: Record<string, string> = {
   "resources.catalog.needInstance": "创建一个游戏实例后，即可把资源安装进去。",
   "resources.catalog.createInstance": "去创建",
   "resources.catalog.packPreviewTitle": "整合包预览",
+  "resources.catalog.resourceInstallTitle": "安装 {name}",
+  "resources.versions.auto": "自动（最新兼容）",
   "resources.catalog.packFiles": "{count} 个文件 · {size}",
   "resources.catalog.confirmInstall": "确认安装",
   "resources.catalog.packDone": "「{name}」安装完成",

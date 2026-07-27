@@ -693,6 +693,8 @@ export const en: Record<string, string> = {
   "resources.catalog.needInstance": "Create a game instance and you can install resources into it.",
   "resources.catalog.createInstance": "Create one",
   "resources.catalog.packPreviewTitle": "Modpack preview",
+  "resources.catalog.resourceInstallTitle": "Install {name}",
+  "resources.versions.auto": "Auto (latest compatible)",
   "resources.catalog.packFiles": "{count} files · {size}",
   "resources.catalog.confirmInstall": "Confirm install",
   "resources.catalog.packDone": "\"{name}\" installed",

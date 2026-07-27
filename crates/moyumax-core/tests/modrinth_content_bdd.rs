@@ -114,7 +114,7 @@ async fn m5_dependency_001_required_closure_is_deduplicated_and_optional_waits()
     let instance = instance();
 
     let plan = client
-        .resolve_mod_install_plan(&instance, "ROOT0001", &[])
+        .resolve_mod_install_plan(&instance, "ROOT0001", &[], None)
         .await
         .unwrap();
 
@@ -177,7 +177,7 @@ async fn m5_dependency_001_only_explicitly_selected_optional_dependency_enters_e
 
     let plan = ModrinthClient::with_base_url(&server.base_url())
         .unwrap()
-        .resolve_mod_install_plan(&instance(), "ROOT0001", &["OPT00001".to_owned()])
+        .resolve_mod_install_plan(&instance(), "ROOT0001", &["OPT00001".to_owned()], None)
         .await
         .unwrap();
 
@@ -229,7 +229,7 @@ async fn m5_dependency_002_rejects_an_explicit_incompatible_version() {
 
     let error = ModrinthClient::with_base_url(&server.base_url())
         .unwrap()
-        .resolve_mod_install_plan(&instance(), "ROOT0001", &[])
+        .resolve_mod_install_plan(&instance(), "ROOT0001", &[], None)
         .await
         .unwrap_err();
 
@@ -267,7 +267,7 @@ async fn m5_dependency_003_rejects_a_required_file_name_without_ids() {
 
     let error = ModrinthClient::with_base_url(&server.base_url())
         .unwrap()
-        .resolve_mod_install_plan(&instance(), "ROOT0001", &[])
+        .resolve_mod_install_plan(&instance(), "ROOT0001", &[], None)
         .await
         .unwrap_err();
 
@@ -323,7 +323,7 @@ async fn m5_dependency_002_rejects_conflicting_versions_of_one_project() {
 
     let error = ModrinthClient::with_base_url(&server.base_url())
         .unwrap()
-        .resolve_mod_install_plan(&instance(), "ROOT0001", &[])
+        .resolve_mod_install_plan(&instance(), "ROOT0001", &[], None)
         .await
         .unwrap_err();
 
@@ -384,7 +384,7 @@ async fn m5_dependency_002_prefers_release_and_never_selects_sources() {
 
     let plan = ModrinthClient::with_base_url(&server.base_url())
         .unwrap()
-        .resolve_mod_install_plan(&instance(), "ROOT0001", &[])
+        .resolve_mod_install_plan(&instance(), "ROOT0001", &[], None)
         .await
         .unwrap();
 

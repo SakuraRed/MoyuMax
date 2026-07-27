@@ -81,7 +81,7 @@ async fn current_continuity_dependency_closure_installs_and_launches_from_a_clon
             .any(|project| project.project_id == CONTINUITY_PROJECT_ID)
     );
     let plan = modrinth
-        .resolve_mod_install_plan(&instance, CONTINUITY_PROJECT_ID, &[])
+        .resolve_mod_install_plan(&instance, CONTINUITY_PROJECT_ID, &[], None)
         .await
         .unwrap();
     assert!(

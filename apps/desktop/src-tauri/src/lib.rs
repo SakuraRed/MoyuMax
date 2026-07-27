@@ -751,6 +751,7 @@ async fn preview_modrinth_install(
     instance_id: String,
     project_id: String,
     selected_optional_projects: Vec<String>,
+    version_id: Option<String>,
 ) -> Result<ContentInstallPreview, String> {
     let instance = service
         .list_instances()
@@ -759,7 +760,12 @@ async fn preview_modrinth_install(
         .find(|instance| instance.id == instance_id)
         .ok_or_else(|| "目标实例不存在，请刷新实例列表".to_owned())?;
     let plan = modrinth
-        .resolve_mod_install_plan(&instance, &project_id, &selected_optional_projects)
+        .resolve_mod_install_plan(
+            &instance,
+            &project_id,
+            &selected_optional_projects,
+            version_id.as_deref(),
+        )
         .await
         .map_err(|error| error.to_string())?;
     let id = Uuid::new_v4().to_string();
@@ -2020,12 +2026,23 @@ async fn preview_online_modpack(
     service: State<'_, AppService>,
     previews: State<'_, ModpackPreviewStore>,
     project_id: String,
+    version_id: Option<String>,
 ) -> Result<ModpackPreviewResponse, String> {
     let client = ModrinthClient::new().map_err(|error| error.to_string())?;
-    let file = client
-        .latest_project_file(&project_id, None, None)
-        .await
-        .map_err(|error| error.to_string())?;
+    let file = match version_id
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    {
+        Some(selected) => client
+            .project_version_file(selected)
+            .await
+            .map_err(|error| error.to_string())?,
+        None => client
+            .latest_project_file(&project_id, None, None)
+            .await
+            .map_err(|error| error.to_string())?,
+    };
     let staging_directory = service
         .selected_data_directory()
         .map_err(|error| error.to_string())?

@@ -547,6 +547,7 @@ impl ModrinthClient {
         instance: &ManagedInstanceSummary,
         root_project_id: &str,
         selected_optional_projects: &[String],
+        root_version_id: Option<&str>,
     ) -> Result<ContentInstallPlan> {
         validate_target_instance(instance)?;
         validate_identifier(root_project_id, "Modrinth 项目 ID")?;
@@ -559,7 +560,10 @@ impl ModrinthClient {
             .collect::<Result<HashSet<_>>>()?;
         let mut queue = VecDeque::from([DependencyRequest {
             project_id: root_project_id.to_owned(),
-            version_id: None,
+            version_id: root_version_id
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .map(str::to_owned),
             required_by_project_id: None,
         }]);
         let mut nodes = HashMap::<String, ResolvedNode>::new();

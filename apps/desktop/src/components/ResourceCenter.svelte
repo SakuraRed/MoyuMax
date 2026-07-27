@@ -126,8 +126,18 @@
   let packPreviewing = $state("");
   let packInstalling = $state(false);
   let packDone = $state("");
+  let packProjectRef = $state<ModrinthProjectSummary | null>(null);
+  let packVersions = $state<ModrinthVersionSummary[]>([]);
+  let packVersionId = $state("");
   let resourceInstalling = $state("");
   let resourceInstallDone = $state("");
+  let resourceInstallTarget = $state<ModrinthProjectSummary | null>(null);
+  let resourceVersions = $state<ModrinthVersionSummary[]>([]);
+  let resourceVersionId = $state("");
+  let resourceVersionsLoading = $state(false);
+  let previewProjectRef = $state<ModrinthProjectSummary | null>(null);
+  let previewVersions = $state<ModrinthVersionSummary[]>([]);
+  let previewVersionId = $state("");
   let downloadTarget = $state<ModrinthProjectSummary | null>(null);
   let downloadVersions = $state<ModrinthVersionSummary[]>([]);
   let downloadVersionId = $state("");
@@ -349,10 +359,28 @@
       return;
     }
     if (instance) {
-      void installResourceToInstance(project, version.id);
+      void installResourceVersion(project, version.id);
       return;
     }
     openDetailDownloadDialog(version);
+  }
+
+  /** 详情页已选定具体版本的直接安装（光影/资源包）。 */
+  async function installResourceVersion(project: ModrinthProjectSummary, versionId: string): Promise<void> {
+    const instance = selectedInstance();
+    if (!instance || (catalogType !== "shader" && catalogType !== "resourcepack")) return;
+    resourceInstalling = project.projectId;
+    catalogError = "";
+    resourceInstallDone = "";
+    try {
+      await runtime.installOnlineResource(instance.id, catalogType, project.projectId, versionId);
+      resourceInstallDone = `${project.title} → ${instance.name}`;
+      await loadInstalled();
+    } catch (error) {
+      catalogError = error instanceof Error ? error.message : String(error);
+    } finally {
+      resourceInstalling = "";
+    }
   }
 
   function openDetailDownloadDialog(version: ModrinthVersionSummary): void {
@@ -525,9 +553,16 @@
     catalogError = "";
     packPreview = null;
     packPreviewIcon = "";
+    packProjectRef = null;
+    packVersions = [];
+    packVersionId = "";
     packDone = "";
     resourceInstallDone = "";
+    resourceInstallTarget = null;
     preview = null;
+    previewProjectRef = null;
+    previewVersions = [];
+    previewVersionId = "";
     queued = false;
     void runCatalogSearch(true);
   }
@@ -546,9 +581,16 @@
       catalogHits = [];
       packPreview = null;
       packPreviewIcon = "";
+      packProjectRef = null;
+      packVersions = [];
+      packVersionId = "";
       packDone = "";
       resourceInstallDone = "";
+      resourceInstallTarget = null;
       preview = null;
+      previewProjectRef = null;
+      previewVersions = [];
+      previewVersionId = "";
       queued = false;
     } else {
       loadingMore = true;
@@ -609,11 +651,45 @@
     catalogError = "";
     queued = false;
     selectedOptionalProjects = [];
+    previewProjectRef = project;
+    previewVersionId = "";
+    previewVersions = [];
+    try {
+      const instance = selectedInstance();
+      const versionFilter = instance
+        ? runtime.listModrinthVersions(
+            project.projectId,
+            instance.gameVersion || undefined,
+            instance.loaderKind !== "vanilla" ? instance.loaderKind : undefined,
+          ).catch(() => [] as ModrinthVersionSummary[])
+        : Promise.resolve([] as ModrinthVersionSummary[]);
+      const [previewResult, versions] = await Promise.all([
+        runtime.previewModrinthInstall(selectedInstanceId, project.projectId, []),
+        versionFilter,
+      ]);
+      preview = previewResult;
+      previewVersions = versions;
+      optionalSelectionDirty = false;
+    } catch (error) {
+      catalogError = error instanceof Error ? error.message : String(error);
+    } finally {
+      previewingProject = "";
+    }
+  }
+
+  /** 切换安装计划的目标版本：重置可选依赖选择并按选定版本重新解析。 */
+  async function selectPreviewVersion(versionId: string): Promise<void> {
+    if (!previewProjectRef || versionId === previewVersionId) return;
+    previewVersionId = versionId;
+    previewingProject = previewProjectRef.projectId;
+    catalogError = "";
+    selectedOptionalProjects = [];
     try {
       preview = await runtime.previewModrinthInstall(
         selectedInstanceId,
-        project.projectId,
+        previewProjectRef.projectId,
         [],
+        versionId || undefined,
       );
       optionalSelectionDirty = false;
     } catch (error) {
@@ -639,6 +715,7 @@
         selectedInstanceId,
         preview.plan.rootProjectId,
         selectedOptionalProjects,
+        previewVersionId || undefined,
       );
       optionalSelectionDirty = false;
     } catch (error) {
@@ -667,9 +744,35 @@
     packPreviewing = project.projectId;
     catalogError = "";
     packDone = "";
+    packProjectRef = project;
+    packVersions = [];
+    packVersionId = "";
     try {
-      packPreview = await runtime.previewOnlineModpack(project.projectId);
+      const [previewResult, versions] = await Promise.all([
+        runtime.previewOnlineModpack(project.projectId),
+        runtime.listModrinthVersions(project.projectId).catch(() => [] as ModrinthVersionSummary[]),
+      ]);
+      packPreview = previewResult;
+      packVersions = versions;
       packPreviewIcon = project.iconUrl ?? "";
+    } catch (error) {
+      catalogError = error instanceof Error ? error.message : String(error);
+    } finally {
+      packPreviewing = "";
+    }
+  }
+
+  /** 切换整合包版本：按选定版本重新下载并解析包。 */
+  async function selectPackVersion(versionId: string): Promise<void> {
+    if (!packProjectRef || versionId === packVersionId) return;
+    packVersionId = versionId;
+    packPreviewing = packProjectRef.projectId;
+    catalogError = "";
+    try {
+      packPreview = await runtime.previewOnlineModpack(
+        packProjectRef.projectId,
+        versionId || undefined,
+      );
     } catch (error) {
       catalogError = error instanceof Error ? error.message : String(error);
     } finally {
@@ -693,6 +796,9 @@
       packDone = report.packName;
       packPreview = null;
       packPreviewIcon = "";
+      packProjectRef = null;
+      packVersions = [];
+      packVersionId = "";
       await onTasksChanged();
     } catch (error) {
       catalogError = error instanceof Error ? error.message : String(error);
@@ -701,15 +807,47 @@
     }
   }
 
-  async function installResourceToInstance(project: ModrinthProjectSummary, versionId?: string): Promise<void> {
+  /** 打开光影/资源包安装确认：先取版本列表，用户选定版本后再安装。 */
+  async function openResourceInstall(project: ModrinthProjectSummary): Promise<void> {
     const instance = selectedInstance();
     if (!instance || (catalogType !== "shader" && catalogType !== "resourcepack")) return;
+    resourceInstallTarget = project;
+    resourceVersions = [];
+    resourceVersionId = "";
+    resourceVersionsLoading = true;
+    catalogError = "";
+    resourceInstallDone = "";
+    try {
+      const versions = await runtime.listModrinthVersions(
+        project.projectId,
+        instance.gameVersion || undefined,
+      );
+      if (versions.length === 0) {
+        catalogError = t("resources.download.noVersions");
+        resourceInstallTarget = null;
+        return;
+      }
+      resourceVersions = versions;
+      resourceVersionId = versions[0]?.id ?? "";
+    } catch (error) {
+      catalogError = error instanceof Error ? error.message : String(error);
+      resourceInstallTarget = null;
+    } finally {
+      resourceVersionsLoading = false;
+    }
+  }
+
+  async function confirmResourceInstall(): Promise<void> {
+    const instance = selectedInstance();
+    const project = resourceInstallTarget;
+    if (!instance || !project || !resourceVersionId || (catalogType !== "shader" && catalogType !== "resourcepack")) return;
     resourceInstalling = project.projectId;
     catalogError = "";
     resourceInstallDone = "";
     try {
-      await runtime.installOnlineResource(instance.id, catalogType, project.projectId, versionId);
+      await runtime.installOnlineResource(instance.id, catalogType, project.projectId, resourceVersionId);
       resourceInstallDone = `${project.title} → ${instance.name}`;
+      resourceInstallTarget = null;
       await loadInstalled();
     } catch (error) {
       catalogError = error instanceof Error ? error.message : String(error);
@@ -942,6 +1080,17 @@
       {#if packPreview}
         <section class="content-preview" aria-labelledby="pack-preview-title">
           <header><h2 id="pack-preview-title">{t("resources.catalog.packPreviewTitle")}</h2></header>
+          {#if packVersions.length > 0}
+            <label class="version-pick">
+              <span>{t("resources.download.versionLabel")}</span>
+              <select value={packVersionId} disabled={Boolean(packPreviewing) || packInstalling} onchange={(event) => void selectPackVersion((event.currentTarget as HTMLSelectElement).value)} aria-label={t("resources.download.versionAria")}>
+                <option value="">{t("resources.versions.auto")}</option>
+                {#each packVersions as version}
+                  <option value={version.id}>{version.versionNumber}{version.versionType !== "release" ? ` (${version.versionType})` : ""}</option>
+                {/each}
+              </select>
+            </label>
+          {/if}
           <div class="content-plan-list">
             <article class="content-plan-row">
               <div>
@@ -952,9 +1101,31 @@
             </article>
           </div>
           <div class="content-preview-actions">
-            <button class="button primary" disabled={packInstalling} onclick={() => void confirmPackInstall()}>{packInstalling ? t("resources.catalog.installing") : t("resources.catalog.confirmInstall")}</button>
-            <button class="button ghost" disabled={packInstalling} onclick={() => { packPreview = null; packPreviewIcon = ""; }}>{t("common.cancel")}</button>
+            <button class="button primary" disabled={packInstalling || Boolean(packPreviewing)} onclick={() => void confirmPackInstall()}>{packInstalling ? t("resources.catalog.installing") : t("resources.catalog.confirmInstall")}</button>
+            <button class="button ghost" disabled={packInstalling} onclick={() => { packPreview = null; packPreviewIcon = ""; packProjectRef = null; packVersions = []; packVersionId = ""; }}>{t("common.cancel")}</button>
           </div>
+        </section>
+      {/if}
+
+      {#if resourceInstallTarget}
+        <section class="content-preview" aria-labelledby="resource-install-title">
+          <header><h2 id="resource-install-title">{t("resources.catalog.resourceInstallTitle").replace("{name}", resourceInstallTarget.title)}</h2></header>
+          {#if resourceVersionsLoading}
+            <div class="content-loading" aria-live="polite"><span>{t("resources.download.loadingVersions")}</span></div>
+          {:else}
+            <label class="version-pick">
+              <span>{t("resources.download.versionLabel")}</span>
+              <select value={resourceVersionId} disabled={Boolean(resourceInstalling)} onchange={(event) => { resourceVersionId = (event.currentTarget as HTMLSelectElement).value; }} aria-label={t("resources.download.versionAria")}>
+                {#each resourceVersions as version}
+                  <option value={version.id}>{version.versionNumber}{version.versionType !== "release" ? ` (${version.versionType})` : ""}</option>
+                {/each}
+              </select>
+            </label>
+            <div class="content-preview-actions">
+              <button class="button primary" disabled={Boolean(resourceInstalling) || !resourceVersionId} onclick={() => void confirmResourceInstall()}>{resourceInstalling ? t("resources.catalog.installing") : t("resources.catalog.confirmInstall")}</button>
+              <button class="button ghost" disabled={Boolean(resourceInstalling)} onclick={() => { resourceInstallTarget = null; }}>{t("common.cancel")}</button>
+            </div>
+          {/if}
         </section>
       {/if}
 
@@ -1015,7 +1186,7 @@
                       {packPreviewing === project.projectId ? t("resources.catalog.parsing") : t("resources.catalog.install")}
                     </button>
                   {:else}
-                    <button class="button compact" disabled={Boolean(resourceInstalling) || !selectedInstanceId} onclick={() => void installResourceToInstance(project)}>
+                    <button class="button compact" disabled={Boolean(resourceInstalling) || resourceVersionsLoading || !selectedInstanceId} onclick={() => void openResourceInstall(project)}>
                       {resourceInstalling === project.projectId ? t("resources.catalog.installing") : t("resources.catalog.install")}
                     </button>
                   {/if}
@@ -1170,6 +1341,17 @@
       {#if preview}
         <section class="content-preview" aria-labelledby="content-preview-title">
           <header><h2 id="content-preview-title">{t("resources.preview.title")}</h2></header>
+          {#if previewVersions.length > 0}
+            <label class="version-pick">
+              <span>{t("resources.download.versionLabel")}</span>
+              <select value={previewVersionId} disabled={Boolean(previewingProject)} onchange={(event) => void selectPreviewVersion((event.currentTarget as HTMLSelectElement).value)} aria-label={t("resources.download.versionAria")}>
+                <option value="">{t("resources.versions.auto")}</option>
+                {#each previewVersions as version}
+                  <option value={version.id}>{version.versionNumber}{version.versionType !== "release" ? ` (${version.versionType})` : ""}</option>
+                {/each}
+              </select>
+            </label>
+          {/if}
           <div class="content-plan-list">
             {#each preview.plan.entries as entry}
               <article class="content-plan-row">

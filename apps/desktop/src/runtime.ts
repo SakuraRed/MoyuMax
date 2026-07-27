@@ -797,6 +797,7 @@ export interface MoyuRuntime {
     instanceId: string,
     projectId: string,
     selectedOptionalProjects: string[],
+    versionId?: string,
   ): Promise<ContentInstallPreview>;
   confirmContentPreview(previewId: string): Promise<ContentInstallTask>;
   getContentInstallTasks(): Promise<ContentInstallTask[]>;
@@ -960,8 +961,8 @@ export interface MoyuRuntime {
     options: ExportModpackOptions,
     destinationPath: string,
   ): Promise<ExportModpackReport>;
-  /** 在线整合包预览：下载并解析 Modrinth 整合包后返回预览，确认走 installModpack。 */
-  previewOnlineModpack(projectId: string): Promise<ModpackPreviewResponse>;
+  /** 在线整合包预览：下载并解析 Modrinth 整合包后返回预览，确认走 installModpack；可指定版本。 */
+  previewOnlineModpack(projectId: string, versionId?: string): Promise<ModpackPreviewResponse>;
   /** 在线光影/资源包/模组安装：按实例版本解析（可指定版本），下载校验后导入实例。 */
   installOnlineResource(
     instanceId: string,
@@ -1140,11 +1141,12 @@ function createTauriRuntime(): MoyuRuntime {
     retryInstallTask: (taskId) => invoke<void>("retry_install_task", { taskId }),
     searchModrinthMods: (query) =>
       invoke<ModrinthSearchPage>("search_modrinth_mods", { query }),
-    previewModrinthInstall: (instanceId, projectId, selectedOptionalProjects) =>
+    previewModrinthInstall: (instanceId, projectId, selectedOptionalProjects, versionId) =>
       invoke<ContentInstallPreview>("preview_modrinth_install", {
         instanceId,
         projectId,
         selectedOptionalProjects,
+        versionId: versionId ?? null,
       }),
     confirmContentPreview: (previewId) =>
       invoke<ContentInstallTask>("confirm_content_preview", { previewId }),
@@ -1402,8 +1404,8 @@ function createTauriRuntime(): MoyuRuntime {
         options,
         destinationPath,
       }),
-    previewOnlineModpack: (projectId) =>
-      invoke<ModpackPreviewResponse>("preview_online_modpack", { projectId }),
+    previewOnlineModpack: (projectId, versionId) =>
+      invoke<ModpackPreviewResponse>("preview_online_modpack", { projectId, versionId: versionId ?? null }),
     installOnlineResource: (instanceId, kind, projectId, versionId) =>
       invoke<InstanceResource>("install_online_resource", { instanceId, kind, projectId, versionId }),
     onModpackProgress: (handler) => {

@@ -693,6 +693,8 @@ export const zhTW: Record<string, string> = {
   "resources.catalog.needInstance": "建立一個遊戲實例後，即可把資源安裝進去。",
   "resources.catalog.createInstance": "去建立",
   "resources.catalog.packPreviewTitle": "整合包預覽",
+  "resources.catalog.resourceInstallTitle": "安裝 {name}",
+  "resources.versions.auto": "自動（最新相容）",
   "resources.catalog.packFiles": "{count} 個檔案 · {size}",
   "resources.catalog.confirmInstall": "確認安裝",
   "resources.catalog.packDone": "「{name}」安裝完成",
