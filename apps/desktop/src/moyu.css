@@ -1,0 +1,718 @@
+/* ============================================================
+   MoyuMax 设计系统(移植自 mockups/assets/moyu.css + fish.css)
+   主题:深色水下渐变 + 毛玻璃面板;浅色令牌挂 .window[data-theme="light"]。
+   圆角规则(全项目统一):卡片、按钮、输入、弹窗一律 12px(var(--r));
+   仅状态标签与头像使用胶囊/圆形。除此无其他圆角值。
+   强调色唯一:--accent(水色青碧),状态色仅用于语义状态。
+   ============================================================ */
+
+:root,
+.window {
+  /* 背景:水下纵深渐变 */
+  --bg-0: #08131c;
+  --bg-1: #0c1f2c;
+  --bg-2: #11303f;
+  --bg-grad:
+    radial-gradient(1200px 700px at 85% -10%, rgba(63, 216, 194, 0.10), transparent 60%),
+    radial-gradient(900px 600px at -10% 110%, rgba(46, 130, 180, 0.14), transparent 55%),
+    linear-gradient(160deg, var(--bg-1), var(--bg-0) 70%);
+
+  /* 毛玻璃面板 */
+  --glass: rgba(255, 255, 255, 0.055);
+  --glass-strong: rgba(255, 255, 255, 0.09);
+  --glass-border: rgba(255, 255, 255, 0.10);
+  --glass-highlight: rgba(255, 255, 255, 0.14);
+  --glass-blur: blur(18px) saturate(150%);
+
+  /* 文字 */
+  --text-1: #eaf4f6;
+  --text-2: #a8c0c8;
+  --text-3: #6d8891;
+
+  /* 唯一强调色 */
+  --accent: #3fd8c2;
+  --accent-ink: #06231f;
+  --accent-soft: rgba(63, 216, 194, 0.14);
+
+  /* 语义状态色(仅状态用途) */
+  --ok: #4ecf87;
+  --ok-soft: rgba(78, 207, 135, 0.14);
+  --warn: #e8b44c;
+  --warn-soft: rgba(232, 180, 76, 0.15);
+  --danger: #e8685f;
+  --danger-soft: rgba(232, 104, 95, 0.15);
+  --info: #5ea8e0;
+  --info-soft: rgba(94, 168, 224, 0.15);
+
+  /* 统一圆角 */
+  --r: 12px;
+
+  /* 阴影(带背景色相) */
+  --shadow-1: 0 8px 28px rgba(2, 12, 18, 0.45);
+  --shadow-2: 0 16px 48px rgba(2, 12, 18, 0.55);
+
+  --font: "Segoe UI", "Microsoft YaHei UI", "Microsoft YaHei", system-ui, sans-serif;
+  --mono: "Cascadia Mono", Consolas, monospace;
+}
+
+:root {
+  font-family: var(--font);
+}
+
+.window {
+  background: var(--bg-grad);
+  color: var(--text-1);
+}
+
+/* ============ 标题栏:返回+标题 / 全局工具+窗口控制 ============ */
+.titlebar {
+  height: 48px;
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 0 12px 0 16px;
+  background: rgba(255, 255, 255, 0.03);
+  border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+  backdrop-filter: var(--glass-blur);
+  -webkit-backdrop-filter: var(--glass-blur);
+}
+.titlebar .tb-back {
+  width: 30px; height: 30px;
+  display: grid; place-items: center;
+  border: none; background: transparent;
+  border-radius: var(--r);
+  color: var(--text-2);
+  cursor: pointer;
+}
+.titlebar .tb-back:hover { background: var(--glass-strong); color: var(--text-1); }
+.titlebar .tb-title { font-size: 13.5px; font-weight: 600; letter-spacing: 0.02em; }
+.titlebar .tb-sub { font-size: 12px; color: var(--text-3); margin-left: 4px; }
+.titlebar .tb-spacer { flex: 1; }
+.tb-tool {
+  height: 30px;
+  display: inline-flex; align-items: center; gap: 6px;
+  padding: 0 10px;
+  border-radius: var(--r);
+  color: var(--text-2);
+  font-size: 12.5px;
+  cursor: pointer;
+  border: none; background: transparent;
+}
+.tb-tool:hover { background: var(--glass-strong); color: var(--text-1); }
+.tb-tool .dot { width: 7px; height: 7px; border-radius: 50%; background: var(--ok); }
+.tb-tool .dot.off { background: var(--warn); }
+.tb-win {
+  width: 40px; height: 30px;
+  display: grid; place-items: center;
+  border: none; background: transparent;
+  color: var(--text-2);
+  border-radius: var(--r);
+  cursor: pointer;
+  font-size: 12px;
+}
+.tb-win:hover { background: var(--glass-strong); color: var(--text-1); }
+.tb-win.close:hover { background: var(--danger); color: #fff; }
+.tb-win .min-line { width: 10px; height: 1.5px; border-radius: 1px; background: currentColor; }
+
+/* ============ 主体:左侧导航 + 内容区 ============ */
+.shell { flex: 1; display: flex; min-height: 0; }
+
+.navrail {
+  width: 200px;
+  flex: none;
+  padding: 14px 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  border-right: 1px solid rgba(255, 255, 255, 0.06);
+  background: rgba(255, 255, 255, 0.025);
+}
+.nav-brand {
+  display: flex; align-items: center; gap: 10px;
+  padding: 6px 10px 14px;
+}
+.nav-brand .logo { width: 30px; height: 30px; }
+.nav-brand .name { font-weight: 700; font-size: 14.5px; letter-spacing: 0.02em; }
+.nav-group { font-size: 11px; color: var(--text-3); padding: 12px 12px 4px; letter-spacing: 0.06em; }
+.nav-item {
+  display: flex; align-items: center; gap: 10px;
+  padding: 8px 12px;
+  border-radius: var(--r);
+  color: var(--text-2);
+  font-size: 13.5px;
+  cursor: pointer;
+  position: relative;
+  border: none; background: transparent; width: 100%; text-align: left;
+}
+.nav-item:hover { background: var(--glass); color: var(--text-1); }
+.nav-item.active {
+  background: var(--accent-soft);
+  color: var(--accent);
+  font-weight: 600;
+}
+.nav-item.active::before {
+  content: "";
+  position: absolute;
+  left: -10px; top: 8px; bottom: 8px;
+  width: 3px;
+  border-radius: 3px;
+  background: var(--accent);
+}
+.nav-item:disabled { opacity: 0.45; cursor: not-allowed; }
+.nav-item .badge {
+  margin-left: auto;
+  font-size: 11px;
+  background: var(--glass-strong);
+  color: var(--text-2);
+  border-radius: 999px;
+  padding: 0 7px;
+  line-height: 18px;
+}
+.nav-item .badge.warn { background: var(--warn-soft); color: var(--warn); }
+.nav-foot { margin-top: auto; display: flex; flex-direction: column; gap: 2px; }
+
+/* 导航内的常驻账户卡 */
+.nav-account {
+  display: flex; align-items: center; gap: 10px;
+  padding: 8px 10px;
+  border: none; background: transparent; width: 100%; text-align: left;
+  border-radius: var(--r);
+  color: var(--text-1);
+  font-family: var(--font);
+  cursor: pointer;
+  position: relative;
+}
+.nav-account:hover { background: var(--glass); }
+.nav-account.active {
+  background: var(--accent-soft);
+}
+.nav-account.active::before {
+  content: "";
+  position: absolute;
+  left: -10px; top: 8px; bottom: 8px;
+  width: 3px;
+  border-radius: 3px;
+  background: var(--accent);
+}
+.nav-account:disabled { opacity: 0.45; cursor: not-allowed; }
+.nav-account .avatar {
+  width: 30px; height: 30px; border-radius: 50%; flex: none;
+  background: linear-gradient(135deg, #3fd8c2, #2e82b4);
+  display: grid; place-items: center;
+  color: var(--accent-ink); font-weight: 700; font-size: 13px;
+  overflow: hidden;
+}
+.nav-account .avatar img { width: 100%; height: 100%; object-fit: cover; image-rendering: pixelated; }
+.nav-account .a-name { font-size: 13px; font-weight: 600; }
+.nav-account .a-type { font-size: 11px; color: var(--text-3); }
+
+.content {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden auto;
+  padding: 24px 28px 40px;
+}
+
+/* ============ 面板与卡片 ============ */
+.panel {
+  background: var(--glass);
+  border: 1px solid var(--glass-border);
+  border-radius: var(--r);
+  backdrop-filter: var(--glass-blur);
+  -webkit-backdrop-filter: var(--glass-blur);
+  box-shadow: inset 0 1px 0 var(--glass-highlight), var(--shadow-1);
+}
+.panel.pad { padding: 18px 20px; }
+.panel-title { font-size: 15px; font-weight: 600; margin-bottom: 4px; }
+.panel-desc { font-size: 12.5px; color: var(--text-2); }
+
+.grid { display: grid; gap: 16px; }
+.row { display: flex; align-items: center; gap: 10px; }
+.spread { justify-content: space-between; }
+.col { display: flex; flex-direction: column; gap: 6px; }
+.muted { color: var(--text-2); }
+.dim { color: var(--text-3); font-size: 12px; }
+.mono { font-family: var(--mono); font-size: 12px; }
+
+/* ============ 按钮 ============ */
+.btn {
+  display: inline-flex; align-items: center; justify-content: center; gap: 8px;
+  height: 36px;
+  padding: 0 16px;
+  border-radius: var(--r);
+  border: 1px solid transparent;
+  font-family: var(--font);
+  font-size: 13.5px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: transform 120ms ease, background 160ms ease, border-color 160ms ease;
+  white-space: nowrap;
+}
+.btn:active { transform: translateY(1px) scale(0.99); }
+.btn.primary { background: var(--accent); color: var(--accent-ink); }
+.btn.primary:hover { filter: brightness(1.08); }
+.btn.secondary {
+  background: var(--glass-strong);
+  color: var(--text-1);
+  border-color: var(--glass-border);
+}
+.btn.secondary:hover { background: rgba(255, 255, 255, 0.13); }
+.btn.ghost { background: transparent; color: var(--text-2); }
+.btn.ghost:hover { background: var(--glass); color: var(--text-1); }
+.btn.danger { background: var(--danger); color: #fff; }
+.btn.danger:hover { filter: brightness(1.08); }
+.btn.danger-soft { background: var(--danger-soft); color: var(--danger); }
+.btn.danger-soft:hover { background: rgba(232, 104, 95, 0.22); }
+.btn.large { height: 48px; padding: 0 28px; font-size: 15px; }
+.btn.small { height: 28px; padding: 0 10px; font-size: 12px; }
+.btn:disabled, .btn.disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+  filter: none;
+}
+
+/* ============ 状态标签(唯一胶囊形) ============ */
+.tag {
+  display: inline-flex; align-items: center; gap: 6px;
+  height: 22px;
+  padding: 0 10px;
+  border-radius: 999px;
+  font-size: 11.5px;
+  font-weight: 600;
+}
+.tag .cdot { width: 6px; height: 6px; border-radius: 50%; background: currentColor; }
+.tag.ok { background: var(--ok-soft); color: var(--ok); }
+.tag.warn { background: var(--warn-soft); color: var(--warn); }
+.tag.danger { background: var(--danger-soft); color: var(--danger); }
+.tag.info { background: var(--info-soft); color: var(--info); }
+.tag.neutral { background: var(--glass-strong); color: var(--text-2); }
+.tag.accent { background: var(--accent-soft); color: var(--accent); }
+
+/* ============ 表单 ============ */
+.field { display: flex; flex-direction: column; gap: 6px; }
+.field label { font-size: 12.5px; color: var(--text-2); font-weight: 600; }
+.input, select.input {
+  height: 36px;
+  padding: 0 12px;
+  border-radius: var(--r);
+  border: 1px solid var(--glass-border);
+  background: rgba(0, 0, 0, 0.22);
+  color: var(--text-1);
+  font-family: var(--font);
+  font-size: 13.5px;
+  outline: none;
+}
+.input::placeholder { color: var(--text-3); }
+.input:focus { border-color: var(--accent); box-shadow: 0 0 0 2px var(--accent-soft); }
+.field .help { font-size: 11.5px; color: var(--text-3); }
+.field .err { font-size: 11.5px; color: var(--danger); }
+
+/* 开关 */
+.switch {
+  width: 40px; height: 22px; flex: none;
+  border-radius: 999px;
+  background: var(--glass-strong);
+  border: 1px solid var(--glass-border);
+  position: relative;
+  cursor: pointer;
+  padding: 0;
+  transition: background 160ms ease;
+}
+.switch::after {
+  content: "";
+  position: absolute;
+  top: 2px; left: 2px;
+  width: 16px; height: 16px;
+  border-radius: 50%;
+  background: var(--text-2);
+  transition: left 160ms ease, background 160ms ease;
+}
+.switch.on { background: var(--accent); border-color: transparent; }
+.switch.on::after { left: 20px; background: var(--accent-ink); }
+
+/* 设置行 */
+.set-row {
+  display: flex; align-items: center; gap: 16px;
+  padding: 14px 4px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+}
+.set-row:last-child { border-bottom: none; }
+.set-row .sr-main { flex: 1; min-width: 0; }
+.set-row .sr-name { font-size: 13.5px; font-weight: 600; }
+.set-row .sr-desc { font-size: 12px; color: var(--text-2); margin-top: 2px; max-width: 62ch; }
+
+/* 分段选择 */
+.seg {
+  display: inline-flex;
+  background: rgba(0, 0, 0, 0.22);
+  border: 1px solid var(--glass-border);
+  border-radius: var(--r);
+  padding: 3px;
+  gap: 2px;
+}
+.seg button {
+  height: 28px;
+  padding: 0 12px;
+  border: none;
+  border-radius: 9px;
+  background: transparent;
+  color: var(--text-2);
+  font-size: 12.5px;
+  font-family: var(--font);
+  cursor: pointer;
+}
+.seg button.on { background: var(--accent-soft); color: var(--accent); font-weight: 600; }
+
+/* ============ 进度条 ============ */
+.progress {
+  height: 6px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.09);
+  overflow: hidden;
+}
+.progress > i {
+  display: block;
+  height: 100%;
+  border-radius: 999px;
+  background: var(--accent);
+}
+.progress.indet > i {
+  width: 30%;
+  animation: indet 1.2s ease-in-out infinite;
+}
+@keyframes indet {
+  0% { margin-left: -30%; }
+  100% { margin-left: 100%; }
+}
+
+/* ============ 骨架占位 ============ */
+.skel {
+  border-radius: var(--r);
+  background: linear-gradient(100deg, var(--glass) 40%, var(--glass-strong) 50%, var(--glass) 60%);
+  background-size: 200% 100%;
+  animation: shimmer 1.4s linear infinite;
+}
+@keyframes shimmer { to { background-position: -200% 0; } }
+
+/* ============ Toast / Banner / Modal ============ */
+.toast {
+  display: flex; align-items: center; gap: 10px;
+  background: rgba(16, 34, 42, 0.92);
+  border: 1px solid var(--glass-border);
+  border-radius: var(--r);
+  padding: 10px 14px;
+  box-shadow: var(--shadow-2);
+  backdrop-filter: var(--glass-blur);
+  -webkit-backdrop-filter: var(--glass-blur);
+  font-size: 13px;
+}
+.banner {
+  display: flex; align-items: center; gap: 12px;
+  border-radius: var(--r);
+  padding: 10px 14px;
+  font-size: 13px;
+  border: 1px solid;
+}
+.banner.warn { background: var(--warn-soft); border-color: rgba(232, 180, 76, 0.35); color: #f3d9a0; }
+.banner.info { background: var(--info-soft); border-color: rgba(94, 168, 224, 0.35); color: #bcd9f2; }
+.banner.danger { background: var(--danger-soft); border-color: rgba(232, 104, 95, 0.35); color: #f0c3bf; }
+.banner .b-act { margin-left: auto; display: flex; gap: 8px; flex: none; }
+
+.modal-mask {
+  position: absolute; inset: 0;
+  background: rgba(4, 10, 14, 0.6);
+  backdrop-filter: blur(6px);
+  -webkit-backdrop-filter: blur(6px);
+  display: grid; place-items: center;
+  z-index: 40;
+}
+.modal {
+  width: 520px;
+  max-width: calc(100% - 48px);
+  max-height: calc(100% - 48px);
+  overflow: hidden auto;
+  background: rgba(18, 36, 46, 0.96);
+  border: 1px solid var(--glass-border);
+  border-radius: var(--r);
+  box-shadow: var(--shadow-2);
+  padding: 22px 24px;
+}
+.modal h3 { font-size: 16px; margin-bottom: 8px; }
+.modal .m-body { font-size: 13px; color: var(--text-2); }
+.modal .m-acts { display: flex; justify-content: flex-end; gap: 10px; margin-top: 20px; }
+
+/* ============ 列表行 ============ */
+.list-row {
+  display: flex; align-items: center; gap: 14px;
+  padding: 12px 14px;
+  border-radius: var(--r);
+}
+.list-row:hover { background: var(--glass); }
+.list-row + .list-row { border-top: 1px solid rgba(255, 255, 255, 0.05); }
+.list-row .lr-main { flex: 1; min-width: 0; }
+.list-row .lr-name { font-size: 13.5px; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.list-row .lr-sub { font-size: 12px; color: var(--text-2); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+/* 实例封面块 */
+.cube {
+  width: 44px; height: 44px; flex: none;
+  border-radius: var(--r);
+  display: grid; place-items: center;
+  font-weight: 700; font-size: 16px;
+  color: rgba(255, 255, 255, 0.92);
+  background: var(--glass-strong);
+  overflow: hidden;
+}
+.cube.large { width: 72px; height: 72px; font-size: 24px; }
+.cube img { width: 100%; height: 100%; object-fit: cover; image-rendering: pixelated; }
+
+/* ============ 页签(实例详情二级导航) ============ */
+.tabs { display: flex; gap: 4px; margin-bottom: 18px; }
+.tabs button {
+  height: 32px;
+  padding: 0 14px;
+  border: none;
+  border-radius: var(--r);
+  background: transparent;
+  color: var(--text-2);
+  font-size: 13px;
+  font-family: var(--font);
+  cursor: pointer;
+}
+.tabs button:hover { background: var(--glass); color: var(--text-1); }
+.tabs button.on { background: var(--accent-soft); color: var(--accent); font-weight: 600; }
+
+/* 展开区(高级选项) */
+details.adv {
+  border: 1px solid var(--glass-border);
+  border-radius: var(--r);
+  background: rgba(0, 0, 0, 0.15);
+}
+details.adv > summary {
+  list-style: none;
+  cursor: pointer;
+  padding: 12px 16px;
+  font-size: 13px;
+  color: var(--text-2);
+  display: flex; align-items: center; gap: 8px;
+}
+details.adv > summary::-webkit-details-marker { display: none; }
+details.adv > summary::after {
+  content: "▸";
+  margin-left: auto;
+  color: var(--text-3);
+  transition: transform 160ms ease;
+}
+details.adv[open] > summary::after { transform: rotate(90deg); }
+details.adv .adv-body { padding: 4px 16px 16px; }
+
+/* 焦点可见(无障碍) */
+:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+  border-radius: var(--r);
+}
+
+/* ============ 浅色主题令牌 ============ */
+.window[data-theme="light"] {
+  --bg-0: #eef4f5;
+  --bg-1: #f7fbfc;
+  --bg-2: #e3eef0;
+  --bg-grad:
+    radial-gradient(1200px 700px at 85% -10%, rgba(20, 150, 135, 0.10), transparent 60%),
+    radial-gradient(900px 600px at -10% 110%, rgba(70, 140, 190, 0.12), transparent 55%),
+    linear-gradient(160deg, var(--bg-1), var(--bg-0) 70%);
+  --glass: rgba(255, 255, 255, 0.62);
+  --glass-strong: rgba(255, 255, 255, 0.85);
+  --glass-border: rgba(20, 40, 50, 0.10);
+  --glass-highlight: rgba(255, 255, 255, 0.8);
+  --text-1: #14262e;
+  --text-2: #45606b;
+  --text-3: #7b939c;
+  --accent: #0d9488;
+  --accent-ink: #ffffff;
+  --accent-soft: rgba(13, 148, 136, 0.12);
+  --shadow-1: 0 8px 28px rgba(30, 60, 70, 0.12);
+  --shadow-2: 0 16px 48px rgba(30, 60, 70, 0.18);
+}
+
+/* 减少动画:仅保留淡入淡出 */
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+}
+
+/* ============================================================
+   鱼缸动画组件(fish.css 移植)
+   .tank     加载动画:鱼在缸里游 + 气泡(水来了)
+   .dryland  初始页:鱼在地面挣扎扑通(还没有水)
+   ============================================================ */
+.tank {
+  position: relative;
+  width: 168px;
+  height: 112px;
+  border-radius: var(--r);
+  border: 1.5px solid rgba(255, 255, 255, 0.22);
+  border-top-width: 3px;
+  background: linear-gradient(180deg, rgba(94, 168, 224, 0.10), rgba(63, 216, 194, 0.07));
+  overflow: hidden;
+}
+.tank::before { /* 水面高光 */
+  content: "";
+  position: absolute;
+  top: 4px; left: 8px; right: 8px;
+  height: 6px;
+  border-radius: 999px;
+  background: linear-gradient(90deg, transparent, rgba(255, 255, 255, 0.35), transparent);
+}
+.tank::after { /* 缸底细沙 */
+  content: "";
+  position: absolute;
+  left: 0; right: 0; bottom: 0;
+  height: 12px;
+  background: linear-gradient(180deg, rgba(232, 180, 76, 0), rgba(232, 180, 76, 0.18));
+}
+
+.fish {
+  position: absolute;
+  left: 12px;
+  top: 40px;
+  width: 56px;
+  height: 34px;
+  animation: swim 9s ease-in-out infinite;
+  will-change: transform;
+}
+.fish .fish-svg { width: 100%; height: 100%; display: block; overflow: visible; }
+
+@keyframes swim {
+  0%   { transform: translate(0, 0) scaleX(-1); }
+  42%  { transform: translate(88px, -10px) scaleX(-1); }
+  50%  { transform: translate(92px, -8px) scaleX(1); }
+  92%  { transform: translate(4px, 8px) scaleX(1); }
+  100% { transform: translate(0, 0) scaleX(-1); }
+}
+
+/* 摆尾 */
+.tail {
+  transform-origin: 46px 22px;
+  animation: wag 420ms ease-in-out infinite alternate;
+}
+@keyframes wag {
+  from { transform: rotate(-14deg); }
+  to   { transform: rotate(14deg); }
+}
+
+/* 鱼鳍轻摆 */
+.fin {
+  transform-origin: 30px 20px;
+  animation: finwag 900ms ease-in-out infinite alternate;
+}
+@keyframes finwag {
+  from { transform: rotate(-6deg); }
+  to   { transform: rotate(8deg); }
+}
+
+/* 气泡 */
+.bubble {
+  position: absolute;
+  bottom: 8px;
+  border-radius: 50%;
+  border: 1px solid rgba(255, 255, 255, 0.5);
+  background: rgba(255, 255, 255, 0.12);
+  animation: rise 3.2s linear infinite;
+  opacity: 0;
+}
+.bubble.b1 { left: 26px; width: 6px; height: 6px; animation-delay: 0s; }
+.bubble.b2 { left: 38px; width: 4px; height: 4px; animation-delay: 1.1s; }
+.bubble.b3 { left: 30px; width: 5px; height: 5px; animation-delay: 2.2s; }
+@keyframes rise {
+  0% { transform: translateY(0); opacity: 0; }
+  12% { opacity: 0.9; }
+  100% { transform: translateY(-88px); opacity: 0; }
+}
+
+/* 加载文案节奏点 */
+.load-dots::after {
+  content: "";
+  animation: dots 1.6s steps(4) infinite;
+}
+@keyframes dots {
+  0% { content: ""; }
+  25% { content: "."; }
+  50% { content: ".."; }
+  75% { content: "..."; }
+}
+
+/* ---------- 干地(初始页:鱼挣扎扑通) ---------- */
+.dryland {
+  position: relative;
+  width: 260px;
+  height: 150px;
+}
+.dryland .ground {
+  position: absolute;
+  left: 0; right: 0; bottom: 18px;
+  height: 2px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.18);
+  box-shadow: 0 1px 0 rgba(255, 255, 255, 0.06);
+}
+.dryland .fish {
+  left: 88px;
+  top: 78px;
+  width: 84px;
+  height: 51px;
+  transform-origin: 50% 90%;
+  animation: flop 2.4s cubic-bezier(0.36, 0, 0.64, 1) infinite;
+}
+.dryland .fish .tail { animation-duration: 240ms; }
+
+@keyframes flop {
+  0%   { transform: translateY(0) rotate(-18deg); }
+  8%   { transform: translateY(2px) rotate(-26deg) scaleY(0.94); }
+  22%  { transform: translateY(-26px) rotate(16deg); }
+  34%  { transform: translateY(0) rotate(24deg); }
+  44%  { transform: translateY(0) rotate(14deg) scaleY(0.95); }
+  58%  { transform: translateY(-14px) rotate(-10deg); }
+  68%  { transform: translateY(0) rotate(-18deg); }
+  82%  { transform: translateY(0) rotate(-20deg) scaleY(0.96); }
+  100% { transform: translateY(0) rotate(-18deg); }
+}
+
+/* 扑通扬尘 */
+.puff {
+  position: absolute;
+  bottom: 14px;
+  width: 26px; height: 8px;
+  border-radius: 50%;
+  background: rgba(255, 255, 255, 0.10);
+  filter: blur(2px);
+  opacity: 0;
+  animation: puff 2.4s ease-out infinite;
+}
+.puff.p1 { left: 62px; }
+.puff.p2 { left: 160px; animation-delay: 0.35s; }
+@keyframes puff {
+  0%, 20% { transform: scale(0.4); opacity: 0; }
+  26% { opacity: 0.8; }
+  48%, 100% { transform: scale(1.5) translateY(-3px); opacity: 0; }
+}
+
+/* 小水洼 */
+.puddle {
+  position: absolute;
+  right: 12px; bottom: 10px;
+  width: 46px; height: 10px;
+  border-radius: 50%;
+  background: rgba(63, 216, 194, 0.22);
+  box-shadow: inset 0 1px 2px rgba(255, 255, 255, 0.15);
+}
+
+/* 减少动画:鱼静止 */
+@media (prefers-reduced-motion: reduce) {
+  .fish, .tail, .fin, .bubble, .puff, .dryland .fish { animation: none !important; }
+}

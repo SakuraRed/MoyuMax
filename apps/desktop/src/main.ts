@@ -1,4 +1,5 @@
 import "./styles.css";
+import "./moyu.css";
 
 import { mount } from "svelte";
 

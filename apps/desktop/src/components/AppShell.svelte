@@ -5,17 +5,27 @@
   import { netplayRoom, refreshNetplayRoom, setNetplayRoom } from "../netplay.svelte";
   import { t, uiBackground, uiBackgroundImageUrl, uiContrast, uiMotion, uiTheme } from "../i18n.svelte";
   import type { MoyuRuntime, NavigationKey } from "../runtime";
+  import Fish from "./Fish.svelte";
   import Icon from "./Icon.svelte";
 
   interface Props {
     pageTitle: string;
-    dataDirectory: string;
+    dataDirectory?: string;
     children: Snippet;
     titleSuffix?: string;
+    /** 二级页返回按钮 */
+    onBack?: (() => void) | undefined;
     searchVisible?: boolean;
+    onSearch?: (() => void) | undefined;
     navigationDisabled?: boolean;
     activeNavigation?: NavigationKey;
+    /** 在线状态:false 时标题栏网络点变灰黄 */
+    online?: boolean;
     connectionStatus?: string;
+    /** 活动任务数:导航与标题栏任务入口的角标 */
+    taskCount?: number;
+    /** 实例数:实例导航项角标 */
+    instanceCount?: number;
     taskStatus?: string;
     runtime?: MoyuRuntime | undefined;
     onMinimize: () => Promise<void>;
@@ -26,14 +36,16 @@
 
   let {
     pageTitle,
-    dataDirectory,
     children,
     titleSuffix,
-    searchVisible = false,
+    onBack = undefined,
+    onSearch = undefined,
     navigationDisabled = false,
     activeNavigation = "home",
+    online = true,
     connectionStatus = t("shell.status.defaultConnection"),
-    taskStatus = t("shell.status.noTasks"),
+    taskCount = 0,
+    instanceCount = 0,
     runtime = undefined,
     onMinimize,
     onToggleMaximize,
@@ -60,25 +72,24 @@
   }
 
   const navigation = [
-    { key: "home" as const, name: "home" as const, labelKey: "nav.home" },
-    { key: "instances" as const, name: "box" as const, labelKey: "nav.instances" },
-    { key: "resources" as const, name: "compass" as const, labelKey: "nav.resources" },
-    { key: "netplay" as const, name: "wifi" as const, labelKey: "nav.netplay" },
-    { key: "tasks" as const, name: "task" as const, labelKey: "nav.tasks" },
-    { key: "data" as const, name: "database" as const, labelKey: "nav.data" },
-    { key: "settings" as const, name: "settings" as const, labelKey: "nav.settings" },
+    { key: "home" as const, labelKey: "nav.home" },
+    { key: "instances" as const, labelKey: "nav.instances" },
+    { key: "resources" as const, labelKey: "nav.resources" },
+    { key: "netplay" as const, labelKey: "nav.netplay" },
+    { key: "tasks" as const, labelKey: "nav.tasks" },
+    { key: "data" as const, labelKey: "nav.data" },
   ];
 
   // 自定义背景:纯色改变量,图片压暗铺底(减少动画时降级),主题包叠加配色(高对比忽略)。
   const backgroundStyle = $derived.by(() => {
     const value = uiBackground();
     if (value.type === "color") {
-      return `--bg-window: ${value.color}; --bg-app: ${value.color}`;
+      return `--bg-window: ${value.color}; --bg-grad: ${value.color}`;
     }
     if (value.type === "image" && uiMotion() !== "reduce") {
       const url = uiBackgroundImageUrl();
       if (url) {
-        return `background-image: linear-gradient(rgba(14, 14, 18, 0.8), rgba(14, 14, 18, 0.8)), url(${url}); background-size: cover; background-position: center`;
+        return `background-image: linear-gradient(rgba(8, 19, 28, 0.82), rgba(8, 19, 28, 0.82)), url(${url}); background-size: cover; background-position: center`;
       }
       return "";
     }
@@ -89,6 +100,11 @@
     }
     return "";
   });
+
+  function openAccounts(): void {
+    requestSettingsPage("accounts");
+    onNavigate?.("settings");
+  }
 </script>
 
 <div
@@ -100,89 +116,104 @@
   style={backgroundStyle}
 >
   <header class="titlebar" data-tauri-drag-region="deep">
-    <span class="brand-mark">M</span>
-    <span class="titlebar-name">
-      <strong>MoyuMax</strong>{#if titleSuffix} — {titleSuffix}{/if}
+    {#if onBack}
+      <button class="tb-back" aria-label={t("shell.back")} onclick={onBack}>
+        <Icon name="arrow-left" size={15} />
+      </button>
+    {/if}
+    <span class="tb-title">{pageTitle}</span>
+    {#if titleSuffix}<span class="tb-sub">{titleSuffix}</span>{/if}
+    <span class="tb-spacer" data-tauri-drag-region></span>
+    <button class="tb-tool" aria-label={t("shell.search.aria")} disabled={!onSearch} onclick={() => onSearch?.()}>
+      <Icon name="search" size={13} />
+      {t("shell.search.label")}
+    </button>
+    <button class="tb-tool" aria-label={t("shell.tasks.aria")} disabled={navigationDisabled} onclick={() => onNavigate?.("tasks")}>
+      {t("nav.tasks")}
+      {#if taskCount > 0}<span class="tag accent" style="height:18px;padding:0 7px;font-size:10.5px">{taskCount}</span>{/if}
+    </button>
+    <span class="tb-tool" role="status" aria-label={t("shell.status.connectionAria")}>
+      <span class="dot" class:off={!online}></span>{connectionStatus}
     </span>
-    <span class="titlebar-spacer" data-tauri-drag-region></span>
-    <div class="window-controls">
-      <button aria-label={t("shell.window.minimize")} onclick={() => void onMinimize()}><span class="minimize-glyph"></span></button>
-      <button aria-label={t("shell.window.maximize")} onclick={() => void onToggleMaximize()}><span class="maximize-glyph"></span></button>
-      <button class="close" aria-label={t("shell.window.close")} onclick={() => void onClose()}><span class="close-glyph"></span></button>
-    </div>
+    <button class="tb-win" aria-label={t("shell.window.minimize")} onclick={() => void onMinimize()}><i class="min-line"></i></button>
+    <button class="tb-win" aria-label={t("shell.window.maximize")} onclick={() => void onToggleMaximize()}>▢</button>
+    <button class="tb-win close" aria-label={t("shell.window.close")} onclick={() => void onClose()}>✕</button>
   </header>
 
-  <div class="app-body">
+  <div class="shell">
     <nav class:nav-disabled={navigationDisabled} class="navrail" aria-label={t("shell.navAria")}>
+      <div class="nav-brand">
+        <Fish variant="logo" />
+        <span class="name">MoyuMax</span>
+      </div>
       {#each navigation as item}
         {@const active = item.key === activeNavigation}
         <button
           class:active
           class="nav-item"
-          aria-label={t(item.labelKey)}
           aria-current={active ? "page" : undefined}
           disabled={navigationDisabled}
           onclick={() => onNavigate?.(item.key)}
         >
-          <Icon name={item.name} />
           <span>{t(item.labelKey)}</span>
+          {#if item.key === "instances" && instanceCount > 0}
+            <span class="badge">{instanceCount}</span>
+          {:else if item.key === "tasks" && taskCount > 0}
+            <span class="badge">{taskCount}</span>
+          {/if}
         </button>
       {/each}
-      <span class="nav-spacer"></span>
-      {#if shellAccount().loaded && shellAccount().kind !== null}
-        {@const account = shellAccount()}
-        {@const avatarUrl = account.avatarFailed ? "" : skinAvatarUrl(account.playerUuid, account.kind)}
-        <button
-          class="account"
-          aria-label={t("shell.account.aria")}
-          disabled={navigationDisabled}
-          onclick={() => { requestSettingsPage("accounts"); onNavigate?.("settings"); }}
-        >
-          {#if avatarUrl}
-            <img class="avatar avatar-img" src={avatarUrl} alt="" onerror={() => markAvatarFailed()} />
-          {:else}
-            <span class="avatar">{account.name.slice(0, 1) || "?"}</span>
-          {/if}
-          <span>
-            <strong>{account.name}</strong>
-            <small>{account.kind === "microsoft" ? t("shell.account.microsoft") : account.kind === "authlib" ? t("shell.account.authlib") : t("shell.account.offline")}</small>
-          </span>
-        </button>
-      {:else}
-        <button
-          class="account"
-          aria-label={t("shell.account.aria")}
-          disabled={navigationDisabled}
-          onclick={() => { requestSettingsPage("accounts"); onNavigate?.("settings"); }}
-        >
-          <span class="avatar">?</span>
-          <span><strong>{t("shell.account.notLoggedIn")}</strong><small>{t("shell.account.addHint")}</small></span>
-        </button>
-      {/if}
-    </nav>
-
-    <section class="main-area">
-      <header class="topbar">
-        <strong>{pageTitle}</strong>
-        {#if searchVisible}
-          <button class="searchbox" aria-label={t("shell.search.aria")} disabled>
-            <Icon name="search" size={14} />
-            <span>{t("shell.search.placeholder")}</span>
-            <kbd>Ctrl K</kbd>
+      <div class="nav-foot">
+        {#if shellAccount().loaded && shellAccount().kind !== null}
+          {@const account = shellAccount()}
+          {@const avatarUrl = account.avatarFailed ? "" : skinAvatarUrl(account.playerUuid, account.kind)}
+          <button
+            class="nav-account"
+            class:active={activeNavigation === "settings"}
+            aria-label={t("shell.account.aria")}
+            disabled={navigationDisabled}
+            onclick={openAccounts}
+          >
+            <span class="avatar">
+              {#if avatarUrl}
+                <img src={avatarUrl} alt="" onerror={() => markAvatarFailed()} />
+              {:else}
+                {account.name.slice(0, 1) || "?"}
+              {/if}
+            </span>
+            <div>
+              <div class="a-name">{account.name}</div>
+              <div class="a-type">{account.kind === "microsoft" ? t("shell.account.microsoft") : account.kind === "authlib" ? t("shell.account.authlib") : t("shell.account.offline")}</div>
+            </div>
+          </button>
+        {:else}
+          <button
+            class="nav-account"
+            class:active={activeNavigation === "settings"}
+            aria-label={t("shell.account.aria")}
+            disabled={navigationDisabled}
+            onclick={openAccounts}
+          >
+            <span class="avatar">?</span>
+            <div>
+              <div class="a-name">{t("shell.account.notLoggedIn")}</div>
+              <div class="a-type">{t("shell.account.addHint")}</div>
+            </div>
           </button>
         {/if}
-      </header>
+        <button
+          class="nav-item"
+          class:active={activeNavigation === "settings"}
+          aria-current={activeNavigation === "settings" ? "page" : undefined}
+          disabled={navigationDisabled}
+          onclick={() => onNavigate?.("settings")}
+        >
+          <span>{t("nav.settings")}</span>
+        </button>
+      </div>
+    </nav>
 
-      {@render children()}
-
-      <footer class="statusbar">
-        <span><Icon name="wifi" size={12} /> {connectionStatus}</span>
-        <span>{taskStatus}</span>
-        <span class="status-right">
-          <Icon name="disk" size={12} /> {t("shell.statusbar.data")} {dataDirectory}<b>v0.1.0-preview.1</b>
-        </span>
-      </footer>
-    </section>
+    {@render children()}
   </div>
 
   {#if netplayRoom() && activeNavigation !== "netplay"}
