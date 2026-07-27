@@ -38,7 +38,7 @@ test("UI-LAUNCH-001 首页可以启动和停止本地实例", async ({ page }) =
   await expect(page.getByText("Minecraft 26.2", { exact: false })).toBeVisible();
   await expect(page.getByText("Fabric 0.19.3", { exact: false })).toBeVisible();
 
-  const cardPadding = await page.locator(".instance-card").evaluate((element) => {
+  const heroPadding = await page.locator(".hero-card").evaluate((element) => {
     const style = getComputedStyle(element);
     return {
       top: Number.parseFloat(style.paddingTop),
@@ -47,26 +47,16 @@ test("UI-LAUNCH-001 首页可以启动和停止本地实例", async ({ page }) =
       left: Number.parseFloat(style.paddingLeft),
     };
   });
-  expect(cardPadding).toEqual({ top: 24, right: 26, bottom: 24, left: 26 });
-
-  const statePadding = await page.locator(".instance-state").evaluate((element) => {
-    const style = getComputedStyle(element);
-    return {
-      top: Number.parseFloat(style.paddingTop),
-      right: Number.parseFloat(style.paddingRight),
-      bottom: Number.parseFloat(style.paddingBottom),
-      left: Number.parseFloat(style.paddingLeft),
-    };
-  });
-  expect(statePadding).toEqual({ top: 5, right: 12, bottom: 5, left: 12 });
+  expect(heroPadding).toEqual({ top: 26, right: 28, bottom: 26, left: 28 });
+  await expect(page.locator(".hero-card .tag.ok")).toContainText("可启动");
 
   const startButton = page.getByRole("button", { name: "启动游戏" });
   await expect(startButton).toBeFocused();
   await startButton.click();
   await expect(page.getByText("正在运行", { exact: true })).toBeVisible();
-  await expect(page.getByRole("button", { name: "停止游戏" })).toBeVisible();
+  await expect(page.getByRole("button", { name: "安全终止" })).toBeVisible();
 
-  await page.getByRole("button", { name: "停止游戏" }).click();
+  await page.getByRole("button", { name: "安全终止" }).click();
   await expect(page.getByText("已停止", { exact: true })).toBeVisible();
   await expect(page.getByRole("button", { name: "启动游戏" })).toBeVisible();
 });
@@ -84,7 +74,7 @@ test("UI-LAUNCH-001 实例首页在 960x600 和 200% 放大下不重叠", async 
   const geometry = await page.evaluate(() => ({
     scrollWidth: document.documentElement.scrollWidth,
     viewportWidth: window.innerWidth,
-    cardOverflow: [...document.querySelectorAll<HTMLElement>(".instance-card")].some(
+    cardOverflow: [...document.querySelectorAll<HTMLElement>(".hero-card")].some(
       (card) => card.scrollWidth > card.clientWidth,
     ),
   }));

@@ -1,6 +1,7 @@
 <script lang="ts">
-  import { onMount, tick } from "svelte";
+  import { onMount } from "svelte";
 
+  import { markAvatarFailed, requestSettingsPage, shellAccount, skinAvatarUrl } from "../accounts.svelte";
   import { t } from "../i18n.svelte";
   import type {
     ContentInstallTask,
@@ -9,15 +10,13 @@
     InstalledModpack,
     LaunchSession,
     ManagedInstance,
-    ModpackUpdateReport,
     MoyuRuntime,
     NavigationKey,
     OnboardingSelection,
     WorldBackupSummary,
   } from "../runtime";
-  import { shellAccount } from "../accounts.svelte";
   import AppShell from "./AppShell.svelte";
-  import Icon from "./Icon.svelte";
+  import Fish from "./Fish.svelte";
 
   interface Props {
     runtime: MoyuRuntime;
@@ -41,7 +40,6 @@
 
   let {
     runtime,
-    settings,
     tasks,
     contentTasks,
     instances,
@@ -59,21 +57,25 @@
     onClose,
   }: Props = $props();
 
-  let changingInstance = $state<string | null>(null);
+  let changingInstance = $state(false);
   let actionMessage = $state("");
   let actionError = $state("");
-  let recycleCandidate = $state<ManagedInstance | null>(null);
-  let recycleDialog = $state<HTMLElement | null>(null);
-  let modpacks = $state<Record<string, InstalledModpack>>({});
-  let packIcons = $state<Record<string, string>>({});
-  let installingPacks = $state<Record<string, boolean>>({});
-  let updatingPack = $state<string | null>(null);
-  let packReport = $state<ModpackUpdateReport | null>(null);
+  let heroPack = $state<InstalledModpack | null>(null);
+  let heroIcon = $state("");
+  let heroInstallingPack = $state(false);
   let defaultAccountName = $state("");
   let homeRoot: HTMLElement | undefined = $state();
 
+  // 主卡片实例:最近运行过的实例,否则列表首个。
+  const hero = $derived.by(() => {
+    if (instances.length === 0) return null;
+    const withSession = instances.find((instance) =>
+      launchSessions.some((session) => session.instanceId === instance.id),
+    );
+    return withSession ?? instances[0] ?? null;
+  });
+
   onMount(async () => {
-    await tick();
     homeRoot?.querySelector<HTMLElement>("[data-autofocus]")?.focus();
     try {
       const accounts = await runtime.listAccounts();
@@ -84,113 +86,81 @@
   });
 
   $effect(() => {
-    void loadModpacks(instances);
+    void loadHeroPack(hero?.id ?? "");
   });
 
-  async function loadModpacks(list: ManagedInstance[]): Promise<void> {
-    const next: Record<string, InstalledModpack> = {};
-    const iconsNext: Record<string, string> = {};
-    const installingNext: Record<string, boolean> = {};
-    for (const instance of list) {
-      const [pack, installing] = await Promise.all([
-        runtime.getInstanceModpack(instance.id).catch(() => null),
-        runtime.isModpackInstalling(instance.id).catch(() => false),
-      ]);
-      if (pack) {
-        next[instance.id] = pack;
-        const icon = await runtime.getModpackIconDataUrl(instance.id).catch(() => null);
-        if (icon) iconsNext[instance.id] = icon;
-      }
-      if (installing) installingNext[instance.id] = true;
+  async function loadHeroPack(instanceId: string): Promise<void> {
+    if (!instanceId) {
+      heroPack = null;
+      heroIcon = "";
+      heroInstallingPack = false;
+      return;
     }
-    modpacks = next;
-    packIcons = iconsNext;
-    installingPacks = installingNext;
-  }
-
-  async function updatePack(instance: ManagedInstance): Promise<void> {
-    updatingPack = instance.id;
-    actionMessage = "";
-    actionError = "";
-    packReport = null;
-    try {
-      const path = await runtime.pickModpackFile();
-      if (!path) return;
-      packReport = await runtime.updateModpack(instance.id, path);
-      actionMessage = t("modpack.updateDone")
-        .replace("{name}", packReport.packName)
-        .replace("{from}", packReport.fromVersion)
-        .replace("{to}", packReport.toVersion);
-      if (packReport.keptUserModified.length > 0) {
-        actionMessage += t("modpack.keptNote").replace("{files}", packReport.keptUserModified.join("、"));
-      }
-      await loadModpacks(instances);
-    } catch (error) {
-      actionError = error instanceof Error ? error.message : String(error);
-    } finally {
-      updatingPack = null;
-    }
+    const [pack, installing] = await Promise.all([
+      runtime.getInstanceModpack(instanceId).catch(() => null),
+      runtime.isModpackInstalling(instanceId).catch(() => false),
+    ]);
+    heroPack = pack;
+    heroInstallingPack = installing;
+    heroIcon = pack ? ((await runtime.getModpackIconDataUrl(instanceId).catch(() => null)) ?? "") : "";
   }
 
   const activeTasks = $derived(
     tasks.filter((task) => !["completed", "cancelled"].includes(task.state)),
   );
-  const activeLaunches = $derived(
-    launchSessions.filter((session) =>
-      ["starting", "running"].includes(session.state),
-    ),
-  );
   const activeContentTasks = $derived(
     contentTasks.filter((task) => !["completed", "cancelled"].includes(task.state)),
   );
+  const heroSession = $derived(
+    hero
+      ? launchSessions.find(
+          (session) =>
+            session.instanceId === hero.id && ["starting", "running"].includes(session.state),
+        )
+      : undefined,
+  );
 
-  function activeSession(instanceId: string): LaunchSession | undefined {
-    return launchSessions.find(
-      (session) =>
-        session.instanceId === instanceId &&
-        ["starting", "running"].includes(session.state),
-    );
-  }
-
-  function latestSession(instanceId: string): LaunchSession | undefined {
-    return launchSessions.find((session) => session.instanceId === instanceId);
-  }
-
-  function crashReportForSession(session: LaunchSession | undefined): CrashReport | undefined {
-    if (!session || !["failed", "interrupted"].includes(session.state)) return undefined;
-    return crashReports.find((report) => report.launchSessionId === session.id);
-  }
-
-  const LOADER_DISPLAY: Record<string, string> = {
-    fabric: "Fabric",
-    quilt: "Quilt",
-    forge: "Forge",
-    neoforge: "NeoForge",
-  };
-
-  function loaderLabel(instance: ManagedInstance): string {
-    const name = LOADER_DISPLAY[instance.loaderKind];
-    if (name) {
-      return `${name}${instance.loaderVersion ? ` ${instance.loaderVersion}` : ""}`;
+  // 需要处理:有未查看崩溃报告的实例(按会话去重,最多 3 条)。
+  const issues = $derived.by(() => {
+    const seen = new Set<string>();
+    const rows: { report: CrashReport; instanceName: string }[] = [];
+    for (const session of launchSessions) {
+      if (!["failed", "interrupted"].includes(session.state)) continue;
+      const report = crashReports.find((candidate) => candidate.launchSessionId === session.id);
+      if (!report || seen.has(session.instanceId)) continue;
+      seen.add(session.instanceId);
+      rows.push({
+        report,
+        instanceName:
+          instances.find((instance) => instance.id === session.instanceId)?.name ??
+          session.instanceId,
+      });
+      if (rows.length >= 3) break;
     }
-    return instance.loaderKind === "vanilla" ? t("home.loader.vanilla") : instance.loaderKind;
+    return rows;
+  });
+
+  const lastSession = $derived(launchSessions[0]);
+  const lastSessionInstance = $derived(
+    lastSession
+      ? (instances.find((instance) => instance.id === lastSession.instanceId)?.name ??
+          lastSession.instanceId)
+      : "",
+  );
+
+  function taskPercent(task: InstallTask): number | null {
+    const total = task.progress.totalBytes;
+    if (!total || total <= 0) return null;
+    return Math.min(100, Math.round((task.progress.completedBytes / total) * 100));
   }
 
-  function sessionStateLabel(state: LaunchSession["state"]): string {
-    switch (state) {
-      case "starting":
-        return t("home.state.starting");
-      case "running":
-        return t("home.state.running");
-      case "completed":
-        return t("home.state.completed");
-      case "failed":
-        return t("home.state.failed");
-      case "stopped":
-        return t("home.state.stopped");
-      case "interrupted":
-        return t("home.state.interrupted");
-    }
+  function sessionDuration(session: LaunchSession): string {
+    if (!session.endedAtUnixSeconds) return "";
+    const seconds = Math.max(0, session.endedAtUnixSeconds - session.startedAtUnixSeconds);
+    const hours = Math.floor(seconds / 3600);
+    const minutes = Math.floor((seconds % 3600) / 60);
+    if (hours > 0) return t("home.session.durationHm").replace("{h}", String(hours)).replace("{m}", String(minutes));
+    return t("home.session.durationM").replace("{m}", String(Math.max(1, minutes)));
   }
 
   function backupStateLabel(backup: WorldBackupSummary | null | undefined): string {
@@ -207,23 +177,6 @@
     }
   }
 
-  async function start(instance: ManagedInstance): Promise<void> {
-    changingInstance = instance.id;
-    actionMessage = "";
-    actionError = "";
-    try {
-      await runtime.startInstance(instance.id);
-      actionMessage = t("home.action.starting")
-        .replace("{name}", instance.name)
-        .replace("{identity}", identityLabel());
-      await onStateChanged();
-    } catch (error) {
-      actionError = error instanceof Error ? error.message : String(error);
-    } finally {
-      changingInstance = null;
-    }
-  }
-
   function identityLabel(): string {
     const account = shellAccount();
     if (account.kind === "microsoft") {
@@ -235,264 +188,326 @@
     return t("home.action.identityOffline");
   }
 
-  async function stop(instance: ManagedInstance): Promise<void> {
-    changingInstance = instance.id;
+  function openAccounts(): void {
+    requestSettingsPage("accounts");
+    onNavigate("settings");
+  }
+
+  async function startHero(): Promise<void> {
+    if (!hero) return;
+    changingInstance = true;
     actionMessage = "";
     actionError = "";
     try {
-      await runtime.stopInstance(instance.id);
-      actionMessage = t("home.action.stopRequested").replace("{name}", instance.name);
+      await runtime.startInstance(hero.id);
+      actionMessage = t("home.action.starting")
+        .replace("{name}", hero.name)
+        .replace("{identity}", identityLabel());
       await onStateChanged();
     } catch (error) {
       actionError = error instanceof Error ? error.message : String(error);
     } finally {
-      changingInstance = null;
+      changingInstance = false;
     }
   }
 
-  async function askRecycle(instance: ManagedInstance): Promise<void> {
-    actionMessage = "";
-    actionError = "";
-    recycleCandidate = instance;
-    await tick();
-    recycleDialog?.querySelector<HTMLElement>("[data-dialog-autofocus]")?.focus();
-  }
-
-  function cancelRecycle(): void {
-    if (changingInstance === recycleCandidate?.id) return;
-    recycleCandidate = null;
-  }
-
-  async function recycleInstance(): Promise<void> {
-    const instance = recycleCandidate;
-    if (!instance) return;
-    changingInstance = instance.id;
+  async function stopHero(): Promise<void> {
+    if (!hero) return;
+    changingInstance = true;
     actionMessage = "";
     actionError = "";
     try {
-      await runtime.recycleInstance(instance.id);
-      recycleCandidate = null;
-      actionMessage = t("home.action.recycled").replace("{name}", instance.name);
+      await runtime.stopInstance(hero.id);
+      actionMessage = t("home.action.stopRequested").replace("{name}", hero.name);
       await onStateChanged();
     } catch (error) {
       actionError = error instanceof Error ? error.message : String(error);
     } finally {
-      changingInstance = null;
+      changingInstance = false;
     }
   }
 
-  function handleRecycleDialogKeydown(event: KeyboardEvent): void {
-    if (event.key === "Escape") {
-      event.preventDefault();
-      cancelRecycle();
-      return;
+  const LOADER_DISPLAY: Record<string, string> = {
+    fabric: "Fabric",
+    quilt: "Quilt",
+    forge: "Forge",
+    neoforge: "NeoForge",
+  };
+
+  function loaderLabel(instance: ManagedInstance): string {
+    const name = LOADER_DISPLAY[instance.loaderKind];
+    if (name) {
+      return `${name}${instance.loaderVersion ? ` ${instance.loaderVersion}` : ""}`;
     }
-    if (event.key !== "Tab" || !recycleDialog) return;
-    const controls = [...recycleDialog.querySelectorAll<HTMLButtonElement>("button:not(:disabled)")];
-    const first = controls.at(0);
-    const last = controls.at(-1);
-    if (!first || !last) return;
-    if (event.shiftKey && document.activeElement === first) {
-      event.preventDefault();
-      last.focus();
-    } else if (!event.shiftKey && document.activeElement === last) {
-      event.preventDefault();
-      first.focus();
-    }
+    return instance.loaderKind === "vanilla" ? t("home.loader.vanilla") : instance.loaderKind;
   }
 </script>
 
 <AppShell
   pageTitle={t("nav.home")}
-  dataDirectory={settings.dataDirectory}
-  searchVisible
-  onNavigate={onNavigate}
-  taskStatus={activeLaunches.length > 0 ? t("home.taskStatus.running").replace("{count}", String(activeLaunches.length)) : activeTasks.length + activeContentTasks.length > 0 ? t("home.taskStatus.pending").replace("{count}", String(activeTasks.length + activeContentTasks.length)) : t("shell.status.noTasks")}
+  activeNavigation="home"
+  taskCount={activeTasks.length + activeContentTasks.length}
+  instanceCount={instances.length}
   {runtime}
+  {onNavigate}
   {onMinimize}
   {onToggleMaximize}
   {onClose}
 >
-  {#if instances.length === 0}
-    <main class="content home-empty" bind:this={homeRoot}>
-      <svg class="empty-graphic fishtank" viewBox="0 0 120 88" aria-hidden="true">
-        <rect x="18" y="18" width="84" height="54" rx="8" fill="var(--surface)" stroke="var(--border-strong)" stroke-width="2"/>
-        <path d="M20 34 Q35 28 50 34 T80 34 T100 34 V64 Q100 70 94 70 H26 Q20 70 20 64 Z" fill="var(--accent-dim)"/>
-        <path d="M20 34 Q35 28 50 34 T80 34 T100 34" fill="none" stroke="var(--accent)" stroke-width="2" stroke-linecap="round"/>
-        <path d="M34 66 Q32 56 36 50 M42 66 Q44 58 40 52" fill="none" stroke="var(--accent)" stroke-width="2" stroke-linecap="round" opacity="0.7"/>
-        <g class="fish-swim">
-          <ellipse cx="62" cy="48" rx="11" ry="6.5" fill="var(--accent)"/>
-          <path d="M51 48 L43 42.5 V53.5 Z" fill="var(--accent)"/>
-          <circle cx="68" cy="46.5" r="1.4" fill="var(--on-accent)"/>
-        </g>
-        <circle class="fish-bubble bubble-a" cx="80" cy="56" r="2.4" fill="none" stroke="var(--accent)" stroke-width="1.6"/>
-        <circle class="fish-bubble bubble-b" cx="86" cy="60" r="1.7" fill="none" stroke="var(--accent)" stroke-width="1.4"/>
-      </svg>
-      <h1>{t("home.empty.title")}</h1>
-      <p>{t("home.empty.description")}</p>
-      <button class="button primary large" data-autofocus="true" onclick={onInstall}>{t("home.empty.installFirst")}</button>
-      <small>
-        {t("home.empty.altPrefix")} <button class="inline-link" onclick={onInstall}>{t("home.empty.importModpack")}</button>
-      </small>
-      {#if activeTasks.length > 0}
-        {#each activeTasks.slice(0, 1) as task}
-          <button class="home-task-summary" onclick={onOpenTasks}>
-            <span><strong>{task.plan.instanceName}</strong><small>{task.state === "awaitingRecovery" ? t("home.task.awaitingRecovery") : t("home.task.installQueued")}</small></span>
-            <span>{t("home.task.count").replace("{count}", String(activeTasks.length))} <Icon name="arrow-right" size={14} /></span>
-          </button>
-        {/each}
-      {/if}
-      {#if activeTasks.length === 0 && activeContentTasks.length > 0}
-        {#each activeContentTasks.slice(0, 1) as task}
-          <button class="home-task-summary" onclick={onOpenTasks}>
-            <span><strong>{task.plan.entries.find((entry) => entry.projectId === task.plan.rootProjectId)?.projectTitle ?? t("home.task.modrinthContent")}</strong><small>{task.state === "awaitingRecovery" ? t("home.task.awaitingRecovery") : t("home.task.contentQueued")}</small></span>
-            <span>{t("home.task.count").replace("{count}", String(activeContentTasks.length))} <Icon name="arrow-right" size={14} /></span>
-          </button>
-        {/each}
-      {/if}
+  {#if !hero}
+    <main class="content" style="display:flex" bind:this={homeRoot}>
+      <div class="empty-stage">
+        <Fish variant="tank" />
+        <h1 style="font-size:20px">{t("home.empty.title")}</h1>
+        <p class="muted" style="max-width:44ch;text-align:center">{t("home.empty.description")}</p>
+        <button class="btn primary large" data-autofocus="true" onclick={onInstall}>{t("home.empty.installFirst")}</button>
+        <small class="dim">
+          {t("home.empty.altPrefix")} <button class="inline-link" onclick={onInstall}>{t("home.empty.importModpack")}</button>
+        </small>
+      </div>
     </main>
   {:else}
-    <main class="content home-content" bind:this={homeRoot}>
-      <div class="home-scroll" data-scroll-region="main">
-        <header class="home-heading">
-          <div>
-            <h1>{t("home.heading.title")}</h1>
-          </div>
-          <button class="button" onclick={onInstall}>{t("home.heading.installOther")}</button>
-        </header>
-
-        <section class="instance-list" aria-label={t("home.listAria")}>
-          {#each instances as instance, index}
-            {@const active = activeSession(instance.id)}
-            {@const latest = latestSession(instance.id)}
-            {@const crashReport = crashReportForSession(latest)}
-            {@const pack = modpacks[instance.id]}
-            <article class:running={active?.state === "running"} class:crashed={Boolean(crashReport)} class:instance-hero={index === 0} class="instance-card">
-              <div class="instance-cover" class:hero-cover={index === 0} aria-hidden="true">{#if packIcons[instance.id]}<img src={packIcons[instance.id]} alt="" />{:else}{instance.name.slice(0, 1)}{/if}</div>
-              <div class="instance-copy">
-                <div class="instance-title-line">
-                  <h2>{instance.name}</h2>
-                  <span class:active={Boolean(active)} class="instance-state">
-                    {installingPacks[instance.id] ? t("modpack.stateInstalling") : active ? sessionStateLabel(active.state) : instance.state === "ready" ? t("home.instance.ready") : instance.state}
-                  </span>
-                </div>
-                <p>{t("home.instance.summary").replace("{version}", instance.gameVersion).replace("{loader}", loaderLabel(instance))}</p>
-                {#if installingPacks[instance.id]}
-                  <small class="modpack-installing" role="status">{t("modpack.installingHint")}</small>
-                {/if}
-                {#if pack}
-                  <small class="modpack-badge">{pack.packName} {pack.packVersion} · {pack.provider === "modrinth" ? "Modrinth" : "CurseForge"}</small>
-                {/if}
-                {#if latest && !active}
-                  <small class="latest-session">{t("home.instance.latestSession")}<span>{sessionStateLabel(latest.state)}</span>{#if latest.exitCode !== null}{t("home.instance.exitCode").replace("{code}", String(latest.exitCode))}{/if}</small>
-                  <small class="latest-backups">{t("home.instance.latestBackups").replace("{pre}", backupStateLabel(latest.preLaunchBackup)).replace("{post}", backupStateLabel(latest.postExitBackup))}</small>
-                {/if}
-                {#if index === 0}
-                  <small class="default-account">{t("home.instance.defaultAccount").replace("{name}", defaultAccountName || t("home.instance.localAccount"))}</small>
-                {/if}
+    <main class="content" bind:this={homeRoot}>
+      <div class="home-grid">
+        <div class="col" style="gap:16px">
+          <section class="panel hero-card">
+            <div class="cube large" aria-hidden="true">
+              {#if heroIcon}<img src={heroIcon} alt="" />{:else}{hero.name.slice(0, 1)}{/if}
+            </div>
+            <div class="hero-meta" style="flex:1">
+              <h1>{hero.name}</h1>
+              <div class="ver">
+                Minecraft {hero.gameVersion} · {loaderLabel(hero)}{#if heroPack} · {heroPack.packName} {heroPack.packVersion}{/if}
               </div>
-              <div class="instance-actions">
-                {#if active}
-                  <button
-                    class="button"
-                    disabled={changingInstance === instance.id}
-                    onclick={() => void stop(instance)}
-                  >{changingInstance === instance.id ? t("home.launch.stopping") : t("home.launch.stop")}</button>
-                  <button
-                    class="button ghost"
-                    aria-label={t("home.launch.logsAria").replace("{name}", instance.name)}
-                    onclick={() => onManageInstance(instance, "logs")}
-                  >{t("home.launch.logs")}</button>
+              <div class="launch-row">
+                {#if heroSession}
+                  <button class="btn danger-soft large" disabled={changingInstance} onclick={() => void stopHero()}>
+                    {changingInstance ? t("home.launch.stopping") : t("home.hero.stop")}
+                  </button>
+                  <button class="btn secondary" onclick={() => onManageInstance(hero!, "logs")}>{t("home.launch.logs")}</button>
                 {:else}
                   <button
-                    class="button primary large"
-                    data-autofocus={index === 0 ? "true" : undefined}
-                    disabled={changingInstance === instance.id || instance.state !== "ready" || Boolean(installingPacks[instance.id])}
-                    onclick={() => void start(instance)}
-                  ><Icon name="play" size={14} />{changingInstance === instance.id ? t("home.launch.starting") : t("home.launch.start")}</button>
+                    class="btn primary large"
+                    data-autofocus="true"
+                    disabled={changingInstance || hero.state !== "ready" || heroInstallingPack}
+                    onclick={() => void startHero()}
+                  >{changingInstance ? t("home.launch.starting") : t("home.hero.launch")}</button>
+                  <button class="acct-chip" title={t("home.hero.accountChipTitle")} onclick={openAccounts}>
+                    {#if shellAccount().loaded && shellAccount().kind !== null}
+                      {@const account = shellAccount()}
+                      {@const avatarUrl = account.avatarFailed ? "" : skinAvatarUrl(account.playerUuid, account.kind)}
+                      <span class="avatar">
+                        {#if avatarUrl}<img src={avatarUrl} alt="" onerror={() => markAvatarFailed()} />{:else}{account.name.slice(0, 1) || "?"}{/if}
+                      </span>
+                      <div>
+                        <div style="font-size:12.5px;font-weight:600">{account.name}</div>
+                        <div style="font-size:11px;color:var(--text-3)">{t("home.hero.accountChipHint")}</div>
+                      </div>
+                    {:else}
+                      <span class="avatar">?</span>
+                      <div>
+                        <div style="font-size:12.5px;font-weight:600">{defaultAccountName || t("home.instance.localAccount")}</div>
+                        <div style="font-size:11px;color:var(--text-3)">{t("home.hero.accountChipHint")}</div>
+                      </div>
+                    {/if}
+                  </button>
                 {/if}
-                {#if crashReport && !active}
-                  <button class="button crash-report-button" onclick={() => onOpenCrash(crashReport)}>{t("home.launch.crashReport")}</button>
-                {/if}
-                {#if pack && !active}
-                  <button
-                    class="button ghost"
-                    disabled={updatingPack !== null}
-                    onclick={() => void updatePack(instance)}
-                  >{updatingPack === instance.id ? t("modpack.updating") : t("modpack.update")}</button>
-                {/if}
-                {#if !active}
-                  <button
-                    class="button ghost"
-                    aria-label={t("home.launch.manageAria").replace("{name}", instance.name)}
-                    onclick={() => onManageInstance(instance)}
-                  >{t("home.launch.manage")}</button>
-                  <button
-                    class="button danger-subtle"
-                    aria-label={t("home.launch.recycleAria").replace("{name}", instance.name)}
-                    disabled={changingInstance === instance.id}
-                    onclick={() => void askRecycle(instance)}
-                  >{t("home.launch.recycle")}</button>
-                {/if}
-                <span>{t("home.launch.managedJava")}</span>
               </div>
-            </article>
-          {/each}
-        </section>
+            </div>
+            {#if heroInstallingPack}
+              <span class="tag info"><span class="cdot"></span>{t("modpack.stateInstalling")}</span>
+            {:else if heroSession}
+              <span class="tag accent"><span class="cdot"></span>{t("home.state.running")}</span>
+            {:else if hero.state === "ready"}
+              <span class="tag ok"><span class="cdot"></span>{t("home.instance.ready")}</span>
+            {:else}
+              <span class="tag neutral"><span class="cdot"></span>{hero.state}</span>
+            {/if}
+          </section>
+          {#if heroInstallingPack}
+            <div class="banner info" role="status"><span>{t("modpack.installingHint")}</span></div>
+          {/if}
 
-        {#if activeTasks.length > 0}
-          {#each activeTasks.slice(0, 1) as task}
-            <button class="home-task-summary home-task-wide" onclick={onOpenTasks}>
-              <span><strong>{task.plan.instanceName}</strong><small>{task.state === "awaitingRecovery" ? t("home.task.awaitingRecovery") : t("home.task.installProcessing")}</small></span>
-              <span>{t("home.task.count").replace("{count}", String(activeTasks.length))} <Icon name="arrow-right" size={14} /></span>
-            </button>
-          {/each}
-        {/if}
-        {#if activeTasks.length === 0 && activeContentTasks.length > 0}
-          {#each activeContentTasks.slice(0, 1) as task}
-            <button class="home-task-summary home-task-wide" onclick={onOpenTasks}>
-              <span><strong>{task.plan.entries.find((entry) => entry.projectId === task.plan.rootProjectId)?.projectTitle ?? t("home.task.modrinthContent")}</strong><small>{task.state === "awaitingRecovery" ? t("home.task.awaitingRecovery") : t("home.task.contentProcessing")}</small></span>
-              <span>{t("home.task.count").replace("{count}", String(activeContentTasks.length))} <Icon name="arrow-right" size={14} /></span>
-            </button>
-          {/each}
-        {/if}
+          {#if issues.length > 0}
+            <section class="panel pad">
+              <div class="row spread">
+                <div class="panel-title">{t("home.issues.title")}</div>
+                <span class="dim">{t("home.issues.count").replace("{count}", String(issues.length))}</span>
+              </div>
+              {#each issues as issue}
+                <div class="issue-row">
+                  <span class="tag danger" style="flex:none;margin-top:2px">{t("home.issues.crashTag")}</span>
+                  <div class="lr-main">
+                    <div class="lr-name">{t("home.issues.crashName").replace("{name}", issue.instanceName)}</div>
+                    <div class="lr-sub">{issue.report.summary || t("home.issues.crashHint")}</div>
+                  </div>
+                  <button class="btn small secondary" onclick={() => onOpenCrash(issue.report)}>{t("home.issues.viewDiagnostics")}</button>
+                </div>
+              {/each}
+            </section>
+          {/if}
+        </div>
+
+        <div class="col" style="gap:16px">
+          <section class="panel pad">
+            <div class="row spread">
+              <div class="panel-title">{t("home.tasks.title")}</div>
+              <button class="btn small ghost" onclick={onOpenTasks}>{t("home.tasks.openCenter")}</button>
+            </div>
+            {#if activeTasks.length === 0 && activeContentTasks.length === 0}
+              <div class="dim" style="padding:8px 0">{t("shell.status.noTasks")}</div>
+            {/if}
+            {#each activeTasks.slice(0, 3) as task}
+              {@const pct = taskPercent(task)}
+              <div class="mini-task">
+                <div class="row spread">
+                  <span style="font-size:13px;font-weight:600">{task.plan.instanceName}</span>
+                  {#if pct !== null}<span class="dim">{pct}%</span>{:else}<span class="tag info">{t("home.tasks.queued")}</span>{/if}
+                </div>
+                <div class="dim" style="margin:2px 0 6px">{task.progress.currentItem ?? t("home.tasks.processing")}</div>
+                {#if pct !== null}<div class="progress"><i style="width:{pct}%"></i></div>{/if}
+              </div>
+            {/each}
+            {#each activeContentTasks.slice(0, Math.max(0, 3 - activeTasks.length)) as task}
+              <div class="mini-task">
+                <div class="row spread">
+                  <span style="font-size:13px;font-weight:600">{task.plan.entries.find((entry) => entry.projectId === task.plan.rootProjectId)?.projectTitle ?? t("home.task.modrinthContent")}</span>
+                  <span class="tag info">{t("home.tasks.queued")}</span>
+                </div>
+                <div class="dim" style="margin-top:2px">{task.plan.instanceName}</div>
+              </div>
+            {/each}
+          </section>
+
+          {#if lastSession}
+            <section class="panel pad">
+              <div class="panel-title">{t("home.session.title")}</div>
+              <div class="col" style="gap:8px;margin-top:8px">
+                <div class="row spread">
+                  <span class="muted">{lastSessionInstance}</span>
+                  {#if lastSession.state === "completed"}
+                    <span class="tag ok">{t("home.session.exitedClean")}</span>
+                  {:else if lastSession.state === "stopped"}
+                    <span class="tag neutral">{t("home.state.stopped")}</span>
+                  {:else if ["failed", "interrupted"].includes(lastSession.state)}
+                    <span class="tag danger">{t("home.session.exitedAbnormal")}</span>
+                  {:else}
+                    <span class="tag accent">{t("home.state.running")}</span>
+                  {/if}
+                </div>
+                {#if sessionDuration(lastSession)}
+                  <div class="row spread"><span class="muted">{t("home.session.playTime")}</span><span>{sessionDuration(lastSession)}</span></div>
+                {/if}
+                <div class="row spread">
+                  <span class="muted">{t("home.session.backups")}</span>
+                  <span class="muted">{t("home.instance.latestBackups").replace("{pre}", backupStateLabel(lastSession.preLaunchBackup)).replace("{post}", backupStateLabel(lastSession.postExitBackup))}</span>
+                </div>
+              </div>
+            </section>
+          {/if}
+        </div>
       </div>
     </main>
   {/if}
 
   {#if actionError}
-    <div class="toast danger-toast" role="alert"><Icon name="info" size={16} /><span>{actionError}</span></div>
+    <div class="toast" role="alert" style="position:absolute;right:20px;bottom:20px;z-index:35"><span>{actionError}</span></div>
   {:else if notice || actionMessage}
-    <div class="toast" role="status"><Icon name="info" size={16} /><span>{actionMessage || notice}</span></div>
+    <div class="toast" role="status" style="position:absolute;right:20px;bottom:20px;z-index:35"><span>{actionMessage || notice}</span></div>
   {/if}
   <div class="sr-live" aria-live="polite">{actionMessage || actionError || notice}</div>
-
-  {#if recycleCandidate}
-    <div class="modal-backdrop">
-      <div
-        class="confirmation-dialog"
-        role="dialog"
-        aria-modal="true"
-        aria-labelledby="recycle-confirm-title"
-        tabindex="-1"
-        bind:this={recycleDialog}
-        onkeydown={handleRecycleDialogKeydown}
-      >
-        <header>
-          <h2 id="recycle-confirm-title">{t("home.recycle.title").replace("{name}", recycleCandidate.name)}</h2>
-          <p>{t("home.recycle.description")}</p>
-        </header>
-        <div class="confirmation-impact">
-          <strong>{t("home.recycle.impactTitle")}</strong>
-          <span>{t("home.recycle.impactBody")}</span>
-        </div>
-        <div class="confirmation-actions">
-          <button class="button" data-dialog-autofocus disabled={changingInstance === recycleCandidate.id} onclick={cancelRecycle}>{t("common.cancel")}</button>
-          <button class="button danger" disabled={changingInstance === recycleCandidate.id} onclick={() => void recycleInstance()}>
-            {changingInstance === recycleCandidate.id ? t("home.recycle.moving") : t("home.launch.recycle")}
-          </button>
-        </div>
-      </div>
-    </div>
-  {/if}
 </AppShell>
+
+<style>
+  .empty-stage {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 18px;
+  }
+  .home-grid {
+    display: grid;
+    grid-template-columns: 1fr 340px;
+    gap: 16px;
+  }
+  @media (max-width: 1100px) {
+    .home-grid {
+      grid-template-columns: 1fr;
+    }
+  }
+  .hero-card {
+    padding: 26px 28px;
+    display: flex;
+    gap: 22px;
+    align-items: center;
+  }
+  .hero-meta h1 {
+    font-size: 22px;
+  }
+  .hero-meta .ver {
+    color: var(--text-2);
+    font-size: 13px;
+    margin-top: 2px;
+  }
+  .launch-row {
+    display: flex;
+    align-items: center;
+    gap: 14px;
+    margin-top: 18px;
+    flex-wrap: wrap;
+  }
+  .acct-chip {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    border: 1px solid var(--glass-border);
+    border-radius: var(--r);
+    padding: 6px 12px 6px 6px;
+    cursor: pointer;
+    background: rgba(0, 0, 0, 0.18);
+    color: var(--text-1);
+    font-family: var(--font);
+    text-align: left;
+  }
+  .acct-chip:hover {
+    background: var(--glass-strong);
+  }
+  .acct-chip .avatar {
+    width: 26px;
+    height: 26px;
+    border-radius: 50%;
+    background: linear-gradient(135deg, #3fd8c2, #2e82b4);
+    display: grid;
+    place-items: center;
+    font-size: 11px;
+    font-weight: 700;
+    color: var(--accent-ink);
+    overflow: hidden;
+    flex: none;
+  }
+  .acct-chip .avatar img {
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+    image-rendering: pixelated;
+  }
+  .issue-row {
+    display: flex;
+    gap: 12px;
+    align-items: flex-start;
+    padding: 10px 0;
+    border-top: 1px solid rgba(255, 255, 255, 0.05);
+  }
+  .issue-row:first-of-type {
+    border-top: none;
+  }
+  .mini-task {
+    padding: 10px 0;
+    border-top: 1px solid rgba(255, 255, 255, 0.05);
+  }
+  .mini-task:first-of-type {
+    border-top: none;
+  }
+</style>

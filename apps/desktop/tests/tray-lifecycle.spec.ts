@@ -117,7 +117,7 @@ test("UI-TRAY-001 首次关闭窗口询问最小化或退出并可记住选择",
 
   // 记住选择后再次关闭不再询问。
   await page.reload();
-  await expect(page.getByRole("heading", { name: "从安装第一个游戏开始" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "这里还空着" })).toBeVisible();
   await page.getByRole("button", { name: "关闭" }).click();
   await expect(page.getByRole("dialog")).toHaveCount(0);
   expect(await readStorage(page, "moyumax.browser.windowState")).toBe("hidden");
@@ -199,14 +199,14 @@ test("UI-TRAY-002 未知或敏感页面在唤醒时回退首页", async ({ page 
     "moyumax.browser.startupKind": "wake",
     "moyumax.browser.shellState": { page: "settings", scrollTop: 0 },
   });
-  await expect(page.getByRole("heading", { name: "从安装第一个游戏开始" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "这里还空着" })).toBeVisible();
 });
 
 test("UI-TRAY-002 冷启动不恢复历史页面", async ({ page }) => {
   await seed(page, {
     "moyumax.browser.shellState": { page: "tasks", scrollTop: 0 },
   });
-  await expect(page.getByRole("heading", { name: "从安装第一个游戏开始" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "这里还空着" })).toBeVisible();
 });
 
 test("UI-TASK-002 任务中心暂停全部并恢复全部任务", async ({ page }) => {

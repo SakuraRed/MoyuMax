@@ -7,7 +7,9 @@
    ============================================================ */
 
 :root,
-.window {
+.window,
+.window[data-theme="system"],
+.window[data-theme="dark"] {
   /* 背景:水下纵深渐变 */
   --bg-0: #08131c;
   --bg-1: #0c1f2c;
@@ -145,7 +147,8 @@
   position: relative;
   border: none; background: transparent; width: 100%; text-align: left;
 }
-.nav-item:hover { background: var(--glass); color: var(--text-1); }
+.nav-item:hover,
+.nav-item:hover:not(:disabled) { background: var(--glass); color: var(--text-1); }
 .nav-item.active {
   background: var(--accent-soft);
   color: var(--accent);

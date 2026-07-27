@@ -52,7 +52,7 @@ test("M7-RECYCLE-001 实例经确认进入回收站并可从数据页恢复", as
   await expect(dialog.getByText("托管 Java 不会被删除", { exact: false })).toBeVisible();
   await dialog.getByRole("button", { name: "移入回收站" }).click();
 
-  await expect(page.getByRole("heading", { name: "从安装第一个游戏开始" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "这里还空着" })).toBeVisible();
   await page.getByRole("button", { name: "数据" }).click();
   await expect(page.getByRole("heading", { name: "数据与回收站" })).toBeVisible();
   await expect(page.getByRole("heading", { name: "生存世界" })).toBeVisible();

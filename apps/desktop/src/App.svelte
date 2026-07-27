@@ -10,6 +10,7 @@
   import GameInstall from "./components/GameInstall.svelte";
   import Home from "./components/Home.svelte";
   import InstanceCenter from "./components/InstanceCenter.svelte";
+  import InstanceGallery from "./components/InstanceGallery.svelte";
   import NetplayCenter from "./components/NetplayCenter.svelte";
   import Onboarding from "./components/Onboarding.svelte";
   import ResourceCenter from "./components/ResourceCenter.svelte";
@@ -34,7 +35,7 @@
   } from "./runtime";
   import { isRestorablePage, sanitizeShellState } from "./shell-state";
 
-  type Phase = "loading" | "onboarding" | "home" | "install" | "resources" | "netplay" | "tasks" | "data" | "backups" | "crash" | "settings" | "instanceDetail" | "fatal";
+  type Phase = "loading" | "onboarding" | "home" | "instances" | "install" | "resources" | "netplay" | "tasks" | "data" | "backups" | "crash" | "settings" | "instanceDetail" | "fatal";
 
   const runtime = createRuntime();
   let phase = $state<Phase>("loading");
@@ -321,7 +322,7 @@
       return;
     }
     if (target === "instances") {
-      phase = "install";
+      phase = "instances";
       return;
     }
     phase = target;
@@ -445,11 +446,31 @@
     onToggleMaximize={() => runtime.toggleMaximizeWindow()}
     onClose={() => runtime.closeWindow()}
   />
+{:else if phase === "instances" && settings}
+  <InstanceGallery
+    {runtime}
+    {settings}
+    {tasks}
+    {contentTasks}
+    {instances}
+    {launchSessions}
+    {crashReports}
+    {notice}
+    onInstall={openInstaller}
+    onOpenTasks={() => phase = "tasks"}
+    onOpenCrash={openCrashReport}
+    onManageInstance={openInstanceDetail}
+    onStateChanged={refreshHomeState}
+    onNavigate={navigate}
+    onMinimize={() => runtime.minimizeWindow()}
+    onToggleMaximize={() => runtime.toggleMaximizeWindow()}
+    onClose={() => runtime.closeWindow()}
+  />
 {:else if phase === "install" && settings}
   <GameInstall
     {runtime}
     {settings}
-    onBack={() => void returnHome()}
+    onBack={() => phase = "instances"}
     onNavigate={navigate}
     onMinimize={() => runtime.minimizeWindow()}
     onToggleMaximize={() => runtime.toggleMaximizeWindow()}
@@ -538,7 +559,7 @@
     instance={selectedInstance}
     {launchSessions}
     initialTab={instanceDetailTab}
-    onExit={() => void returnHome()}
+    onExit={() => phase = "instances"}
     onStateChanged={refreshHomeState}
     onNavigate={navigate}
     onMinimize={() => runtime.minimizeWindow()}

@@ -22,10 +22,10 @@ test("M1-FIRST-RUN-002 默认流程持久化并在刷新后进入首页", async 
   await assertRegionsDoNotOverlap(page);
 
   await page.getByRole("button", { name: "开始使用" }).click();
-  await expect(page.getByRole("heading", { name: "从安装第一个游戏开始" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "这里还空着" })).toBeVisible();
 
   await page.reload();
-  await expect(page.getByRole("heading", { name: "从安装第一个游戏开始" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "这里还空着" })).toBeVisible();
   await expect(page.getByRole("heading", { name: "欢迎使用 MoyuMax" })).toHaveCount(0);
 });
 

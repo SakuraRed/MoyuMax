@@ -157,9 +157,9 @@
         >
           <span>{t(item.labelKey)}</span>
           {#if item.key === "instances" && instanceCount > 0}
-            <span class="badge">{instanceCount}</span>
+            <span class="badge" aria-hidden="true">{instanceCount}</span>
           {:else if item.key === "tasks" && taskCount > 0}
-            <span class="badge">{taskCount}</span>
+            <span class="badge" aria-hidden="true">{taskCount}</span>
           {/if}
         </button>
       {/each}
