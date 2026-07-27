@@ -316,7 +316,7 @@ export const zhCN: Record<string, string> = {
   "settings.download.proxyCustomSave": "保存自定义代理",
   "settings.download.proxyInvalid": "代理地址必须以 http://、https:// 或 socks5h:// 开头",
   "settings.download.proxySaved": "代理设置已保存。",
-  "settings.download.proxyHint": "保存后新发起的查询与下载立即生效；已初始化的下载组件在重启应用后完全切换。",
+  "settings.download.proxyHint": "保存后查询与资源检索立即生效；批量下载引擎在重启应用后切换。",
   "settings.general.dataDirectory": "数据目录",
   "settings.general.isolation": "实例隔离",
   "settings.general.isolationOn": "开启",

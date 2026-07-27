@@ -302,9 +302,19 @@ impl AppService {
     }
 }
 
+/// 元数据客户端的 HTTP 构造(按全局代理偏好)。
+fn build_metadata_http_client() -> Result<Client> {
+    crate::http_client_builder()
+        .connect_timeout(Duration::from_secs(5))
+        .timeout(Duration::from_secs(15))
+        .user_agent(concat!("MoyuMax/", env!("CARGO_PKG_VERSION")))
+        .build()
+        .map_err(CoreError::from)
+}
+
 #[derive(Debug, Clone)]
 pub struct MetadataClient {
-    client: Client,
+    client: std::sync::Arc<std::sync::RwLock<Client>>,
     quilt_meta_base: String,
     bmclapi_base: String,
     forge_maven_base: String,
@@ -314,19 +324,33 @@ pub struct MetadataClient {
 
 impl MetadataClient {
     pub fn new() -> Result<Self> {
-        let client = crate::http_client_builder()
-            .connect_timeout(Duration::from_secs(5))
-            .timeout(Duration::from_secs(15))
-            .user_agent(concat!("MoyuMax/", env!("CARGO_PKG_VERSION")))
-            .build()?;
         Ok(Self {
-            client,
+            client: std::sync::Arc::new(std::sync::RwLock::new(build_metadata_http_client()?)),
             quilt_meta_base: QUILT_META_BASE_URL.to_owned(),
             bmclapi_base: BMCLAPI_BASE_URL.to_owned(),
             forge_maven_base: "https://maven.minecraftforge.net".to_owned(),
             neoforge_maven_base: "https://maven.neoforged.net/releases".to_owned(),
             source_policy: SourcePolicy::default(),
         })
+    }
+
+    /// 当前 HTTP 客户端的廉价克隆(内部为 Arc 共享)。
+    fn http(&self) -> Client {
+        match self.client.read() {
+            Ok(guard) => guard.clone(),
+            Err(poisoned) => poisoned.into_inner().clone(),
+        }
+    }
+
+    /// 按当前全局代理偏好重建 HTTP 客户端;修改代理设置后调用,无需重启应用。
+    pub fn reload_http_client(&self) {
+        match build_metadata_http_client() {
+            Ok(rebuilt) => match self.client.write() {
+                Ok(mut guard) => *guard = rebuilt,
+                Err(poisoned) => *poisoned.into_inner() = rebuilt,
+            },
+            Err(error) => eprintln!("重建元数据 HTTP 客户端失败,保持现有客户端:{error}"),
+        }
     }
 
     /// 设置下载源策略(安装器等较大文件下载按策略走镜像候选)。
@@ -388,7 +412,7 @@ impl MetadataClient {
         let mut attempts = Vec::new();
         for candidate in &candidates {
             let result = self
-                .client
+                .http()
                 .get(&candidate.url)
                 .send()
                 .await
@@ -598,7 +622,7 @@ impl MetadataClient {
             "{FABRIC_META_BASE_URL}/versions/loader/{game_version}/{loader_version}/profile/json"
         );
         let payload = self
-            .client
+            .http()
             .get(&profile_url)
             .send()
             .await?
@@ -639,7 +663,7 @@ impl MetadataClient {
             self.quilt_meta_base
         );
         let payload = self
-            .client
+            .http()
             .get(&profile_url)
             .send()
             .await?
@@ -667,7 +691,7 @@ impl MetadataClient {
         validate_metadata_component(game_version, "Minecraft 版本")?;
         let url = format!("{}/forge/minecraft/{game_version}", self.bmclapi_base);
         let entries = self
-            .client
+            .http()
             .get(url)
             .send()
             .await?
@@ -694,7 +718,7 @@ impl MetadataClient {
         validate_metadata_component(game_version, "Minecraft 版本")?;
         let url = format!("{}/neoforge/list/{game_version}", self.bmclapi_base);
         let entries = self
-            .client
+            .http()
             .get(url)
             .send()
             .await?
@@ -757,7 +781,7 @@ impl MetadataClient {
         validate_metadata_component(loader_version, "NeoForge 版本")?;
         let url = format!("{}/neoforge/list/{game_version}", self.bmclapi_base);
         let entries = self
-            .client
+            .http()
             .get(url)
             .send()
             .await?
@@ -813,7 +837,7 @@ impl MetadataClient {
         let mut payload = None;
         for candidate in &candidates {
             let result = self
-                .client
+                .http()
                 .get(&candidate.url)
                 .timeout(Duration::from_secs(180))
                 .send()
@@ -850,7 +874,7 @@ impl MetadataClient {
             "{AZUL_META_BASE_URL}/packages/?java_version={java_major}&os=windows&arch=x86&archive_type=zip&java_package_type=jdk&release_status=ga&availability_types=CA&latest=true&page_size=1"
         );
         let packages = self
-            .client
+            .http()
             .get(list_url)
             .send()
             .await?
@@ -865,7 +889,7 @@ impl MetadataClient {
         validate_metadata_component(&package.package_uuid, "Azul package UUID")?;
         let details_url = format!("{AZUL_META_BASE_URL}/packages/{}", package.package_uuid);
         let details = self
-            .client
+            .http()
             .get(details_url)
             .send()
             .await?
@@ -906,7 +930,7 @@ impl MetadataClient {
 
     async fn remote_content_length(&self, url: &str, artifact_name: &str) -> Result<u64> {
         validate_https_url(url)?;
-        let response = self.client.head(url).send().await?.error_for_status()?;
+        let response = self.http().head(url).send().await?.error_for_status()?;
         let value = response.headers().get(CONTENT_LENGTH).ok_or_else(|| {
             CoreError::Metadata(format!("{artifact_name} 下载端没有提供 Content-Length"))
         })?;

@@ -31,7 +31,7 @@ test("PROXY-001 默认跟随系统,切换直连立即持久化并回读", async 
   const proxySelect = page.getByRole("combobox", { name: "代理", exact: true });
   await expect(proxySelect).toHaveValue("system");
   await expect(
-    page.getByText("保存后新发起的查询与下载立即生效", { exact: false }),
+    page.getByText("保存后查询与资源检索立即生效", { exact: false }),
   ).toBeVisible();
 
   await proxySelect.selectOption("direct");

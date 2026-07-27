@@ -2678,11 +2678,17 @@ fn get_proxy_preference(service: State<'_, AppService>) -> Result<ProxyPreferenc
 #[tauri::command]
 fn set_proxy_preference(
     service: State<'_, AppService>,
+    metadata: State<'_, MetadataClient>,
+    modrinth: State<'_, ModrinthClient>,
     preference: ProxyPreference,
 ) -> Result<(), String> {
     service
         .set_proxy_preference(&preference)
-        .map_err(|error| error.to_string())
+        .map_err(|error| error.to_string())?;
+    // 启动期构造的客户端热重载,代理设置免重启生效。
+    metadata.reload_http_client();
+    modrinth.reload_http_client();
+    Ok(())
 }
 
 #[tauri::command]

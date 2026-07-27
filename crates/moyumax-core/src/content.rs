@@ -326,9 +326,23 @@ pub(crate) struct ContentCommitJournalEntry {
     pub existed_before: bool,
 }
 
+/// Modrinth 客户端的 HTTP 构造(按全局代理偏好)。
+fn build_modrinth_http_client() -> Result<Client> {
+    let user_agent = format!(
+        "SakuraRed/MoyuMax/{} (github.com/SakuraRed/MoyuMax)",
+        env!("CARGO_PKG_VERSION")
+    );
+    crate::http_client_builder()
+        .connect_timeout(Duration::from_secs(10))
+        .timeout(Duration::from_secs(30))
+        .user_agent(user_agent)
+        .build()
+        .map_err(CoreError::from)
+}
+
 #[derive(Debug, Clone)]
 pub struct ModrinthClient {
-    client: Client,
+    client: std::sync::Arc<std::sync::RwLock<Client>>,
     base_url: Url,
 }
 
@@ -348,16 +362,27 @@ impl ModrinthClient {
                 "Modrinth API 地址必须是带主机名且以斜杠结尾的 HTTP(S) URL".to_owned(),
             ));
         }
-        let user_agent = format!(
-            "SakuraRed/MoyuMax/{} (github.com/SakuraRed/MoyuMax)",
-            env!("CARGO_PKG_VERSION")
-        );
-        let client = crate::http_client_builder()
-            .connect_timeout(Duration::from_secs(10))
-            .timeout(Duration::from_secs(30))
-            .user_agent(user_agent)
-            .build()?;
+        let client = std::sync::Arc::new(std::sync::RwLock::new(build_modrinth_http_client()?));
         Ok(Self { client, base_url })
+    }
+
+    /// 当前 HTTP 客户端的廉价克隆(内部为 Arc 共享)。
+    fn http(&self) -> Client {
+        match self.client.read() {
+            Ok(guard) => guard.clone(),
+            Err(poisoned) => poisoned.into_inner().clone(),
+        }
+    }
+
+    /// 按当前全局代理偏好重建 HTTP 客户端;修改代理设置后调用,无需重启应用。
+    pub fn reload_http_client(&self) {
+        match build_modrinth_http_client() {
+            Ok(rebuilt) => match self.client.write() {
+                Ok(mut guard) => *guard = rebuilt,
+                Err(poisoned) => *poisoned.into_inner() = rebuilt,
+            },
+            Err(error) => eprintln!("重建 Modrinth HTTP 客户端失败,保持现有客户端:{error}"),
+        }
     }
 
     pub async fn search_mods(&self, query: &ModrinthSearchQuery) -> Result<ModrinthSearchPage> {
@@ -487,7 +512,7 @@ impl ModrinthClient {
 
     async fn download_to_staging(&self, file: &ModrinthVersionFile, staging: &Path) -> Result<()> {
         let response = self
-            .client
+            .http()
             .get(&file.url)
             .send()
             .await
@@ -850,7 +875,7 @@ impl ModrinthClient {
     }
 
     async fn get_json<T: DeserializeOwned>(&self, url: Url) -> Result<T> {
-        let response = self.client.get(url.clone()).send().await?;
+        let response = self.http().get(url.clone()).send().await?;
         match response.status() {
             status if status.is_success() => response.json().await.map_err(CoreError::from),
             StatusCode::GONE => Err(CoreError::Content(

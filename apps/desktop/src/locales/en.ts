@@ -311,7 +311,7 @@ export const en: Record<string, string> = {
   "settings.download.proxyCustomSave": "Save custom proxy",
   "settings.download.proxyInvalid": "Proxy URL must start with http://, https:// or socks5h://",
   "settings.download.proxySaved": "Proxy settings saved.",
-  "settings.download.proxyHint": "Saved settings apply to newly started queries and downloads immediately; already-initialized download components switch fully after restarting the app.",
+  "settings.download.proxyHint": "Saved settings apply to queries and resource search immediately; the bulk download engine switches after restarting the app.",
   "settings.general.dataDirectory": "Data directory",
   "settings.general.isolation": "Instance isolation",
   "settings.general.isolationOn": "On",

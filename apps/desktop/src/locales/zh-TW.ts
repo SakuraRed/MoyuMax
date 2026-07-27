@@ -311,7 +311,7 @@ export const zhTW: Record<string, string> = {
   "settings.download.proxyCustomSave": "儲存自訂代理",
   "settings.download.proxyInvalid": "代理位址必須以 http://、https:// 或 socks5h:// 開頭",
   "settings.download.proxySaved": "代理設定已儲存。",
-  "settings.download.proxyHint": "儲存後新發起的查詢與下載立即生效；已初始化的下載元件在重新啟動應用程式後完全切換。",
+  "settings.download.proxyHint": "儲存後查詢與資源檢索立即生效；批次下載引擎在重新啟動應用程式後切換。",
   "settings.general.dataDirectory": "資料目錄",
   "settings.general.isolation": "實例隔離",
   "settings.general.isolationOn": "開啟",
