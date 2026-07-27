@@ -99,7 +99,16 @@ pub(crate) fn http_client_builder() -> reqwest::ClientBuilder {
 /// 仅在 ProxyEnable=1 时应用 ProxyServer,未启用时明确 no_proxy。
 /// 注意:此时环境变量代理也不再生效(需要者请用自定义代理)。
 /// 非 Windows:保持 reqwest 默认(环境变量)。
+///
+/// 逃生通道:环境变量 `MOYUMAX_PROXY_PREFERENCE=direct` 时强制直连,
+/// 供代理环境损坏的机器与测试隔离使用(不影响持久化偏好)。
 fn apply_system_proxy(builder: reqwest::ClientBuilder) -> reqwest::ClientBuilder {
+    if std::env::var("MOYUMAX_PROXY_PREFERENCE")
+        .map(|value| value.eq_ignore_ascii_case("direct"))
+        .unwrap_or(false)
+    {
+        return builder.no_proxy();
+    }
     #[cfg(windows)]
     {
         match windows_registry_proxy_server().and_then(|server| {

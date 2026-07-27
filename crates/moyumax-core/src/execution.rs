@@ -403,6 +403,7 @@ pub struct ArtifactDownloader {
     segment_target_bytes: u64,
     rate_limiter: Arc<RateLimiter>,
     adaptive: Arc<AdaptiveConcurrency>,
+    read_stall_timeout: Duration,
 }
 
 impl ArtifactDownloader {
@@ -422,7 +423,16 @@ impl ArtifactDownloader {
             segment_target_bytes: SEGMENT_TARGET_BYTES,
             rate_limiter: global_rate_limiter(),
             adaptive: Arc::new(AdaptiveConcurrency::new(max_concurrent_downloads)),
+            read_stall_timeout: Duration::from_secs(30),
         })
+    }
+
+    /// 覆盖读停滞超时(无字节判死线),供受控测试;生产保持 30s 默认。
+    #[doc(hidden)]
+    #[must_use]
+    pub fn with_read_stall_timeout(mut self, timeout: Duration) -> Self {
+        self.read_stall_timeout = timeout;
+        self
     }
 
     /// 覆盖单文件分段目标大小(下限 1 MiB)。供受控基准使用,生产保持默认值。
@@ -763,6 +773,7 @@ impl ArtifactDownloader {
                 let permits = Arc::clone(&self.permits);
                 let rate_limiter = Arc::clone(&self.rate_limiter);
                 let adaptive = Arc::clone(&self.adaptive);
+                let read_stall_timeout = self.read_stall_timeout;
                 let segments_dir = segments_dir.clone();
                 let expected_etag = manifest.etag.clone();
                 let expected_last_modified = manifest.last_modified.clone();
@@ -772,6 +783,7 @@ impl ArtifactDownloader {
                         permits,
                         rate_limiter,
                         adaptive,
+                        read_stall_timeout,
                         &candidate.url,
                         &segment,
                         total,
@@ -916,6 +928,7 @@ impl ArtifactDownloader {
                 append,
                 interrupt,
                 &self.rate_limiter,
+                self.read_stall_timeout,
             )
             .await?;
             reject_html_substitute(&partial_file).await?;
@@ -957,7 +970,15 @@ impl ArtifactDownloader {
         if response.status() != StatusCode::OK {
             return Err(http_status_error(url, response.status()));
         }
-        write_response(response, partial_file, false, interrupt, &self.rate_limiter).await?;
+        write_response(
+            response,
+            partial_file,
+            false,
+            interrupt,
+            &self.rate_limiter,
+            self.read_stall_timeout,
+        )
+        .await?;
         reject_html_substitute(partial_file).await?;
         verify_file(partial_file, artifact).await?;
         replace_file(partial_file, staged_file).await?;
@@ -1008,6 +1029,7 @@ async fn download_segment(
     permits: Arc<Semaphore>,
     rate_limiter: Arc<RateLimiter>,
     adaptive: Arc<AdaptiveConcurrency>,
+    read_stall_timeout: Duration,
     url: &str,
     segment: &SegmentState,
     total: u64,
@@ -1094,7 +1116,15 @@ async fn download_segment(
             reason: "远端对象 Last-Modified 已变化,废弃旧分段".to_owned(),
         });
     }
-    write_response(response, &seg_path, true, interrupt, &rate_limiter).await?;
+    write_response(
+        response,
+        &seg_path,
+        true,
+        interrupt,
+        &rate_limiter,
+        read_stall_timeout,
+    )
+    .await?;
     let bytes = (segment.end - segment.start).saturating_sub(download_start);
     let seconds = started.elapsed().as_secs_f64().max(0.001);
     adaptive.record(bytes as f64 / seconds, true);
@@ -3049,6 +3079,7 @@ async fn write_response(
     append: bool,
     interrupt: Option<&DownloadInterrupt>,
     rate_limiter: &RateLimiter,
+    stall_timeout: Duration,
 ) -> Result<()> {
     let mut output = OpenOptions::new()
         .create(true)
@@ -3059,10 +3090,15 @@ async fn write_response(
         .await?;
     let mut stream = response.bytes_stream();
     loop {
+        // 读停滞看守:reqwest 只有连接超时没有读超时,CDN 限速节点常出现
+        // "连接保持但不再发字节"的假死(实测整合包大文件整夜挂死)。
+        // 超过 stall_timeout 无任何字节即按瞬态错误放弃,交给重试换新连接;
+        // 慢但持续有字节推进的连接不受影响。
+        let next_chunk = tokio::time::timeout(stall_timeout, stream.next());
         let chunk = match interrupt {
             Some(signal) => {
                 tokio::select! {
-                    chunk = stream.next() => chunk,
+                    chunk = next_chunk => chunk,
                     () = signal.wait() => {
                         // 暂停中断:停止写入,已写入的 .partial 保留供恢复校验。
                         output.flush().await?;
@@ -3071,7 +3107,17 @@ async fn write_response(
                     }
                 }
             }
-            None => stream.next().await,
+            None => next_chunk.await,
+        };
+        let chunk = match chunk {
+            Ok(chunk) => chunk,
+            Err(_) => {
+                output.flush().await?;
+                return Err(CoreError::TransientDownload(format!(
+                    "下载停滞超过 {} 秒，已放弃该连接",
+                    stall_timeout.as_secs()
+                )));
+            }
         };
         let Some(chunk) = chunk else { break };
         let chunk = chunk?;

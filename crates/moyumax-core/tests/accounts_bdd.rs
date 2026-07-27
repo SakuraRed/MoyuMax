@@ -244,6 +244,10 @@ impl AccountFixture {
         let data_directory = directory.path().join("data");
         let service = AppService::open(&database_path, &data_directory).unwrap();
         service.skip_onboarding().unwrap();
+        // 网络相关测试必须脱离宿主机代理状态(AppService::open 会用库内设置
+        // 覆盖进程偏好,必须在 open 之后固定;实测宿主机半坏代理对 127.0.0.1
+        // 回 503,会污染"网络错误 vs 凭据错误"的判定)。
+        moyumax_core::set_active_proxy_preference(moyumax_core::ProxyPreference::Direct);
         Self {
             _directory: directory,
             database_path,

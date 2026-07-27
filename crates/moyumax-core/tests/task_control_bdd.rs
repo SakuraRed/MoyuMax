@@ -1216,3 +1216,84 @@ fn m33_task_013_cancel_and_delete_release_java_environment_claim() {
     fixture.service.delete_install_task(&task).unwrap();
     assert_eq!(env_status(), "ready", "已就绪环境不得被改写");
 }
+
+#[tokio::test]
+async fn m33_task_014_stalled_connection_times_out_and_recovers() {
+    use std::sync::atomic::AtomicUsize;
+
+    let body = b"full body delivered on the second attempt".to_vec();
+    let hits = Arc::new(AtomicUsize::new(0));
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let address = listener.local_addr().unwrap();
+    let server_hits = Arc::clone(&hits);
+    let server_body = body.clone();
+    thread::spawn(move || {
+        for stream in listener.incoming() {
+            let Ok(mut stream) = stream else { continue };
+            let hit = server_hits.fetch_add(1, Ordering::SeqCst) + 1;
+            let body = server_body.clone();
+            thread::spawn(move || {
+                let mut reader = BufReader::new(stream.try_clone().unwrap());
+                let mut line = String::new();
+                loop {
+                    let mut part = String::new();
+                    if reader.read_line(&mut part).unwrap_or(0) == 0 || part == "\r\n" {
+                        break;
+                    }
+                    line.push_str(&part);
+                }
+                if hit == 1 {
+                    // 假死连接:只写一半,然后永远不再发字节(模拟 CDN 限速停滞)。
+                    write!(
+                        stream,
+                        "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                        body.len()
+                    )
+                    .unwrap();
+                    let _ = stream.write_all(&body[..body.len() / 2]);
+                    let _ = stream.flush();
+                    thread::sleep(Duration::from_secs(30));
+                } else {
+                    write!(
+                        stream,
+                        "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                        body.len()
+                    )
+                    .unwrap();
+                    let _ = stream.write_all(&body);
+                    let _ = stream.flush();
+                }
+            });
+        }
+    });
+
+    let url = format!("http://{address}/stalled.bin");
+    let artifact = artifact(&url, "stalled.bin", &body);
+    let directory = TempDir::new().unwrap();
+    let started = Instant::now();
+    let report = ArtifactDownloader::new(4)
+        .unwrap()
+        .with_read_stall_timeout(Duration::from_millis(400))
+        .fetch_with_policy(
+            &artifact,
+            &directory.path().join("staging"),
+            &directory.path().join("shared"),
+            &SourcePolicy::MirrorFirst,
+            None,
+        )
+        .await
+        .expect("停滞连接必须按瞬态超时放弃并换连接重试成功");
+
+    assert_eq!(hits.load(Ordering::SeqCst), 2, "必须换连接重试一次");
+    assert_eq!(report.attempts.len(), 2);
+    match &report.attempts[0].outcome {
+        SourceAttemptOutcome::Failed { error } => {
+            assert!(error.contains("停滞"), "首次失败应为读停滞超时:{error}");
+        }
+        other => panic!("首次尝试应记录失败:{other:?}"),
+    }
+    assert!(
+        started.elapsed() < Duration::from_secs(10),
+        "停滞恢复必须快速完成,不得整夜挂死"
+    );
+}

@@ -259,6 +259,9 @@ impl ContentFixture {
         let instance_root = data_directory.join("instances").join(&instance_id);
         let service = AppService::open(&database_path, &data_directory).unwrap();
         service.skip_onboarding().unwrap();
+        // 网络相关测试脱离宿主机代理状态(AppService::open 会用库内设置
+        // 覆盖进程偏好,必须在 open 之后固定)。
+        moyumax_core::set_active_proxy_preference(moyumax_core::ProxyPreference::Direct);
         fs::create_dir_all(instance_root.join(".minecraft/mods")).unwrap();
         Connection::open(&database_path)
             .unwrap()
