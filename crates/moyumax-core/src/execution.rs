@@ -2791,17 +2791,14 @@ fn local_produced_artifact(
 }
 
 fn profile_library_artifacts(profile: &crate::InstallProfile) -> Result<Vec<ResolvedArtifact>> {
-    // 处理器引用的 jar 是构建期依赖,只供安装器运行,不进入运行时 classpath;
-    // 其余 profile 库(尤其 universal)是运行时必需——FML 要从 classpath
-    // 定位 neoforge mod(实测 universal 缺失会直接找不到 mod)。
-    let build_only: std::collections::HashSet<&str> = profile
-        .processors
-        .iter()
-        .flat_map(|processor| {
-            std::iter::once(processor.jar.as_str())
-                .chain(processor.classpath.iter().map(String::as_str))
-        })
-        .collect();
+    // install_profile 的全部库都不进运行时 classpath:
+    // - 处理器依赖(installertools 等)只供安装器运行;
+    // - universal 虽是运行时模组,但由 FML 启动处理器经 LibraryFinder
+    //   从 -DlibraryDirectory 定位——实测(2026-07,NeoForge 21.1.233):
+    //   universal 一旦在 -cp 上,就会被 ignoreList 的 "neoforge-{ver}.jar"
+    //   按模块名一并抑制,导致全模组报 neoforge MISSING;
+    //   它不在 -cp 时启动处理器反而正常注册(已实机验证进入主界面流程)。
+    // 工件照常下载与共享(FML 从共享库目录按 Maven 布局读取)。
     let mut artifacts = Vec::with_capacity(profile.libraries.len());
     for library in &profile.libraries {
         let relative = maven_path(&library.name)?;
@@ -2831,13 +2828,8 @@ fn profile_library_artifacts(profile: &crate::InstallProfile) -> Result<Vec<Reso
                 library.name
             )));
         }
-        let kind = if build_only.contains(library.name.as_str()) {
-            ArtifactKind::InstallerLibrary
-        } else {
-            ArtifactKind::LoaderLibrary
-        };
         artifacts.push(ResolvedArtifact {
-            kind,
+            kind: ArtifactKind::InstallerLibrary,
             relative_path: format!("minecraft/libraries/{relative}"),
             url: artifact.url.clone(),
             size: artifact.size,
