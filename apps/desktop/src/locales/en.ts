@@ -514,6 +514,7 @@ export const en: Record<string, string> = {
   "modpack.update": "Update modpack",
   "modpack.updating": "Updating",
   "modpack.updateDone": "\"{name}\" updated from {from} to {to}",
+  "modpack.installingHint": "Installing modpack files; the game can only start after it finishes…",
   "modpack.keptNote": "; modified files kept untouched: {files}",
 
   // Accounts section (SettingsCenter)

@@ -76,6 +76,34 @@ struct NetplayCoordinator {
     room: Mutex<Option<NetplayRoomProcess>>,
 }
 
+/// 整合包安装协调器:跟踪哪些实例的整合包文件正在安装中,
+/// 防止用户在文件未落齐时启动游戏(表现为"只有两个 mod")。
+#[derive(Debug, Default)]
+struct ModpackInstallCoordinator {
+    installing: Mutex<std::collections::HashSet<String>>,
+}
+
+impl ModpackInstallCoordinator {
+    fn begin(&self, instance_id: &str) {
+        if let Ok(mut guard) = self.installing.lock() {
+            guard.insert(instance_id.to_owned());
+        }
+    }
+
+    fn finish(&self, instance_id: &str) {
+        if let Ok(mut guard) = self.installing.lock() {
+            guard.remove(instance_id);
+        }
+    }
+
+    fn is_installing(&self, instance_id: &str) -> bool {
+        self.installing
+            .lock()
+            .map(|guard| guard.contains(instance_id))
+            .unwrap_or(false)
+    }
+}
+
 #[derive(Debug)]
 struct NetplayRoomProcess {
     config: moyumax_core::NetplayRoomConfig,
@@ -1813,6 +1841,7 @@ async fn install_modpack(
     metadata: State<'_, MetadataClient>,
     previews: State<'_, ModpackPreviewStore>,
     coordinator: State<'_, TaskCoordinator>,
+    modpack_guard: State<'_, ModpackInstallCoordinator>,
     preview_id: String,
 ) -> Result<ModpackInstallReport, String> {
     let (plan, archive_path) = previews
@@ -1844,9 +1873,10 @@ async fn install_modpack(
         plan.files.len() as u64,
         "准备下载整合包文件",
     );
+    modpack_guard.begin(&instance.id);
     let mci = MciMirrorClient::new().map_err(|error| error.to_string())?;
     let progress_app = app.clone();
-    let result = service
+    let guard_result = service
         .install_modpack_files(
             &plan,
             &archive_path,
@@ -1857,16 +1887,18 @@ async fn install_modpack(
             },
         )
         .await;
+    modpack_guard.finish(&instance.id);
     if let Some(staging) = online_staging {
         let _ = std::fs::remove_dir_all(staging);
     }
-    result.map_err(|error| error.to_string())
+    guard_result.map_err(|error| error.to_string())
 }
 
 #[tauri::command]
 async fn update_modpack(
     app: tauri::AppHandle,
     service: State<'_, AppService>,
+    modpack_guard: State<'_, ModpackInstallCoordinator>,
     instance_id: String,
     source_path: String,
 ) -> Result<ModpackUpdateReport, String> {
@@ -1876,9 +1908,10 @@ async fn update_modpack(
     }
     let plan =
         moyumax_core::parse_modpack_archive(&archive_path).map_err(|error| error.to_string())?;
+    modpack_guard.begin(&instance_id);
     let mci = MciMirrorClient::new().map_err(|error| error.to_string())?;
     let progress_app = app.clone();
-    service
+    let result = service
         .update_modpack(
             &plan,
             &archive_path,
@@ -1888,8 +1921,18 @@ async fn update_modpack(
                 emit_modpack_progress(&progress_app, "files", current, total, item);
             },
         )
-        .await
-        .map_err(|error| error.to_string())
+        .await;
+    modpack_guard.finish(&instance_id);
+    result.map_err(|error| error.to_string())
+}
+
+/// 该实例的整合包文件是否正在安装中。
+#[tauri::command]
+fn is_modpack_installing(
+    modpack_guard: State<'_, ModpackInstallCoordinator>,
+    instance_id: String,
+) -> Result<bool, String> {
+    Ok(modpack_guard.is_installing(&instance_id))
 }
 
 #[tauri::command]
@@ -2302,8 +2345,12 @@ fn list_world_backups(
 async fn start_instance(
     service: State<'_, AppService>,
     coordinator: State<'_, LaunchCoordinator>,
+    modpack_guard: State<'_, ModpackInstallCoordinator>,
     instance_id: String,
 ) -> Result<LaunchSessionSummary, String> {
+    if modpack_guard.is_installing(&instance_id) {
+        return Err("整合包文件仍在安装中，请等待安装完成后再启动".to_owned());
+    }
     let service = service.inner().clone();
     let coordinator = coordinator.inner().clone();
     let account = service
@@ -2853,6 +2900,7 @@ pub fn run() {
             app.manage(DiagnosticPreviewStore::default());
             app.manage(MicrosoftLoginState::default());
             app.manage(NetplayCoordinator::default());
+            app.manage(ModpackInstallCoordinator::default());
             app.manage(coordinator);
             app.manage(LaunchCoordinator::default());
             app.manage(Arc::clone(&shell));
@@ -2971,6 +3019,7 @@ pub fn run() {
             import_modpack_preview,
             install_modpack,
             update_modpack,
+            is_modpack_installing,
             get_instance_modpack,
             preview_online_modpack,
             install_online_resource,

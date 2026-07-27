@@ -91,3 +91,12 @@ test("UI-LAUNCH-001 实例首页在 960x600 和 200% 放大下不重叠", async 
   expect(geometry.scrollWidth).toBeLessThanOrEqual(geometry.viewportWidth);
   expect(geometry.cardOverflow).toBe(false);
 });
+
+test("UI-LAUNCH-002 整合包安装中显示徽标并禁用启动", async ({ page }) => {
+  await page.evaluate(() => {
+    window.localStorage.setItem("moyumax.browser.modpackInstalling", JSON.stringify(["instance-id"]));
+  });
+  await page.reload();
+  await expect(page.getByText("整合包文件安装中，完成后才能启动", { exact: false })).toBeVisible();
+  await expect(page.getByRole("button", { name: "启动游戏" })).toBeDisabled();
+});

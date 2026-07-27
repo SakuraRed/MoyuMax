@@ -4287,6 +4287,16 @@ summary:focus-visible {
   font-size: 11px;
 }
 
+.modpack-installing {
+  display: inline-block;
+  margin-top: 2px;
+  padding: var(--compact-label-inset-block) var(--compact-label-inset-inline);
+  border-radius: 5px;
+  color: var(--warn, #d8a23a);
+  background: var(--warn-dim, rgba(216, 162, 58, 0.14));
+  font-size: 11px;
+}
+
 .backup-empty-row {
   padding: var(--frame-row-inset-block) var(--frame-row-inset-inline);
   border: 1px solid var(--border);

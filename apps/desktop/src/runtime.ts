@@ -944,6 +944,8 @@ export interface MoyuRuntime {
   installModpack(previewId: string): Promise<ModpackInstallReport>;
   updateModpack(instanceId: string, sourcePath: string): Promise<ModpackUpdateReport>;
   getInstanceModpack(instanceId: string): Promise<InstalledModpack | null>;
+  /** 该实例的整合包文件是否正在安装中（安装中禁止启动）。 */
+  isModpackInstalling(instanceId: string): Promise<boolean>;
   /** 打开原生保存对话框选择整合包导出位置；用户取消时返回 null。 */
   pickModpackExportPath(packName: string, version: string): Promise<string | null>;
   /** 把实例导出为 Modrinth mrpack 到指定路径。 */
@@ -1376,6 +1378,7 @@ function createTauriRuntime(): MoyuRuntime {
       invoke<ModpackUpdateReport>("update_modpack", { instanceId, sourcePath }),
     getInstanceModpack: (instanceId) =>
       invoke<InstalledModpack | null>("get_instance_modpack", { instanceId }),
+    isModpackInstalling: (instanceId) => invoke<boolean>("is_modpack_installing", { instanceId }),
     pickModpackExportPath: async (packName, version) => {
       const { save } = await import("@tauri-apps/plugin-dialog");
       return await save({
@@ -2642,6 +2645,11 @@ function createBrowserRuntime(): MoyuRuntime {
     },
     async getInstanceModpack(instanceId) {
       return browserModpacks()[instanceId] ?? null;
+    },
+    async isModpackInstalling(instanceId) {
+      const raw = window.localStorage.getItem("moyumax.browser.modpackInstalling") ?? "[]";
+      const list = JSON.parse(raw) as string[];
+      return list.includes(instanceId);
     },
     async pickModpackExportPath(packName, version) {
       return (

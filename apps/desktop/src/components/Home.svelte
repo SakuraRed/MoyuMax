@@ -65,6 +65,7 @@
   let recycleCandidate = $state<ManagedInstance | null>(null);
   let recycleDialog = $state<HTMLElement | null>(null);
   let modpacks = $state<Record<string, InstalledModpack>>({});
+  let installingPacks = $state<Record<string, boolean>>({});
   let updatingPack = $state<string | null>(null);
   let packReport = $state<ModpackUpdateReport | null>(null);
   let defaultAccountName = $state("");
@@ -87,11 +88,17 @@
 
   async function loadModpacks(list: ManagedInstance[]): Promise<void> {
     const next: Record<string, InstalledModpack> = {};
+    const installingNext: Record<string, boolean> = {};
     for (const instance of list) {
-      const pack = await runtime.getInstanceModpack(instance.id).catch(() => null);
+      const [pack, installing] = await Promise.all([
+        runtime.getInstanceModpack(instance.id).catch(() => null),
+        runtime.isModpackInstalling(instance.id).catch(() => false),
+      ]);
       if (pack) next[instance.id] = pack;
+      if (installing) installingNext[instance.id] = true;
     }
     modpacks = next;
+    installingPacks = installingNext;
   }
 
   async function updatePack(instance: ManagedInstance): Promise<void> {
@@ -363,6 +370,9 @@
                   </span>
                 </div>
                 <p>{t("home.instance.summary").replace("{version}", instance.gameVersion).replace("{loader}", loaderLabel(instance))}</p>
+                {#if installingPacks[instance.id]}
+                  <small class="modpack-installing" role="status">{t("modpack.installingHint")}</small>
+                {/if}
                 {#if pack}
                   <small class="modpack-badge">{pack.packName} {pack.packVersion} · {pack.provider === "modrinth" ? "Modrinth" : "CurseForge"}</small>
                 {/if}
@@ -390,7 +400,7 @@
                   <button
                     class="button primary large"
                     data-autofocus={index === 0 ? "true" : undefined}
-                    disabled={changingInstance === instance.id || instance.state !== "ready"}
+                    disabled={changingInstance === instance.id || instance.state !== "ready" || Boolean(installingPacks[instance.id])}
                     onclick={() => void start(instance)}
                   ><Icon name="play" size={14} />{changingInstance === instance.id ? t("home.launch.starting") : t("home.launch.start")}</button>
                 {/if}

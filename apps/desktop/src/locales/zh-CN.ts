@@ -519,6 +519,7 @@ export const zhCN: Record<string, string> = {
   "modpack.update": "更新整合包",
   "modpack.updating": "正在更新",
   "modpack.updateDone": "「{name}」已从 {from} 更新到 {to}",
+  "modpack.installingHint": "整合包文件安装中，完成后才能启动…",
   "modpack.keptNote": "；以下已改动文件保留未覆盖：{files}",
 
   // 账户区（SettingsCenter）
