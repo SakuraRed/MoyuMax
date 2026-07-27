@@ -308,3 +308,28 @@ fn take_captured(slot: &Arc<Mutex<Option<String>>>) -> String {
         thread::sleep(Duration::from_millis(10));
     }
 }
+
+#[test]
+fn proxy_006_registry_proxy_server_parsing() {
+    use moyumax_core::parse_registry_proxy_server;
+
+    // 简单形式 host:port。
+    assert_eq!(
+        parse_registry_proxy_server("127.0.0.1:10808"),
+        Some("http://127.0.0.1:10808".to_owned())
+    );
+    // 分组形式优先 https。
+    assert_eq!(
+        parse_registry_proxy_server("http=127.0.0.1:8080;https=127.0.0.1:8443"),
+        Some("http://127.0.0.1:8443".to_owned())
+    );
+    // 分组只有 http。
+    assert_eq!(
+        parse_registry_proxy_server("http=127.0.0.1:8080;ftp=127.0.0.1:8021"),
+        Some("http://127.0.0.1:8080".to_owned())
+    );
+    // 空白与异常输入拒绝。
+    assert_eq!(parse_registry_proxy_server(""), None);
+    assert_eq!(parse_registry_proxy_server("   "), None);
+    assert_eq!(parse_registry_proxy_server("bad host:8080"), None);
+}

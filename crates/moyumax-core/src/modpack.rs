@@ -12,7 +12,7 @@ use std::{
     time::Duration,
 };
 
-use futures_util::{StreamExt, TryStreamExt};
+use futures_util::StreamExt;
 use reqwest::{Client, Url};
 use rusqlite::{OptionalExtension, TransactionBehavior, params};
 use serde::{Deserialize, Serialize};
@@ -20,7 +20,10 @@ use sha2::{Digest, Sha512};
 use uuid::Uuid;
 use zip::ZipArchive;
 
-use crate::{AppService, ArtifactKind, CoreError, ResolvedArtifact, Result, unix_timestamp};
+use crate::{
+    AppService, ArtifactKind, CoreError, DownloadCandidate, ResolvedArtifact, Result,
+    SourceCandidates, candidates_for, unix_timestamp,
+};
 
 const MCI_MIRROR_BASE: &str = "https://mod.mcimirror.top";
 const MAX_PACK_FILES: usize = 4096;
@@ -56,6 +59,8 @@ impl ModpackProvider {
 pub struct ModpackFile {
     pub relative_path: String,
     pub url: Option<String>,
+    /// 包内声明的全部下载地址(mrpack downloads 列表,含 forgecdn/modrinth 互为备用)。
+    pub urls: Vec<String>,
     pub sha1: Option<String>,
     pub sha512: Option<String>,
     pub size: u64,
@@ -338,6 +343,7 @@ fn parse_modrinth_index(index: &[u8], archive: &mut ZipArchive<fs::File>) -> Res
         files.push(ModpackFile {
             relative_path,
             url: Some(url.clone()),
+            urls: file.downloads.clone(),
             sha1: file.hashes.sha1.clone(),
             sha512: file.hashes.sha512.clone(),
             size: file.file_size,
@@ -417,6 +423,7 @@ fn parse_curseforge_manifest(
         files.push(ModpackFile {
             relative_path: String::new(),
             url: None,
+            urls: Vec::new(),
             sha1: None,
             sha512: None,
             size: 0,
@@ -811,20 +818,20 @@ impl AppService {
         })
     }
 
-    async fn resolve_modpack_artifacts(
+    #[doc(hidden)]
+    pub async fn resolve_modpack_artifacts(
         &self,
         plan: &ModpackPlan,
         mci: &MciMirrorClient,
         on_progress: &(dyn Fn(u64, u64, &str) + Sync),
-    ) -> Result<Vec<(String, ResolvedArtifact)>> {
+    ) -> Result<Vec<(String, ResolvedArtifact, Vec<DownloadCandidate>)>> {
+        let policy = self.download_source_policy()?;
         let mut artifacts = Vec::with_capacity(plan.files.len() + plan.overrides.len());
         let total = plan.files.len() as u64;
         for (index, file) in plan.files.iter().enumerate() {
-            let (url, size, sha1, sha512) = match plan.provider {
+            let (candidates, size, sha1, sha512) = match plan.provider {
                 ModpackProvider::Modrinth => (
-                    file.url.clone().ok_or_else(|| {
-                        CoreError::Content(format!("文件 {} 没有下载地址", file.relative_path))
-                    })?,
+                    Self::modpack_file_candidates(file, &policy)?,
                     file.size,
                     file.sha1.clone(),
                     file.sha512.clone(),
@@ -841,23 +848,76 @@ impl AppService {
                         )
                         .await?;
                     on_progress(index as u64, total, &format!("解析 {}", resolved.file_name));
-                    (resolved.url, resolved.size, Some(resolved.sha1), None)
+                    let candidates = match candidates_for(&resolved.url, &policy) {
+                        SourceCandidates::Ready(list) => list,
+                        SourceCandidates::CurseForgeOfficialUnavailable { mirror } => vec![mirror],
+                        SourceCandidates::CustomUnsupported { reason } => {
+                            return Err(CoreError::Content(reason));
+                        }
+                    };
+                    (candidates, resolved.size, Some(resolved.sha1), None)
                 }
             };
+            let primary_url = candidates
+                .first()
+                .map(|candidate| candidate.url.clone())
+                .ok_or_else(|| {
+                    CoreError::Content(format!("文件 {} 没有可用下载来源", file.relative_path))
+                })?;
             artifacts.push((
                 file.relative_path.clone(),
                 ResolvedArtifact {
                     kind: ArtifactKind::ContentMod,
                     relative_path: format!("pack/{}", file.relative_path.replace('/', "_")),
-                    url,
+                    url: primary_url,
                     size,
                     sha1,
                     sha256: None,
                     sha512,
                 },
+                candidates,
             ));
         }
         Ok(artifacts)
+    }
+
+    /// 为 mrpack 文件构造有序下载候选:实测 forgecdn 直连严重限速(约 30 KB/s),
+    /// 同一文件的 cdn.modrinth.com 快约 20 倍,因此把 Modrinth CDN 提前,其余
+    /// 地址保持包内声明顺序;每个地址再按下载源策略展开镜像候选并按 URL 去重。
+    #[doc(hidden)]
+    pub fn modpack_file_candidates(
+        file: &ModpackFile,
+        policy: &crate::SourcePolicy,
+    ) -> Result<Vec<DownloadCandidate>> {
+        let mut ordered = file.urls.clone();
+        if ordered.is_empty()
+            && let Some(url) = &file.url
+        {
+            ordered.push(url.clone());
+        }
+        ordered.sort_by_key(|url| !url.contains("cdn.modrinth.com"));
+        let mut seen = HashSet::new();
+        let mut candidates = Vec::new();
+        for url in ordered {
+            let expanded = match candidates_for(&url, policy) {
+                SourceCandidates::Ready(list) => list,
+                SourceCandidates::CurseForgeOfficialUnavailable { mirror } => vec![mirror],
+                // 自定义源不覆盖该域名时跳过这个备用地址,尝试下一个。
+                SourceCandidates::CustomUnsupported { .. } => Vec::new(),
+            };
+            for candidate in expanded {
+                if seen.insert(candidate.url.clone()) {
+                    candidates.push(candidate);
+                }
+            }
+        }
+        if candidates.is_empty() {
+            return Err(CoreError::Content(format!(
+                "文件 {} 没有可用下载来源",
+                file.relative_path
+            )));
+        }
+        Ok(candidates)
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -867,35 +927,73 @@ impl AppService {
         staging: &Path,
         plan: &ModpackPlan,
         archive_path: &Path,
-        artifacts: Vec<(String, ResolvedArtifact)>,
+        artifacts: Vec<(String, ResolvedArtifact, Vec<DownloadCandidate>)>,
         operation: &str,
         on_progress: &(dyn Fn(u64, u64, &str) + Sync),
     ) -> Result<()> {
-        let downloader = crate::ArtifactDownloader::new(4)?;
-        let policy = self.download_source_policy()?;
+        // 与游戏安装一致使用用户配置的下载并发(此前写死 4,大整合包极慢)。
+        let concurrency = self.download_concurrency()?;
+        let downloader = crate::ArtifactDownloader::new(concurrency)?;
         let download_root = staging.join("downloads");
         fs::create_dir_all(&download_root)?;
         let shared_root = self.selected_data_directory()?.join("store");
         fs::create_dir_all(&shared_root)?;
         let total = artifacts.len() as u64;
-        let downloads = futures_util::stream::iter(artifacts.into_iter().enumerate().map(
-            |(index, (relative, artifact))| {
+        // 第一遍:全并发下载,失败文件收集起来;网络抖动窗口里
+        // 单文件失败不应拖垮整个整合包。
+        let outcomes = futures_util::stream::iter(artifacts.into_iter().enumerate().map(
+            |(index, (relative, artifact, candidates))| {
                 let downloader = downloader.clone();
                 let download_root = download_root.clone();
                 let shared_root = shared_root.clone();
-                let policy = policy.clone();
                 async move {
-                    let report = downloader
-                        .fetch_with_policy(&artifact, &download_root, &shared_root, &policy, None)
-                        .await?;
+                    let result = downloader
+                        .fetch_with_candidates(
+                            &artifact,
+                            &download_root,
+                            &shared_root,
+                            &candidates,
+                            None,
+                        )
+                        .await;
                     on_progress(index as u64 + 1, total, &artifact.relative_path);
-                    Ok::<_, CoreError>((relative, report))
+                    (relative, artifact, candidates, result)
                 }
             },
         ))
-        .buffer_unordered(4)
-        .try_collect::<Vec<(String, crate::FetchReport)>>()
-        .await?;
+        .buffer_unordered(concurrency)
+        .collect::<Vec<_>>()
+        .await;
+        let mut downloads: Vec<(String, crate::FetchReport)> = Vec::new();
+        let mut failed = Vec::new();
+        for (relative, artifact, candidates, result) in outcomes {
+            match result {
+                Ok(report) => downloads.push((relative, report)),
+                Err(error) => failed.push((relative, artifact, candidates, error)),
+            }
+        }
+        // 第二遍:失败文件延迟后逐个重试,仍失败才整体报错。
+        if !failed.is_empty() {
+            on_progress(0, total, "重试下载失败的文件");
+            tokio::time::sleep(Duration::from_secs(2)).await;
+            for (relative, artifact, candidates, _) in failed {
+                let report = downloader
+                    .fetch_with_candidates(
+                        &artifact,
+                        &download_root,
+                        &shared_root,
+                        &candidates,
+                        None,
+                    )
+                    .await
+                    .map_err(|error| {
+                        CoreError::Content(format!(
+                            "文件 {relative} 下载失败（镜像与备用地址均已重试）：{error}"
+                        ))
+                    })?;
+                downloads.push((relative, report));
+            }
+        }
 
         // overrides 解包到暂存（存在时）。
         if !plan.overrides.is_empty() {

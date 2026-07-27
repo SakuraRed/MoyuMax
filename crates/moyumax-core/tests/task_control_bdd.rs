@@ -163,20 +163,20 @@ fn m14_task_004_pressure_shrinks_and_recovers_connections() {
     adaptive.record(0.0, false);
     assert_eq!(adaptive.current_limit(), 1);
 
-    for _ in 0..6 {
+    for _ in 0..2 {
         adaptive.record(8.0 * 1024.0 * 1024.0, true);
     }
-    assert_eq!(adaptive.current_limit(), 2, "稳定后缓慢回升一格");
-    for _ in 0..6 {
+    assert_eq!(adaptive.current_limit(), 2, "连续健康两次回升一格");
+    for _ in 0..2 {
         adaptive.record(8.0 * 1024.0 * 1024.0, true);
     }
     assert_eq!(adaptive.current_limit(), 3);
 
-    // 吞吐持续劣化也应收缩。
-    for _ in 0..4 {
-        adaptive.record(64.0 * 1024.0, true);
+    // 慢速成功不得收缩:受限网络单连接慢是常态,收缩只会让总吞吐更差。
+    for _ in 0..10 {
+        adaptive.record(30.0 * 1024.0, true);
     }
-    assert!(adaptive.current_limit() <= 2, "持续低速应收缩");
+    assert_eq!(adaptive.current_limit(), 8, "慢速成功必须恢复到满并发");
 }
 
 #[tokio::test]

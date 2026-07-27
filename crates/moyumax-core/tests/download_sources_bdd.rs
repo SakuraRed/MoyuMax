@@ -86,6 +86,14 @@ fn m10_source_001_mirror_first_routes_to_mci_and_bmclapi() {
             "https://files.minecraftforge.net/maven/net/minecraftforge/forge/x.jar",
             "https://bmclapi2.bangbang93.com/maven/net/minecraftforge/forge/x.jar",
         ),
+        (
+            "https://edge.forgecdn.net/files/1/2/mod.jar",
+            "https://mod.mcimirror.top/files/1/2/mod.jar",
+        ),
+        (
+            "https://mediafilez.forgecdn.net/files/8183/529/mod.jar",
+            "https://mod.mcimirror.top/files/8183/529/mod.jar",
+        ),
     ];
     for (official, mirror) in cases {
         let SourceCandidates::Ready(candidates) =

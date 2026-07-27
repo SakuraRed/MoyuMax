@@ -157,17 +157,8 @@ pub struct AdaptiveConcurrency {
     max: usize,
     current: AtomicUsize,
     in_flight: AtomicUsize,
-    samples: std::sync::Mutex<std::collections::VecDeque<AdaptiveSample>>,
     healthy_streak: AtomicUsize,
 }
-
-#[derive(Debug, Clone, Copy)]
-struct AdaptiveSample {
-    bytes_per_sec: f64,
-}
-
-const ADAPTIVE_WINDOW: usize = 16;
-const ADAPTIVE_SLOW_BPS: f64 = 256.0 * 1024.0;
 
 impl AdaptiveConcurrency {
     #[must_use]
@@ -176,7 +167,6 @@ impl AdaptiveConcurrency {
             max,
             current: AtomicUsize::new(max.max(1)),
             in_flight: AtomicUsize::new(0),
-            samples: std::sync::Mutex::new(std::collections::VecDeque::new()),
             healthy_streak: AtomicUsize::new(0),
         }
     }
@@ -220,52 +210,24 @@ impl AdaptiveConcurrency {
         self.in_flight.fetch_sub(1, Ordering::AcqRel);
     }
 
-    /// 记录一次下载结果。失败或吞吐显著劣化时收缩,稳定健康时缓慢回升。
+    /// 记录一次下载结果。失败时减半收缩避让,健康时较快回升。
+    /// 慢速成功不再收缩:受限网络里单连接慢是常态(CDN 限速/跨网抖动),
+    /// 实测(2026-07,forgecdn 30 KB/s)收缩会把 24 并发打到 1,总吞吐雪崩;
+    /// 慢连接的正确应对恰好是更多并发与候选回退,而不是退让。
     pub fn record(&self, bytes_per_sec: f64, success: bool) {
-        let mut shrink = false;
-        let mut grow = false;
-        {
-            let mut samples = self
-                .samples
-                .lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner);
-            samples.push_back(AdaptiveSample { bytes_per_sec });
-            if samples.len() > ADAPTIVE_WINDOW {
-                samples.pop_front();
-            }
-            if !success {
-                shrink = true;
+        let _ = bytes_per_sec;
+        if success {
+            let streak = self.healthy_streak.fetch_add(1, Ordering::AcqRel) + 1;
+            if streak >= 2 {
+                let current = self.current.load(Ordering::Acquire);
+                let next = (current + 1).min(self.max);
+                self.current.store(next, Ordering::Release);
                 self.healthy_streak.store(0, Ordering::Release);
-            } else {
-                let recent: Vec<f64> = samples
-                    .iter()
-                    .rev()
-                    .take(4)
-                    .map(|sample| sample.bytes_per_sec)
-                    .collect();
-                let slow = recent.len() >= 4
-                    && recent
-                        .iter()
-                        .all(|bps| *bps > 0.0 && *bps < ADAPTIVE_SLOW_BPS);
-                if slow {
-                    shrink = true;
-                    self.healthy_streak.store(0, Ordering::Release);
-                } else {
-                    let streak = self.healthy_streak.fetch_add(1, Ordering::AcqRel) + 1;
-                    if streak >= 6 {
-                        grow = true;
-                        self.healthy_streak.store(0, Ordering::Release);
-                    }
-                }
             }
-        }
-        if shrink {
+        } else {
+            self.healthy_streak.store(0, Ordering::Release);
             let current = self.current.load(Ordering::Acquire);
             let next = (current / 2).max(1);
-            self.current.store(next, Ordering::Release);
-        } else if grow {
-            let current = self.current.load(Ordering::Acquire);
-            let next = (current + 1).min(self.max);
             self.current.store(next, Ordering::Release);
         }
     }

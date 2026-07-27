@@ -82,13 +82,113 @@ pub fn set_active_proxy_preference(preference: ProxyPreference) {
 pub(crate) fn http_client_builder() -> reqwest::ClientBuilder {
     let builder = reqwest::Client::builder();
     match active_proxy_preference() {
-        ProxyPreference::System => builder,
+        ProxyPreference::System => apply_system_proxy(builder),
         ProxyPreference::Direct => builder.no_proxy(),
         ProxyPreference::Custom { url } => match reqwest::Proxy::all(url.trim()) {
             Ok(proxy) => builder.proxy(proxy),
             // 写入时已校验，这里只是防御性回退：保持跟随系统而不是静默直连。
             Err(_) => builder,
         },
+    }
+}
+
+/// 「跟随系统」的实现。
+/// Windows:reqwest 的 system-proxy 会无视注册表 ProxyEnable=0 而直接使用
+/// 已配置的 ProxyServer(2026-07 实测:v2ray 类工具残留的 127.0.0.1:10808
+/// 被静默启用,直连完全正常的站点经它全部 TLS 失败)。因此改为自读注册表,
+/// 仅在 ProxyEnable=1 时应用 ProxyServer,未启用时明确 no_proxy。
+/// 注意:此时环境变量代理也不再生效(需要者请用自定义代理)。
+/// 非 Windows:保持 reqwest 默认(环境变量)。
+fn apply_system_proxy(builder: reqwest::ClientBuilder) -> reqwest::ClientBuilder {
+    #[cfg(windows)]
+    {
+        match windows_registry_proxy_server().and_then(|server| {
+            reqwest::Proxy::all(&server)
+                .map_err(|error| eprintln!("系统代理地址无效,改为直连:{error}"))
+                .ok()
+        }) {
+            Some(proxy) => builder.proxy(proxy),
+            None => builder.no_proxy(),
+        }
+    }
+    #[cfg(not(windows))]
+    {
+        builder
+    }
+}
+
+/// 从 ProxyServer 字符串解析可用代理地址(带 http:// 前缀)。
+/// 支持简单形式 `host:port` 与分组形式 `http=h:1;https=h:2`(优先 https)。
+/// 空白或无法解析返回 None。
+#[doc(hidden)]
+pub fn parse_registry_proxy_server(raw: &str) -> Option<String> {
+    let raw = raw.trim();
+    if raw.is_empty() {
+        return None;
+    }
+    let entry = raw
+        .split(';')
+        .find_map(|part| part.trim().strip_prefix("https="))
+        .or_else(|| {
+            raw.split(';')
+                .find_map(|part| part.trim().strip_prefix("http="))
+        })
+        .unwrap_or(raw);
+    let entry = entry.trim();
+    if entry.is_empty() || entry.contains(char::is_whitespace) {
+        return None;
+    }
+    Some(format!("http://{entry}"))
+}
+
+#[cfg(windows)]
+fn windows_registry_proxy_server() -> Option<String> {
+    use std::ffi::OsStr;
+    use std::os::windows::ffi::OsStrExt;
+
+    use windows_sys::Win32::System::Registry::{
+        HKEY_CURRENT_USER, RRF_RT_REG_DWORD, RRF_RT_REG_SZ, RegGetValueW,
+    };
+
+    fn wide(text: &str) -> Vec<u16> {
+        OsStr::new(text).encode_wide().chain(Some(0)).collect()
+    }
+
+    unsafe {
+        let subkey = wide(r"Software\Microsoft\Windows\CurrentVersion\Internet Settings");
+        let mut enable: u32 = 0;
+        let mut enable_size = std::mem::size_of::<u32>() as u32;
+        let status = RegGetValueW(
+            HKEY_CURRENT_USER,
+            subkey.as_ptr(),
+            wide("ProxyEnable").as_ptr(),
+            RRF_RT_REG_DWORD,
+            std::ptr::null_mut(),
+            (&mut enable as *mut u32).cast(),
+            &mut enable_size,
+        );
+        if status != 0 || enable == 0 {
+            return None;
+        }
+        let mut buffer = [0_u16; 256];
+        let mut buffer_size = (buffer.len() * 2) as u32;
+        let status = RegGetValueW(
+            HKEY_CURRENT_USER,
+            subkey.as_ptr(),
+            wide("ProxyServer").as_ptr(),
+            RRF_RT_REG_SZ,
+            std::ptr::null_mut(),
+            buffer.as_mut_ptr().cast(),
+            &mut buffer_size,
+        );
+        if status != 0 {
+            return None;
+        }
+        let len = buffer
+            .iter()
+            .position(|value| *value == 0)
+            .unwrap_or(buffer.len());
+        parse_registry_proxy_server(&String::from_utf16_lossy(&buffer[..len]))
     }
 }
 

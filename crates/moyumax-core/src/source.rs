@@ -91,7 +91,10 @@ pub fn classify_domain(url: &str) -> SourceDomain {
         SourceDomain::Modrinth
     } else if matches!(
         host,
-        "api.curseforge.com" | "edge.forgecdn.net" | "media.forgecdn.net"
+        "api.curseforge.com"
+            | "edge.forgecdn.net"
+            | "media.forgecdn.net"
+            | "mediafilez.forgecdn.net"
     ) {
         SourceDomain::CurseForge
     } else if matches!(
@@ -153,7 +156,9 @@ fn mci_mirror(url: &str) -> Option<String> {
         "api.modrinth.com" | "staging-api.modrinth.com" => Some(format!("{base}/modrinth{path}")),
         "cdn.modrinth.com" => Some(format!("{base}{path}")),
         "api.curseforge.com" => Some(format!("{base}/curseforge{path}")),
-        "edge.forgecdn.net" | "media.forgecdn.net" => Some(format!("{base}{path}")),
+        "edge.forgecdn.net" | "media.forgecdn.net" | "mediafilez.forgecdn.net" => {
+            Some(format!("{base}{path}"))
+        }
         _ => None,
     }
 }

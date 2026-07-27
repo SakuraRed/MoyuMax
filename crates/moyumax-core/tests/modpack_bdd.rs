@@ -491,3 +491,86 @@ fn encode_hex(bytes: impl AsRef<[u8]>) -> String {
     }
     encoded
 }
+
+#[test]
+fn m29_candidates_001_modrinth_cdn_first_with_forgecdn_fallback() {
+    use moyumax_core::{ModpackFile, SourcePolicy};
+
+    let file = ModpackFile {
+        relative_path: "mods/a.jar".to_owned(),
+        url: Some("https://mediafilez.forgecdn.net/files/1/2/a.jar".to_owned()),
+        urls: vec![
+            "https://mediafilez.forgecdn.net/files/1/2/a.jar".to_owned(),
+            "https://edge.forgecdn.net/files/1/2/a.jar".to_owned(),
+            "https://cdn.modrinth.com/data/ABC/versions/x/a.jar".to_owned(),
+        ],
+        sha1: None,
+        sha512: None,
+        size: 1,
+        cf_project_id: None,
+        cf_file_id: None,
+    };
+
+    let candidates =
+        AppService::modpack_file_candidates(&file, &SourcePolicy::MirrorFirst).unwrap();
+
+    // 实测 forgecdn 直连限速约 30 KB/s,Modrinth CDN 约快 20 倍,必须提前
+    // (镜像优先时首选为 MCI 镜像,官方优先时为 cdn.modrinth.com,均非 forgecdn)。
+    assert!(
+        !candidates[0].url.contains("forgecdn.net"),
+        "首选必须是 Modrinth 链路: {candidates:?}"
+    );
+    // forgecdn 仍保留为回退(经 MCI 镜像映射)。
+    assert!(
+        candidates
+            .iter()
+            .any(|candidate| candidate.url.contains("forgecdn.net")),
+        "forgecdn 回退必须保留: {candidates:?}"
+    );
+    // 按 URL 去重。
+    let urls: Vec<&str> = candidates
+        .iter()
+        .map(|candidate| candidate.url.as_str())
+        .collect();
+    let unique: std::collections::HashSet<&&str> = urls.iter().collect();
+    assert_eq!(urls.len(), unique.len(), "候选不得重复: {urls:?}");
+}
+
+#[test]
+fn m29_candidates_002_custom_policy_skips_uncovered_urls() {
+    use moyumax_core::{ModpackFile, SourcePolicy};
+
+    let file = ModpackFile {
+        relative_path: "mods/a.jar".to_owned(),
+        url: None,
+        urls: vec![
+            "https://mediafilez.forgecdn.net/files/1/2/a.jar".to_owned(),
+            "https://cdn.modrinth.com/data/ABC/versions/x/a.jar".to_owned(),
+        ],
+        sha1: None,
+        sha512: None,
+        size: 1,
+        cf_project_id: None,
+        cf_file_id: None,
+    };
+
+    // 自定义源只覆盖 Modrinth:forgecdn 备用地址被跳过。
+    let policy = SourcePolicy::Custom {
+        minecraft_base: None,
+        modrinth_base: Some("https://modrinth.example.com".to_owned()),
+    };
+    let candidates = AppService::modpack_file_candidates(&file, &policy).unwrap();
+    assert_eq!(candidates.len(), 1, "{candidates:?}");
+    assert!(
+        candidates[0]
+            .url
+            .starts_with("https://modrinth.example.com/")
+    );
+
+    // 两个域名都不覆盖:整个文件没有可用来源,必须报错而不是静默直连。
+    let policy_none = SourcePolicy::Custom {
+        minecraft_base: None,
+        modrinth_base: None,
+    };
+    assert!(AppService::modpack_file_candidates(&file, &policy_none).is_err());
+}
