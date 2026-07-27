@@ -656,7 +656,13 @@ impl ArtifactDownloader {
             {
                 SegmentedFetch::Completed { segment_count } => {
                     let partial_file = partial_path(&staged_file);
-                    verify_file(&partial_file, artifact).await?;
+                    if let Err(error) = verify_file(&partial_file, artifact).await {
+                        // 分段清单可能被污染(坏代理写入的脏分段):清理分段与
+                        // 合并产物,避免同一候选重试时循环同样的校验失败。
+                        let _ = fs::remove_dir_all(staged_file.with_extension("segments"));
+                        let _ = fs::remove_file(&partial_file);
+                        return Err(error);
+                    }
                     replace_file(&partial_file, &staged_file).await?;
                     return Ok(FetchReport {
                         result: DownloadResult {
@@ -844,11 +850,6 @@ impl ArtifactDownloader {
         let partial_file = partial_path(staged_file);
         let mut existing_length = file_length(&partial_file).await?;
         let mut forced_restart = false;
-        if artifact.size > 0 && existing_length > artifact.size {
-            truncate_file(&partial_file).await?;
-            existing_length = 0;
-            forced_restart = true;
-        }
         if existing_length > 0 && file_matches(&partial_file, artifact).await? {
             replace_file(&partial_file, staged_file).await?;
             return Ok(DownloadResult {
@@ -856,6 +857,13 @@ impl ArtifactDownloader {
                 disposition: DownloadDisposition::ReusedStaged,
                 bytes: artifact.size,
             });
+        }
+        if artifact.size > 0 && existing_length >= artifact.size {
+            // 尺寸达到声明值但校验未过:此前被坏代理/中间盒污染的脏分片。
+            // 带 Range 续传只会收到 416 或空 206,永远卡在同一文件——删除重来。
+            truncate_file(&partial_file).await?;
+            existing_length = 0;
+            forced_restart = true;
         }
 
         let started = Instant::now();

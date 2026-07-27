@@ -260,3 +260,32 @@ fn serve_request(
     stream.write_all(response_body).unwrap();
     stream.flush().unwrap();
 }
+
+#[tokio::test]
+async fn m3_execute_005_poisoned_full_partial_is_discarded_and_redownloaded() {
+    let body = b"fresh bytes from a healthy source".to_vec();
+    let server = TestServer::new(body.clone(), false);
+    let fixture = DownloadFixture::new(&server.url, &body);
+    // 与声明尺寸相同但内容被污染(坏代理/中间盒写入):
+    // 必须丢弃重下,而不是带 Range 续传(服务器只会 416 或空 206,永远卡死)。
+    let garbage = vec![b'x'; body.len()];
+    let partial = fixture.partial_path();
+    fs::create_dir_all(partial.parent().unwrap()).unwrap();
+    fs::write(&partial, &garbage).unwrap();
+
+    let result = fixture
+        .downloader
+        .fetch(&fixture.artifact, &fixture.staging, &fixture.shared)
+        .await
+        .expect("污染分片必须被丢弃并重新下载");
+
+    assert_eq!(result.disposition, DownloadDisposition::Restarted);
+    assert_eq!(fs::read(result.staged_file).unwrap(), body);
+    assert!(
+        server.requests().iter().all(|request| !request
+            .lines()
+            .any(|line| line.to_ascii_lowercase().starts_with("range:"))),
+        "污染分片不得再发 Range 续传:{:?}",
+        server.requests()
+    );
+}
