@@ -288,9 +288,9 @@ async fn m10_source_001_mirror_failure_falls_back_to_official_with_record() {
         .expect("镜像失败后应回退官方源");
 
     assert_eq!(report.final_label, "Modrinth 官方");
-    // 镜像连接失败属于瞬态网络错误:同一候选先重试 2 次(逐次记录),再回退官方源。
-    assert_eq!(report.attempts.len(), 4);
-    for attempt in &report.attempts[..3] {
+    // 镜像连接失败属于瞬态网络错误:同一候选先重试 3 次(逐次记录),再回退官方源。
+    assert_eq!(report.attempts.len(), 5);
+    for attempt in &report.attempts[..4] {
         assert_eq!(attempt.label, "MCI Mirror");
         assert!(
             matches!(
@@ -300,9 +300,9 @@ async fn m10_source_001_mirror_failure_falls_back_to_official_with_record() {
             "镜像的每次失败都必须记录"
         );
     }
-    assert_eq!(report.attempts[3].label, "Modrinth 官方");
+    assert_eq!(report.attempts[4].label, "Modrinth 官方");
     assert_eq!(
-        report.attempts[3].outcome,
+        report.attempts[4].outcome,
         moyumax_core::SourceAttemptOutcome::Success
     );
 }

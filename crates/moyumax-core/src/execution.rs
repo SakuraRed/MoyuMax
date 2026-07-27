@@ -158,6 +158,7 @@ pub struct AdaptiveConcurrency {
     current: AtomicUsize,
     in_flight: AtomicUsize,
     healthy_streak: AtomicUsize,
+    failure_streak: AtomicUsize,
 }
 
 impl AdaptiveConcurrency {
@@ -168,6 +169,7 @@ impl AdaptiveConcurrency {
             current: AtomicUsize::new(max.max(1)),
             in_flight: AtomicUsize::new(0),
             healthy_streak: AtomicUsize::new(0),
+            failure_streak: AtomicUsize::new(0),
         }
     }
 
@@ -210,13 +212,14 @@ impl AdaptiveConcurrency {
         self.in_flight.fetch_sub(1, Ordering::AcqRel);
     }
 
-    /// 记录一次下载结果。失败时减半收缩避让,健康时较快回升。
-    /// 慢速成功不再收缩:受限网络里单连接慢是常态(CDN 限速/跨网抖动),
-    /// 实测(2026-07,forgecdn 30 KB/s)收缩会把 24 并发打到 1,总吞吐雪崩;
-    /// 慢连接的正确应对恰好是更多并发与候选回退,而不是退让。
+    /// 记录一次下载结果。连续失败(≥3)才减半避让,健康时较快回升。
+    /// 慢速成功不收缩(受限网络单连接慢是常态,收缩只会让总吞吐更差);
+    /// 零星失败也不收缩——几千个小文件下载中偶发重置很常见,交给
+    /// 瞬态重试与候选回退处理,减半反而会把整体拖进小时级长尾。
     pub fn record(&self, bytes_per_sec: f64, success: bool) {
         let _ = bytes_per_sec;
         if success {
+            self.failure_streak.store(0, Ordering::Release);
             let streak = self.healthy_streak.fetch_add(1, Ordering::AcqRel) + 1;
             if streak >= 2 {
                 let current = self.current.load(Ordering::Acquire);
@@ -226,9 +229,13 @@ impl AdaptiveConcurrency {
             }
         } else {
             self.healthy_streak.store(0, Ordering::Release);
-            let current = self.current.load(Ordering::Acquire);
-            let next = (current / 2).max(1);
-            self.current.store(next, Ordering::Release);
+            let failures = self.failure_streak.fetch_add(1, Ordering::AcqRel) + 1;
+            if failures >= 3 {
+                let current = self.current.load(Ordering::Acquire);
+                let next = (current / 2).max(1);
+                self.current.store(next, Ordering::Release);
+                self.failure_streak.store(0, Ordering::Release);
+            }
         }
     }
 }
@@ -321,7 +328,7 @@ const SEGMENT_TARGET_BYTES: u64 = 16 * 1024 * 1024;
 const SEGMENT_MAX_COUNT: u32 = 8;
 
 /// 同一候选的瞬态失败重试退避（毫秒）：最多重试 2 次，节奏 0.5s、1.5s。
-const TRANSIENT_RETRY_BACKOFF_MS: [u64; 2] = [500, 1500];
+const TRANSIENT_RETRY_BACKOFF_MS: [u64; 3] = [500, 1500, 4000];
 
 fn segment_plan(total: u64, target_bytes: u64) -> Vec<(u64, u64)> {
     let count = total
@@ -911,6 +918,7 @@ impl ArtifactDownloader {
                 &self.rate_limiter,
             )
             .await?;
+            reject_html_substitute(&partial_file).await?;
             verify_file(&partial_file, artifact).await?;
             replace_file(&partial_file, staged_file).await?;
             Ok(DownloadResult {
@@ -950,6 +958,7 @@ impl ArtifactDownloader {
             return Err(http_status_error(url, response.status()));
         }
         write_response(response, partial_file, false, interrupt, &self.rate_limiter).await?;
+        reject_html_substitute(partial_file).await?;
         verify_file(partial_file, artifact).await?;
         replace_file(partial_file, staged_file).await?;
         Ok(DownloadResult {
@@ -2875,11 +2884,33 @@ fn extract_validated_archive(
 /// 其余状态（如 404）为确定性错误，直接切换候选。
 fn http_status_error(url: &str, status: StatusCode) -> CoreError {
     let message = format!("{url} 返回 HTTP {status}");
-    if status.is_server_error() {
+    if status.is_server_error() || status == StatusCode::TOO_MANY_REQUESTS {
         CoreError::TransientDownload(message)
     } else {
         CoreError::Download(message)
     }
+}
+
+/// 反爬/中间盒有时以 200 返回 HTML/JS 挑战页(实测 BMCLAPI 边缘节点返回
+/// `<script>function…` 且与真实文件同长)。这类内容绝不可能通过哈希校验,
+/// 按瞬态错误处理,让重试与候选回退有机会拿到真文件。
+async fn reject_html_substitute(partial_file: &Path) -> Result<()> {
+    let mut file = tokio::fs::File::open(partial_file).await?;
+    let mut head = [0_u8; 256];
+    let read = tokio::io::AsyncReadExt::read(&mut file, &mut head).await?;
+    let text = String::from_utf8_lossy(&head[..read]).to_lowercase();
+    let trimmed = text.trim_start();
+    if trimmed.starts_with("<!doctype")
+        || trimmed.starts_with("<html")
+        || trimmed.starts_with("<script")
+        || trimmed.starts_with("<head")
+        || trimmed.starts_with("<body")
+    {
+        return Err(CoreError::TransientDownload(
+            "来源返回了网页而非文件（可能触发了反爬验证）".to_owned(),
+        ));
+    }
+    Ok(())
 }
 
 /// 瞬态重试退避：等待可被暂停中断打断，中断时立即上抛 TaskPaused。

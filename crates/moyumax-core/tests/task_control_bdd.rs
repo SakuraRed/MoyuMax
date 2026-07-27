@@ -154,26 +154,25 @@ fn m14_task_004_pressure_shrinks_and_recovers_connections() {
     let adaptive = AdaptiveConcurrency::new(8);
     assert_eq!(adaptive.current_limit(), 8);
 
+    // 零星失败不收缩:交给瞬态重试与候选回退处理。
     adaptive.record(0.0, false);
-    assert_eq!(adaptive.current_limit(), 4, "失败应减半");
     adaptive.record(0.0, false);
-    assert_eq!(adaptive.current_limit(), 2);
+    assert_eq!(adaptive.current_limit(), 8, "零星失败不得收缩");
+    // 连续第三次失败才减半。
     adaptive.record(0.0, false);
-    assert_eq!(adaptive.current_limit(), 1, "收缩下限为 1");
+    assert_eq!(adaptive.current_limit(), 4, "连续失败应减半");
+    // 成功重置失败计数;连续两次健康回升一格。
+    adaptive.record(1.0, true);
     adaptive.record(0.0, false);
-    assert_eq!(adaptive.current_limit(), 1);
-
+    adaptive.record(0.0, false);
+    assert_eq!(adaptive.current_limit(), 4, "成功重置后零星失败仍不收缩");
     for _ in 0..2 {
-        adaptive.record(8.0 * 1024.0 * 1024.0, true);
+        adaptive.record(1.0, true);
     }
-    assert_eq!(adaptive.current_limit(), 2, "连续健康两次回升一格");
-    for _ in 0..2 {
-        adaptive.record(8.0 * 1024.0 * 1024.0, true);
-    }
-    assert_eq!(adaptive.current_limit(), 3);
+    assert_eq!(adaptive.current_limit(), 5, "连续健康两次回升一格");
 
-    // 慢速成功不得收缩:受限网络单连接慢是常态,收缩只会让总吞吐更差。
-    for _ in 0..10 {
+    // 慢速成功不得收缩,且能恢复到满并发。
+    for _ in 0..6 {
         adaptive.record(30.0 * 1024.0, true);
     }
     assert_eq!(adaptive.current_limit(), 8, "慢速成功必须恢复到满并发");
@@ -838,7 +837,7 @@ async fn m33_task_009_retry_budget_is_bounded() {
         .expect_err("持续 500 应在重试预算内放弃");
 
     assert!(error.to_string().contains("500"));
-    assert_eq!(server.hits(), 3, "同一候选最多重试 2 次(共 3 次尝试)");
+    assert_eq!(server.hits(), 4, "同一候选最多重试 3 次(共 4 次尝试)");
 }
 
 #[tokio::test]
@@ -944,6 +943,10 @@ enum FlakyMode {
     ServerErrorThenOk,
     /// 首次声明超长 Content-Length 后提前关闭(断流),之后 200。
     TruncatedThenOk,
+    /// 首次 429,之后 200。
+    TooManyRequestsThenOk,
+    /// 首次返回 HTML 挑战页(反爬),之后 200。
+    HtmlThenOk,
     AlwaysNotFound,
     AlwaysServerError,
     /// 始终 200,但返回与预期等长的错误字节(校验失败)。
@@ -1031,6 +1034,24 @@ fn serve_flaky(mut stream: TcpStream, mode: FlakyMode, body: &[u8], hits: &Atomi
                 }
             }
         }
+        FlakyMode::TooManyRequestsThenOk if hit == 1 => {
+            write!(
+                stream,
+                "HTTP/1.1 429 Too Many Requests\r\nContent-Length: 17\r\nConnection: close\r\n\r\nToo Many Requests"
+            )
+            .unwrap();
+        }
+        FlakyMode::HtmlThenOk if hit == 1 => {
+            let page = b"<script>function a(a){for(var b=0;b<1;b++){}}</script>";
+            write!(
+                stream,
+                "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                page.len()
+            )
+            .unwrap();
+            let _ = stream.write_all(page);
+            let _ = stream.flush();
+        }
         FlakyMode::WrongBody => {
             let wrong = vec![0xAB_u8; body.len()];
             write!(
@@ -1053,4 +1074,57 @@ fn serve_flaky(mut stream: TcpStream, mode: FlakyMode, body: &[u8], hits: &Atomi
             let _ = stream.flush();
         }
     }
+}
+
+#[tokio::test]
+async fn m33_task_011_too_many_requests_retries_same_candidate() {
+    let body = b"asset bytes after rate limit".to_vec();
+    let server = FlakyServer::new(FlakyMode::TooManyRequestsThenOk, body.clone());
+    let directory = TempDir::new().unwrap();
+    let artifact = artifact(&server.url("/rate.bin"), "rate.bin", &body);
+
+    let report = ArtifactDownloader::new(4)
+        .unwrap()
+        .fetch_with_policy(
+            &artifact,
+            &directory.path().join("staging"),
+            &directory.path().join("shared"),
+            &SourcePolicy::MirrorFirst,
+            None,
+        )
+        .await
+        .expect("429 属瞬态错误,重试后应成功");
+
+    assert_eq!(server.hits(), 2, "首次 429 应在同一候选重试一次");
+    assert_eq!(report.attempts.len(), 2);
+    assert_eq!(report.attempts[1].outcome, SourceAttemptOutcome::Success);
+}
+
+#[tokio::test]
+async fn m33_task_012_html_challenge_page_retries_then_succeeds() {
+    let body = b"\x4f\x67\x67\x53 real binary object bytes".to_vec();
+    let server = FlakyServer::new(FlakyMode::HtmlThenOk, body.clone());
+    let directory = TempDir::new().unwrap();
+    let artifact = artifact(&server.url("/object.bin"), "object.bin", &body);
+
+    let report = ArtifactDownloader::new(4)
+        .unwrap()
+        .fetch_with_policy(
+            &artifact,
+            &directory.path().join("staging"),
+            &directory.path().join("shared"),
+            &SourcePolicy::MirrorFirst,
+            None,
+        )
+        .await
+        .expect("HTML 挑战页按瞬态重试后应拿到真文件");
+
+    assert_eq!(server.hits(), 2, "挑战页应在同一候选重试一次");
+    match &report.attempts[0].outcome {
+        SourceAttemptOutcome::Failed { error } => {
+            assert!(error.contains("网页"), "首次失败应说明返回了网页:{error}");
+        }
+        other => panic!("首次尝试应记录失败:{other:?}"),
+    }
+    assert_eq!(report.attempts[1].outcome, SourceAttemptOutcome::Success);
 }

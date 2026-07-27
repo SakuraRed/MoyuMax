@@ -2089,11 +2089,12 @@ async fn create_modpack_instance(
         .enqueue_install_task(&request)
         .map_err(|error| error.to_string())?;
     coordinator.submit_install(service.clone(), task.id.clone());
-    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(40 * 60);
+    // 不做硬性总时长死线:慢网下载可以很久;改为停滞检测——进度字节
+    // 在窗口内没有任何推进才判卡死(处理器 CPU 阶段无字节推进属正常,
+    // 窗口放宽到 15 分钟),报错必须带上阶段与当前项。
+    const STALL_LIMIT: std::time::Duration = std::time::Duration::from_secs(15 * 60);
+    let mut last_progress: Option<(u64, std::time::Instant)> = None;
     loop {
-        if std::time::Instant::now() > deadline {
-            return Err("游戏安装超时".to_owned());
-        }
         let tasks = service
             .list_install_tasks()
             .map_err(|error| error.to_string())?;
@@ -2111,11 +2112,37 @@ async fn create_modpack_instance(
                     .unwrap_or_else(|| "游戏安装失败".to_owned());
                 return Err(format!("游戏安装失败：{summary}"));
             }
+            moyumax_core::TaskState::Cancelled => {
+                return Err("游戏安装任务已取消".to_owned());
+            }
             _ => {
+                let completed = current.progress.completed_bytes;
+                let now = std::time::Instant::now();
+                match last_progress {
+                    Some((previous, since)) if previous == completed => {
+                        if now.duration_since(since) > STALL_LIMIT {
+                            let stage = current
+                                .current_stage
+                                .map(|stage| format!("{stage:?}"))
+                                .unwrap_or_else(|| "未知".to_owned());
+                            let item = current
+                                .progress
+                                .current_item
+                                .clone()
+                                .unwrap_or_else(|| "无当前项".to_owned());
+                            // 判卡死后取消任务,避免遗留 running 僵尸占用恢复队列。
+                            let _ = service.cancel_install_task(&task.id);
+                            return Err(format!(
+                                "游戏安装停滞超过 15 分钟（阶段 {stage}，当前项 {item}，进度 {completed} 字节）"
+                            ));
+                        }
+                    }
+                    _ => last_progress = Some((completed, now)),
+                }
                 emit_modpack_progress(
                     app,
                     "game",
-                    current.progress.completed_bytes,
+                    completed,
                     current.progress.total_bytes.unwrap_or(0),
                     &current
                         .progress
