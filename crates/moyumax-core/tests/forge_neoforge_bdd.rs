@@ -190,6 +190,20 @@ async fn m12_loader_003_neoforge_processors_expand_module_placeholders() {
     let calls = invocations.lock().unwrap();
     assert_eq!(calls.len(), 6, "NeoForge 客户端链共 6 个处理器");
     assert!(calls[3].args.iter().any(|arg| arg == "--slim"));
+    // MCP_DATA 的 [neoform@zip] 必须被解析为实际库路径,不得原样传给处理器。
+    assert!(
+        calls[0]
+            .args
+            .iter()
+            .any(|arg| arg.ends_with("neoform-test-release.zip")),
+        "方括号坐标必须解析成路径: {:?}",
+        calls[0].args
+    );
+    assert!(
+        calls[0].args.iter().all(|arg| !arg.contains('[')),
+        "不允许残留方括号坐标: {:?}",
+        calls[0].args
+    );
     let runtime: Value = serde_json::from_str(
         &fs::read_to_string(Path::new(&instance.root_directory).join(".moyumax/runtime.json"))
             .unwrap(),
@@ -356,6 +370,8 @@ enum PatchOutcome {
     Corrupted,
 }
 
+const NEOFORM_BYTES: &[u8] = b"neoform-zip-bytes";
+
 struct ForgeFixture {
     _directory: TempDir,
     data_directory: PathBuf,
@@ -439,6 +455,10 @@ impl ForgeFixture {
                 (
                     "/net/minecraftforge/servertool/1.0.0/servertool-1.0.0.jar".to_owned(),
                     server_tool_jar.clone(),
+                ),
+                (
+                    "/net/neoforged/neoform/test-release/neoform-test-release.zip".to_owned(),
+                    NEOFORM_BYTES.to_vec(),
                 ),
                 (
                     "/net/minecraftforge/forge/test-release-58.1.20/forge-test-release-58.1.20-installer.jar"
@@ -709,7 +729,10 @@ fn neoforge_profile(base: &str, tool_jar: &[u8]) -> Value {
             {"jar": "net.minecraftforge:installertools:1.4.3", "classpath": [],
              "args": ["--clean", "{MC_SRG}", "--output", "{PATCHED}", "--apply", "{BINPATCH}"]}
         ],
-        "libraries": [profile_library(base, "net.minecraftforge:installertools:1.4.3", tool_jar)]
+        "libraries": [
+            profile_library(base, "net.minecraftforge:installertools:1.4.3", tool_jar),
+            profile_library(base, "net.neoforged:neoform:test-release@zip", NEOFORM_BYTES)
+        ]
     })
 }
 

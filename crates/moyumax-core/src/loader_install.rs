@@ -419,7 +419,19 @@ pub fn plan_loader_processors(
         let args = processor
             .args
             .iter()
-            .map(|argument| expand_placeholders(argument, &placeholders))
+            .map(|argument| {
+                // 直接方括号坐标(installertools 约定由启动器替换成实际路径,
+                // 实测 NeoForge MCP_DATA 的 --input 就带 [neoform@zip])。
+                if argument.starts_with('[') && argument.ends_with(']') {
+                    let coordinate = MavenCoordinate::parse(&argument[1..argument.len() - 1])?;
+                    return Ok(path_text(&resolve_library_jar(
+                        library_dir,
+                        shared_library_dir,
+                        &coordinate,
+                    )?));
+                }
+                expand_placeholders(argument, &placeholders)
+            })
             .collect::<Result<Vec<_>>>()?;
         invocations.push(ProcessorInvocation {
             jars,
