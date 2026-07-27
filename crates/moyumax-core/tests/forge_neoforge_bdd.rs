@@ -124,15 +124,21 @@ async fn m12_loader_002_forge_processors_run_to_verified_instance() {
         classpath.iter().any(|entry| entry
             .as_str()
             .unwrap()
-            .contains("forge-test-release-58.1.20-client")),
-        "PATCHED 必须进入 classpath: {classpath:?}"
+            .contains("forge-test-release-58.1.20-universal")),
+        "universal 必须进入 classpath: {classpath:?}"
     );
     assert!(
-        classpath.iter().any(|entry| entry
+        classpath.iter().all(|entry| !entry
             .as_str()
             .unwrap()
-            .contains("forge-test-release-58.1.20-universal")),
-        "version.json 运行时库必须进入 classpath: {classpath:?}"
+            .contains("forge-test-release-58.1.20-client")),
+        "补丁 JAR 不得进入 classpath(经 FML production client provider 加载): {classpath:?}"
+    );
+    assert!(
+        classpath
+            .iter()
+            .all(|entry| !entry.as_str().unwrap().contains("/versions/")),
+        "原版客户端 JAR 不得进入 Forge/NeoForge classpath: {classpath:?}"
     );
     for banned in [
         "installertools",

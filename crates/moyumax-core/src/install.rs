@@ -20,6 +20,11 @@ pub enum ArtifactKind {
     /// 加载器安装器的构建期库(仅供运行安装器处理器,绝不进入游戏运行时
     /// classpath——实测 NeoForge 安装器的 asm 9.3 与运行时 asm 9.8 冲突)。
     InstallerLibrary,
+    /// 处理器产出的补丁游戏 JAR:运行时需要(经 FML production client
+    /// provider 从 libraries 目录加载),但不得进入运行时 classpath——
+    /// 它与 universal 同为 neoforge 模块,同时上 classpath 必然
+    /// ResolutionException(实测 NeoForge 21.1.233)。
+    PatchedGame,
     NativeLibrary,
     AssetIndex,
     AssetObject,

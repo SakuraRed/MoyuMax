@@ -892,6 +892,9 @@ struct RuntimeManifest {
     working_directory: String,
     natives_directory: String,
     classpath: Vec<String>,
+    /// Forge/NeoForge 的补丁游戏 JAR(经 FML provider 加载,不在 classpath 上)。
+    #[serde(default)]
+    patched_game: Option<String>,
     game_metadata: Value,
     loader_profile: Option<Value>,
 }
@@ -944,8 +947,12 @@ pub fn prepare_launch_from_runtime(
         )));
     }
 
-    let mut classpath_entries =
-        resolve_classpath(&runtime.classpath, &runtime.game_version, &shared_store)?;
+    let mut classpath_entries = resolve_classpath(
+        &runtime.classpath,
+        &runtime.game_version,
+        &shared_store,
+        runtime.patched_game.as_deref(),
+    )?;
     let has_modern_native = classpath_entries.iter().any(|path| {
         let text = path.to_string_lossy();
         text.ends_with("natives-windows.jar")
@@ -1262,6 +1269,7 @@ fn resolve_classpath(
     entries: &[String],
     game_version: &str,
     shared_store: &Path,
+    patched_game: Option<&str>,
 ) -> Result<Vec<PathBuf>> {
     if entries.is_empty() {
         return Err(CoreError::Launch("运行时 classpath 为空".to_owned()));
@@ -1285,12 +1293,18 @@ fn resolve_classpath(
         resolved.push(path);
     }
     let expected = format!("minecraft/versions/{game_version}/{game_version}.jar");
-    if !entries.iter().any(|entry| entry == &expected) {
-        return Err(CoreError::Launch(format!(
-            "classpath 缺少游戏客户端：{expected}"
-        )));
+    if entries.iter().any(|entry| entry == &expected) {
+        return Ok(resolved);
     }
-    Ok(resolved)
+    // Forge/NeoForge:游戏内容来自补丁 JAR(FML 经 provider 加载),必须存在。
+    if let Some(patched) = patched_game {
+        let path = safe_relative_path(shared_store, patched, "补丁游戏 JAR")?;
+        require_file(&path, "补丁游戏 JAR")?;
+        return Ok(resolved);
+    }
+    Err(CoreError::Launch(format!(
+        "classpath 缺少游戏客户端：{expected}"
+    )))
 }
 
 fn join_classpath(entries: &[PathBuf]) -> Result<String> {

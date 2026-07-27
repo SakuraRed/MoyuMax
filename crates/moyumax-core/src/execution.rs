@@ -2050,7 +2050,7 @@ impl InstallExecutor {
         crate::run_loader_processors(&plan, runner.as_ref(), &work_dir)?;
         let patched_metadata = std::fs::metadata(&plan.patched_output)?;
         let patched_artifact = ResolvedArtifact {
-            kind: ArtifactKind::LoaderLibrary,
+            kind: ArtifactKind::PatchedGame,
             relative_path: format!(
                 "minecraft/libraries/{}",
                 plan.patched_coordinate.relative_path()
@@ -2600,13 +2600,21 @@ fn build_runtime_manifest(
     java_home: &str,
     downloads: &[(ResolvedArtifact, FetchReport)],
 ) -> serde_json::Value {
+    // Forge/NeoForge 的游戏内容来自处理器产出的补丁 JAR(FML 经
+    // -DlibraryDirectory 的 production client provider 加载),
+    // 原版客户端 JAR 与补丁 JAR 都不上 classpath:
+    // - 原版 JAR 与补丁内容重复;
+    // - 补丁 JAR 与 universal 同为 neoforge 自动模块,同载必冲突(实测)。
+    let exclude_game_client = matches!(
+        task.plan.loader,
+        ResolvedLoader::Forge { .. } | ResolvedLoader::NeoForge { .. }
+    );
     let classpath: Vec<&str> = downloads
         .iter()
-        .filter(|(artifact, _)| {
-            matches!(
-                artifact.kind,
-                ArtifactKind::GameClient | ArtifactKind::Library | ArtifactKind::LoaderLibrary
-            )
+        .filter(|(artifact, _)| match artifact.kind {
+            ArtifactKind::GameClient => !exclude_game_client,
+            ArtifactKind::Library | ArtifactKind::LoaderLibrary => true,
+            _ => false,
         })
         .map(|(artifact, _)| artifact.relative_path.as_str())
         .collect();
@@ -2630,6 +2638,10 @@ fn build_runtime_manifest(
             Some(version_json.clone()),
         ),
     };
+    let patched_game = downloads
+        .iter()
+        .find(|(artifact, _)| artifact.kind == ArtifactKind::PatchedGame)
+        .map(|(artifact, _)| artifact.relative_path.clone());
     serde_json::json!({
         "schemaVersion": 1,
         "gameVersion": task.plan.game.version.id,
@@ -2639,6 +2651,7 @@ fn build_runtime_manifest(
         "workingDirectory": ".minecraft",
         "nativesDirectory": "natives",
         "classpath": classpath,
+        "patchedGame": patched_game,
         "gameMetadata": task.plan.game.metadata,
         "loaderProfile": loader_profile,
         "isolation": task.plan.isolation,
@@ -2733,6 +2746,17 @@ fn version_json_library_artifacts(
 
 /// 解析 install_profile 中的处理器库下载工件。
 fn profile_library_artifacts(profile: &crate::InstallProfile) -> Result<Vec<ResolvedArtifact>> {
+    // 处理器引用的 jar 是构建期依赖,只供安装器运行,不进入运行时 classpath;
+    // 其余 profile 库(尤其 universal)是运行时必需——FML 要从 classpath
+    // 定位 neoforge mod(实测 universal 缺失会直接找不到 mod)。
+    let build_only: std::collections::HashSet<&str> = profile
+        .processors
+        .iter()
+        .flat_map(|processor| {
+            std::iter::once(processor.jar.as_str())
+                .chain(processor.classpath.iter().map(String::as_str))
+        })
+        .collect();
     let mut artifacts = Vec::with_capacity(profile.libraries.len());
     for library in &profile.libraries {
         let relative = maven_path(&library.name)?;
@@ -2762,8 +2786,13 @@ fn profile_library_artifacts(profile: &crate::InstallProfile) -> Result<Vec<Reso
                 library.name
             )));
         }
+        let kind = if build_only.contains(library.name.as_str()) {
+            ArtifactKind::InstallerLibrary
+        } else {
+            ArtifactKind::LoaderLibrary
+        };
         artifacts.push(ResolvedArtifact {
-            kind: ArtifactKind::InstallerLibrary,
+            kind,
             relative_path: format!("minecraft/libraries/{relative}"),
             url: artifact.url.clone(),
             size: artifact.size,
