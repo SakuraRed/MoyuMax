@@ -1128,3 +1128,91 @@ async fn m33_task_012_html_challenge_page_retries_then_succeeds() {
     }
     assert_eq!(report.attempts[1].outcome, SourceAttemptOutcome::Success);
 }
+
+#[test]
+fn m33_task_013_cancel_and_delete_release_java_environment_claim() {
+    let fixture = TaskFixture::new();
+    let env_id = "java-env-shared";
+    let java_home = fixture
+        .data_directory()
+        .join("store/java/azul-zulu/21.0.12+8/x64");
+    Connection::open(&fixture.database_path)
+        .unwrap()
+        .execute(
+            "
+            INSERT INTO managed_java_environments (
+                id, distribution, full_version, architecture, home_directory, status
+            ) VALUES (?1, 'azul-zulu', '21.0.12+8', 'x64', ?2, 'installing')
+            ",
+            params![env_id, java_home.to_string_lossy()],
+        )
+        .unwrap();
+    let env_status = || {
+        Connection::open(&fixture.database_path)
+            .unwrap()
+            .query_row(
+                "SELECT status FROM managed_java_environments WHERE id = ?1",
+                params![env_id],
+                |row| row.get::<_, String>(0),
+            )
+            .unwrap()
+    };
+
+    // 有运行中的安装任务:活动安装者存在;取消后环境必须落为 failed。
+    let task = fixture.insert_install_task_row("running");
+    Connection::open(&fixture.database_path)
+        .unwrap()
+        .execute(
+            "INSERT INTO install_task_java (task_id, environment_id, action) VALUES (?1, ?2, 'install')",
+            params![task, env_id],
+        )
+        .unwrap();
+    assert!(
+        fixture.service.has_active_java_installer(env_id).unwrap(),
+        "运行中的安装任务必须计为活动安装者"
+    );
+    fixture.service.cancel_install_task(&task).unwrap();
+    assert_eq!(env_status(), "failed", "取消安装任务必须释放环境占用");
+    assert!(
+        !fixture.service.has_active_java_installer(env_id).unwrap(),
+        "取消后不再有活动安装者"
+    );
+
+    // 删除(终态任务)同样释放环境占用——用户删除失败任务后环境不得成为孤儿。
+    Connection::open(&fixture.database_path)
+        .unwrap()
+        .execute(
+            "UPDATE managed_java_environments SET status = 'planned' WHERE id = ?1",
+            params![env_id],
+        )
+        .unwrap();
+    let task = fixture.insert_install_task_row("failed");
+    Connection::open(&fixture.database_path)
+        .unwrap()
+        .execute(
+            "INSERT INTO install_task_java (task_id, environment_id, action) VALUES (?1, ?2, 'install')",
+            params![task, env_id],
+        )
+        .unwrap();
+    fixture.service.delete_install_task(&task).unwrap();
+    assert_eq!(env_status(), "failed", "删除安装任务必须释放环境占用");
+
+    // ready 环境不受取消/删除影响(防御:绝不动已就绪环境)。
+    Connection::open(&fixture.database_path)
+        .unwrap()
+        .execute(
+            "UPDATE managed_java_environments SET status = 'ready' WHERE id = ?1",
+            params![env_id],
+        )
+        .unwrap();
+    let task = fixture.insert_install_task_row("failed");
+    Connection::open(&fixture.database_path)
+        .unwrap()
+        .execute(
+            "INSERT INTO install_task_java (task_id, environment_id, action) VALUES (?1, ?2, 'install')",
+            params![task, env_id],
+        )
+        .unwrap();
+    fixture.service.delete_install_task(&task).unwrap();
+    assert_eq!(env_status(), "ready", "已就绪环境不得被改写");
+}

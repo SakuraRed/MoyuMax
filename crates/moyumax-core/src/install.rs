@@ -726,6 +726,28 @@ impl AppService {
             ",
             params![task_id],
         )?;
+        // 该任务若正负责安装共享 Java 环境,取消其职责:环境标记失败,
+        // 否则它会永远停在 installing/planned,后续任务走等待路径必然报错。
+        let java_install: Option<String> = transaction
+            .query_row(
+                "
+                SELECT environment_id FROM install_task_java
+                WHERE task_id = ?1 AND action = 'install'
+                ",
+                params![task_id],
+                |row| row.get(0),
+            )
+            .optional()?;
+        if let Some(environment_id) = java_install {
+            transaction.execute(
+                "
+                UPDATE managed_java_environments
+                SET status = 'failed'
+                WHERE id = ?1 AND status <> 'ready'
+                ",
+                params![environment_id],
+            )?;
+        }
         transaction.commit()?;
         Ok(())
     }
@@ -766,6 +788,28 @@ impl AppService {
         }
         if expected_staging.exists() {
             fs::remove_dir_all(&expected_staging)?;
+        }
+        // 该任务若曾负责安装共享 Java 环境,删除前解除环境占用,
+        // 否则环境停在 planned/installing 成为孤儿,后续任务无法安装。
+        let java_install: Option<String> = connection
+            .query_row(
+                "
+                SELECT environment_id FROM install_task_java
+                WHERE task_id = ?1 AND action = 'install'
+                ",
+                params![task_id],
+                |row| row.get(0),
+            )
+            .optional()?;
+        if let Some(environment_id) = java_install {
+            connection.execute(
+                "
+                UPDATE managed_java_environments
+                SET status = 'failed'
+                WHERE id = ?1 AND status <> 'ready'
+                ",
+                params![environment_id],
+            )?;
         }
         connection.execute("DELETE FROM install_tasks WHERE id = ?1", params![task_id])?;
         Ok(())
@@ -1152,6 +1196,24 @@ impl AppService {
             ));
         }
         Ok(())
+    }
+
+    /// 是否有活动任务(排队/运行/暂停/提交中)正在安装该共享 Java 环境。
+    /// 没有时说明环境是孤儿(任务已失败/取消/删除),等待路径应立即报错
+    /// 并引导重试,而不是空等。
+    #[doc(hidden)]
+    pub fn has_active_java_installer(&self, environment_id: &str) -> Result<bool> {
+        let count: i64 = self.connection()?.query_row(
+            "
+            SELECT COUNT(*) FROM install_task_java j
+            JOIN install_tasks t ON t.id = j.task_id
+            WHERE j.environment_id = ?1 AND j.action = 'install'
+              AND t.state IN ('queued', 'running', 'paused', 'committing')
+            ",
+            params![environment_id],
+            |row| row.get(0),
+        )?;
+        Ok(count > 0)
     }
 
     pub(crate) fn publish_ready_instance(

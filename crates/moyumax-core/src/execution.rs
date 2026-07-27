@@ -2090,19 +2090,50 @@ impl InstallExecutor {
                 environment_id,
                 target_directory,
             } => {
-                let environment = service
-                    .list_managed_java()?
-                    .into_iter()
-                    .find(|environment| environment.id == *environment_id)
-                    .ok_or_else(|| {
-                        CoreError::InvalidStoredState("等待的 Java 环境不存在".to_owned())
-                    })?;
-                if environment.status != JavaEnvironmentStatus::Ready {
-                    return Err(CoreError::InvalidStoredState(
-                        "共享 Java 环境尚未安装完成，请稍后重试".to_owned(),
-                    ));
+                // 另一任务正在安装同一身份的环境:真实等待其就绪(2s 轮询,
+                // 上限 20 分钟——慢网 JDK 下载可能很久);对方失败/被取消时
+                // 环境会转为 failed,此时报错引导重试(下次将按新安装解析)。
+                let wait_started = std::time::Instant::now();
+                let wait_limit = std::time::Duration::from_secs(20 * 60);
+                loop {
+                    let environment = service
+                        .list_managed_java()?
+                        .into_iter()
+                        .find(|environment| environment.id == *environment_id)
+                        .ok_or_else(|| {
+                            CoreError::InvalidStoredState("等待的 Java 环境不存在".to_owned())
+                        })?;
+                    match environment.status {
+                        JavaEnvironmentStatus::Ready => {
+                            return Ok((environment_id.clone(), target_directory.clone()));
+                        }
+                        JavaEnvironmentStatus::Planned | JavaEnvironmentStatus::Installing => {
+                            // 没有任何活动任务在安装它:孤儿环境,标失败后引导重试。
+                            if !service.has_active_java_installer(environment_id)? {
+                                let _ = service.mark_java_environment_status(
+                                    environment_id,
+                                    JavaEnvironmentStatus::Failed,
+                                );
+                                return Err(CoreError::InvalidStoredState(
+                                    "共享 Java 环境此前的安装未完成，请重新发起安装".to_owned(),
+                                ));
+                            }
+                            if wait_started.elapsed() > wait_limit {
+                                return Err(CoreError::InvalidStoredState(
+                                    "等待共享 Java 环境就绪超时（20 分钟）".to_owned(),
+                                ));
+                            }
+                            tokio::time::sleep(std::time::Duration::from_secs(2)).await;
+                        }
+                        JavaEnvironmentStatus::Missing
+                        | JavaEnvironmentStatus::Failed
+                        | JavaEnvironmentStatus::Deleted => {
+                            return Err(CoreError::InvalidStoredState(
+                                "共享 Java 环境此前的安装未完成，请重新发起安装".to_owned(),
+                            ));
+                        }
+                    }
                 }
-                Ok((environment_id.clone(), target_directory.clone()))
             }
             JavaPlanAction::Install {
                 environment_id,
