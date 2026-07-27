@@ -1993,6 +1993,7 @@ impl InstallExecutor {
         let download_staging = staging_directory.join("downloads");
         let library_dir = download_staging.join("minecraft/libraries");
         let work_dir = staging_directory.join("loader-work");
+        let shared_store = PathBuf::from(&task.plan.shared_store_directory);
         let installer_url = match &task.plan.loader {
             ResolvedLoader::Forge { installer_url, .. }
             | ResolvedLoader::NeoForge { installer_url, .. } => installer_url.clone(),
@@ -2002,15 +2003,24 @@ impl InstallExecutor {
             .rsplit('/')
             .next()
             .ok_or_else(|| CoreError::InvalidInstallRequest("安装器 URL 缺少文件名".to_owned()))?;
-        let installer_path = download_staging
-            .join("minecraft/loader-installers")
-            .join(file_name);
+        let installer_path = {
+            let staged = download_staging
+                .join("minecraft/loader-installers")
+                .join(file_name);
+            if staged.is_file() {
+                staged
+            } else {
+                // 安装器同样可能命中共享存储复用(此前任务已提交),不进暂存。
+                shared_store
+                    .join("minecraft/loader-installers")
+                    .join(file_name)
+            }
+        };
         if !installer_path.is_file() {
             return Err(CoreError::InvalidInstallRequest(
                 "安装器未完成下载，无法执行处理器".to_owned(),
             ));
         }
-        let shared_store = PathBuf::from(&task.plan.shared_store_directory);
         let minecraft_jar_relative =
             format!("minecraft/versions/{0}/{0}.jar", task.plan.game.version.id);
         let minecraft_jar = {
@@ -2025,6 +2035,7 @@ impl InstallExecutor {
             &profile,
             &installer_path,
             &library_dir,
+            &shared_store.join("minecraft/libraries"),
             &minecraft_jar,
             &task.plan.game.version.id,
             &work_dir,

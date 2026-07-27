@@ -355,11 +355,15 @@ pub struct LoaderInstallPlan {
 
 /// 依据 install_profile 构建客户端处理器执行计划。
 /// `library_dir` 为暂存区中的受管库根（与共享存储同构）,
+/// `shared_library_dir` 为共享存储库根:此前任务已提交共享的库会被本次
+/// 下载直接复用而不复制到暂存,查找处理器库必须带共享回退,否则必然
+/// 误报"处理器库缺失"(实测 jopt-simple 二次安装必现)。
 /// `minecraft_jar` 为官方客户端 JAR,`work_dir` 为处理器工作目录。
 pub fn plan_loader_processors(
     profile: &InstallProfile,
     installer: &Path,
     library_dir: &Path,
+    shared_library_dir: &Path,
     minecraft_jar: &Path,
     minecraft_version: &str,
     work_dir: &Path,
@@ -381,7 +385,14 @@ pub fn plan_loader_processors(
         let raw = sides.get("client").ok_or_else(|| {
             CoreError::InvalidInstallRequest(format!("install_profile 数据 {key} 缺少 client 取值"))
         })?;
-        let resolved = resolve_data_value(raw, installer, library_dir, work_dir)?;
+        // PATCHED 是处理器产物(输出),必须始终指向暂存库根:此前运行可能
+        // 已把同名产物提交进共享存储,回退过去会把本次产物写错位置。
+        let resolved = if key == "PATCHED" && raw.starts_with('[') && raw.ends_with(']') {
+            let coordinate = MavenCoordinate::parse(&raw[1..raw.len() - 1])?;
+            path_text(&library_dir.join(coordinate.relative_path()))
+        } else {
+            resolve_data_value(raw, installer, library_dir, shared_library_dir, work_dir)?
+        };
         placeholders.insert(key.clone(), resolved);
     }
 
@@ -391,18 +402,18 @@ pub fn plan_loader_processors(
             continue;
         }
         let jar_coordinate = MavenCoordinate::parse(&processor.jar)?;
-        let mut jars = vec![library_dir.join(jar_coordinate.relative_path())];
+        let mut jars = vec![resolve_library_jar(
+            library_dir,
+            shared_library_dir,
+            &jar_coordinate,
+        )?];
         for classpath in &processor.classpath {
             let coordinate = MavenCoordinate::parse(classpath)?;
-            jars.push(library_dir.join(coordinate.relative_path()));
-        }
-        for jar in &jars {
-            if !jar.is_file() {
-                return Err(CoreError::InvalidInstallRequest(format!(
-                    "处理器库缺失：{}",
-                    jar.display()
-                )));
-            }
+            jars.push(resolve_library_jar(
+                library_dir,
+                shared_library_dir,
+                &coordinate,
+            )?);
         }
         let main_class = read_main_class(&jars[0])?;
         let args = processor
@@ -451,15 +462,47 @@ pub fn run_loader_processors(
     verify_processor_output(&plan.patched_output, plan.patched_sha1.as_deref())
 }
 
+/// 解析处理器库 jar:暂存库根优先,缺失时回退共享存储(复用不复制)。
+fn resolve_library_jar(
+    library_dir: &Path,
+    shared_library_dir: &Path,
+    coordinate: &MavenCoordinate,
+) -> Result<PathBuf> {
+    let relative = coordinate.relative_path();
+    let staged = library_dir.join(&relative);
+    if staged.is_file() {
+        return Ok(staged);
+    }
+    let shared = shared_library_dir.join(&relative);
+    if shared.is_file() {
+        return Ok(shared);
+    }
+    Err(CoreError::InvalidInstallRequest(format!(
+        "处理器库缺失：{}（暂存与共享存储均无）",
+        staged.display()
+    )))
+}
+
 fn resolve_data_value(
     raw: &str,
     installer: &Path,
     library_dir: &Path,
+    shared_library_dir: &Path,
     work_dir: &Path,
 ) -> Result<String> {
     if raw.starts_with('[') && raw.ends_with(']') {
         let coordinate = MavenCoordinate::parse(&raw[1..raw.len() - 1])?;
-        return Ok(path_text(&library_dir.join(coordinate.relative_path())));
+        let staged = library_dir.join(coordinate.relative_path());
+        if staged.is_file() {
+            return Ok(path_text(&staged));
+        }
+        let shared = shared_library_dir.join(coordinate.relative_path());
+        if shared.is_file() {
+            // 输入型数据(映射表等)允许共享存储回退。
+            return Ok(path_text(&shared));
+        }
+        // 尚不存在的中间产物(处理链内自产数据与 PATCHED):保持暂存路径。
+        return Ok(path_text(&staged));
     }
     if raw.starts_with('/') {
         let target = work_dir.join("data").join(raw.trim_start_matches('/'));

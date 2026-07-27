@@ -934,3 +934,52 @@ fn serve_bytes(mut stream: TcpStream, responses: &HashMap<String, Vec<u8>>) {
     let _ = stream.write_all(body);
     let _ = stream.flush();
 }
+
+#[tokio::test]
+async fn m12_loader_006_second_install_resolves_processor_jars_from_shared_store() {
+    let fixture = ForgeFixture::new(PatchOutcome::Correct);
+    // 第一次安装:全部工件(含处理器库)提交进共享存储。
+    let first = fixture
+        .service
+        .enqueue_install_task(&fixture.request)
+        .unwrap();
+    let runner = fake_runner(
+        Arc::new(Mutex::new(Vec::new())),
+        fixture.patched_bytes.clone(),
+    );
+    InstallExecutor::new(4)
+        .unwrap()
+        .with_asset_base_url(fixture.server.url("/objects"))
+        .unwrap()
+        .with_processor_runner(runner)
+        .execute_task(&fixture.service, &first.id)
+        .await
+        .expect("第一次安装必须完成");
+
+    // 第二次安装(新实例名):处理器库全部命中共享复用、不进暂存;
+    // 计划处理器时必须能从共享存储解析(此前必然误报"处理器库缺失")。
+    let mut second_request = fixture.request.clone();
+    second_request.instance_name = "第二次 Forge 安装".to_owned();
+    let second = fixture
+        .service
+        .enqueue_install_task(&second_request)
+        .unwrap();
+    let runner = fake_runner(
+        Arc::new(Mutex::new(Vec::new())),
+        fixture.patched_bytes.clone(),
+    );
+    let instance = InstallExecutor::new(4)
+        .unwrap()
+        .with_asset_base_url(fixture.server.url("/objects"))
+        .unwrap()
+        .with_processor_runner(runner)
+        .execute_task(&fixture.service, &second.id)
+        .await
+        .expect("共享存储中的处理器库必须参与第二次安装");
+
+    assert_eq!(instance.loader_kind, "forge");
+    let staged_jar = Path::new(&second.staging_directory).join(
+        "downloads/minecraft/libraries/net/minecraftforge/binarypatcher/1.2.0/binarypatcher-1.2.0.jar",
+    );
+    assert!(!staged_jar.exists(), "复用共享存储时处理器库不应复制到暂存");
+}
