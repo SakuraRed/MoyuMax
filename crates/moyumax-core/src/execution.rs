@@ -1891,7 +1891,7 @@ impl InstallExecutor {
                         CoreError::InvalidInstallRequest("安装器 URL 缺少文件名".to_owned())
                     })?;
                 artifacts.push(ResolvedArtifact {
-                    kind: ArtifactKind::LoaderLibrary,
+                    kind: ArtifactKind::InstallerLibrary,
                     relative_path: format!("minecraft/loader-installers/{file_name}"),
                     url: installer_url.clone(),
                     size: *installer_size,
@@ -2763,7 +2763,7 @@ fn profile_library_artifacts(profile: &crate::InstallProfile) -> Result<Vec<Reso
             )));
         }
         artifacts.push(ResolvedArtifact {
-            kind: ArtifactKind::LoaderLibrary,
+            kind: ArtifactKind::InstallerLibrary,
             relative_path: format!("minecraft/libraries/{relative}"),
             url: artifact.url.clone(),
             size: artifact.size,

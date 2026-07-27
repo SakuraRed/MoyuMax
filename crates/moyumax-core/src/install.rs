@@ -17,6 +17,9 @@ pub enum ArtifactKind {
     GameClient,
     Library,
     LoaderLibrary,
+    /// 加载器安装器的构建期库(仅供运行安装器处理器,绝不进入游戏运行时
+    /// classpath——实测 NeoForge 安装器的 asm 9.3 与运行时 asm 9.8 冲突)。
+    InstallerLibrary,
     NativeLibrary,
     AssetIndex,
     AssetObject,

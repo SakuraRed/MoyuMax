@@ -127,6 +127,26 @@ async fn m12_loader_002_forge_processors_run_to_verified_instance() {
             .contains("forge-test-release-58.1.20-client")),
         "PATCHED 必须进入 classpath: {classpath:?}"
     );
+    assert!(
+        classpath.iter().any(|entry| entry
+            .as_str()
+            .unwrap()
+            .contains("forge-test-release-58.1.20-universal")),
+        "version.json 运行时库必须进入 classpath: {classpath:?}"
+    );
+    for banned in [
+        "installertools",
+        "binarypatcher",
+        "servertool",
+        "loader-installers",
+    ] {
+        assert!(
+            classpath
+                .iter()
+                .all(|entry| !entry.as_str().unwrap().contains(banned)),
+            "安装器构建期库不得进入运行时 classpath({banned}): {classpath:?}"
+        );
+    }
     assert_eq!(
         fixture.service.list_install_tasks().unwrap()[0].state,
         TaskState::Completed
