@@ -164,6 +164,8 @@
     void loadCatalog();
     const unlisten = runtime.onModpackProgress((event) => {
       packProgress = event;
+      // 切页重挂载:进度事件仍在流动即视为安装进行中,恢复进度展示。
+      if (!packDone && !packError) packInstalling = true;
     });
     return () => {
       unlisten();
@@ -178,6 +180,17 @@
     view = "loading";
     errorMessage = "";
     try {
+      // 页面重挂载恢复:有进行中的安装任务时直接回到排队视图,
+      // 任务本体在服务端持续运行,不因切换页面"消失"。
+      const active = (await runtime.getInstallTasks())
+        .filter((candidate) => ["queued", "running", "committing"].includes(candidate.state))
+        .sort((a, b) => b.updatedAtUnixSeconds - a.updatedAtUnixSeconds)[0];
+      if (active) {
+        task = active;
+        view = "queued";
+        startTaskPolling();
+        return;
+      }
       catalog = await runtime.getGameVersionCatalog();
       const recommended = recommendedVersion(catalog.versions);
       if (!recommended) throw new Error(t("install.error.noVersions"));
@@ -570,6 +583,11 @@
             {#if packError}
               <div class="error-block" role="alert"><strong>{t("modpack.errorTitle")}</strong><span>{packError}</span></div>
             {/if}
+            {#if packInstalling && packProgress}
+              <div class="modpack-progress" role="status">
+                <span>{packProgress.stage === "game" ? t("modpack.stageGame") : t("modpack.stageFiles")} {packProgress.current}/{packProgress.total} · {packProgress.item}</span>
+              </div>
+            {/if}
             {#if packDone}
               <div class="content-queued" role="status">
                 <div>
@@ -590,11 +608,6 @@
                   .replace("{loaderVersion}", packPreview.preview.loaderVersion)
                   .replace("{count}", String(packPreview.preview.fileCount))
                   .replace("{size}", formatBytes(packPreview.preview.totalBytes))}</p>
-                {#if packInstalling && packProgress}
-                  <div class="modpack-progress" role="status">
-                    <span>{packProgress.stage === "game" ? t("modpack.stageGame") : t("modpack.stageFiles")} {packProgress.current}/{packProgress.total} · {packProgress.item}</span>
-                  </div>
-                {/if}
                 <div class="local-content-actions">
                   <button class="button primary compact" disabled={packInstalling} onclick={() => void confirmPackInstall()}>
                     {packInstalling ? t("modpack.installing") : t("modpack.confirmInstall")}

@@ -314,6 +314,8 @@ fn encode_hex(bytes: impl AsRef<[u8]>) -> String {
 }
 
 /// 生产处理器运行器：用托管 Java 执行 `java -cp jars MainClass args`。
+/// Windows 下必须 CREATE_NO_WINDOW,否则每个处理器都会弹出一个
+/// 控制台黑窗(实测 NeoForge 链连续弹六个)。
 #[must_use]
 pub fn java_processor_runner(java_executable: PathBuf) -> Box<ProcessorRunner> {
     Box::new(move |invocation: &ProcessorInvocation, work_dir: &Path| {
@@ -323,12 +325,20 @@ pub fn java_processor_runner(java_executable: PathBuf) -> Box<ProcessorRunner> {
             .map(|jar| jar.to_string_lossy().into_owned())
             .collect::<Vec<_>>()
             .join(";");
-        let output = std::process::Command::new(&java_executable)
+        let mut command = std::process::Command::new(&java_executable);
+        command
             .arg("-cp")
             .arg(&classpath)
             .arg(&invocation.main_class)
             .args(&invocation.args)
-            .current_dir(work_dir)
+            .current_dir(work_dir);
+        #[cfg(windows)]
+        {
+            use std::os::windows::process::CommandExt;
+            const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+            command.creation_flags(CREATE_NO_WINDOW);
+        }
+        let output = command
             .output()
             .map_err(|error| CoreError::Launch(format!("处理器启动失败：{error}")))?;
         if !output.status.success() {

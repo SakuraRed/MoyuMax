@@ -196,6 +196,9 @@ impl AppService {
         service.recover_interrupted_server_writes()?;
         service.recover_java_deletions()?;
         service.generate_missing_crash_reports()?;
+        // 已完成任务不堆积在队列里:启动时清理上一轮的任务与暂存。
+        service.purge_completed_install_tasks()?;
+        service.purge_completed_content_tasks()?;
         // 启动时把持久化的代理偏好读入全局，之后构造的 HTTP 客户端即按偏好工作。
         let proxy_preference = service.proxy_preference()?;
         set_active_proxy_preference(proxy_preference);

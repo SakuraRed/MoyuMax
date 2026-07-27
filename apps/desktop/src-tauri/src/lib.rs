@@ -30,6 +30,12 @@ use tauri::{Emitter, Manager, State};
 use tokio::sync::{Semaphore, oneshot};
 use uuid::Uuid;
 
+#[cfg(windows)]
+use std::os::windows::process::CommandExt as _;
+/// Windows 下隐藏子进程控制台窗口(EasyTier 与各类 CLI 不弹黑窗)。
+#[cfg(windows)]
+const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+
 mod cli;
 mod lifecycle;
 mod tray;
@@ -1395,6 +1401,7 @@ async fn start_netplay_room(
         .args(&args)
         .stdout(std::process::Stdio::null())
         .stderr(std::process::Stdio::null())
+        .creation_flags(CREATE_NO_WINDOW)
         .spawn()
         .map_err(|error| format!("无法启动 EasyTier：{error}"))?;
     let virtual_ip = if is_host {
@@ -1470,6 +1477,7 @@ async fn start_netplay_room(
                             "node",
                             "info",
                         ])
+                        .creation_flags(CREATE_NO_WINDOW)
                         .output()
                 })
                 .await;
@@ -1533,6 +1541,7 @@ async fn set_netplay_forward(
                     &bind,
                     &destination,
                 ])
+                .creation_flags(CREATE_NO_WINDOW)
                 .output()
         })
         .await
@@ -1618,6 +1627,7 @@ async fn list_netplay_peers(
     let output = tokio::task::spawn_blocking(move || {
         std::process::Command::new(cli_path)
             .args(["-p", &format!("127.0.0.1:{rpc_port}"), "-o", "json", "peer"])
+            .creation_flags(CREATE_NO_WINDOW)
             .output()
     })
     .await
@@ -2890,6 +2900,38 @@ pub fn run() {
             }
             for task_id in service.queued_content_tasks_by_priority()? {
                 coordinator.submit_content(service.clone(), task_id);
+            }
+            // 已完成任务自动清理:完成超过 60 秒即连任务带暂存删除,
+            // 队列只保留进行中的工作与最近的失败记录供排障。
+            {
+                let prune_service = service.clone();
+                tauri::async_runtime::spawn(async move {
+                    loop {
+                        tokio::time::sleep(std::time::Duration::from_secs(30)).await;
+                        let now = std::time::SystemTime::now()
+                            .duration_since(std::time::UNIX_EPOCH)
+                            .map(|duration| duration.as_secs() as i64)
+                            .unwrap_or(0);
+                        if let Ok(tasks) = prune_service.list_install_tasks() {
+                            for task in tasks {
+                                if task.state == moyumax_core::TaskState::Completed
+                                    && now - task.updated_at_unix_seconds > 60
+                                {
+                                    let _ = prune_service.delete_install_task(&task.id);
+                                }
+                            }
+                        }
+                        if let Ok(tasks) = prune_service.list_content_install_tasks() {
+                            for task in tasks {
+                                if task.state == moyumax_core::TaskState::Completed
+                                    && now - task.updated_at_unix_seconds > 60
+                                {
+                                    let _ = prune_service.delete_content_task(&task.id);
+                                }
+                            }
+                        }
+                    }
+                });
             }
             app.manage(service);
             app.manage(metadata);

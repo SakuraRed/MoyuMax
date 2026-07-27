@@ -764,6 +764,25 @@ impl AppService {
     /// 再删除任务记录（进度与 Java 关联随外键级联删除）。
     /// 暂存路径必须等于受管安装暂存区中的任务目录，防止路径穿越；
     /// 目录清理失败时报错且任务记录保留。
+    /// 清理已完成的安装任务及其暂存目录。启动时调用,避免任务队列堆积。
+    pub fn purge_completed_install_tasks(&self) -> Result<usize> {
+        let ids: Vec<String> = {
+            let connection = self.connection()?;
+            let mut statement =
+                connection.prepare("SELECT id FROM install_tasks WHERE state = 'completed'")?;
+            statement
+                .query_map([], |row| row.get::<_, String>(0))?
+                .collect::<rusqlite::Result<Vec<_>>>()?
+        };
+        let mut purged = 0;
+        for id in ids {
+            if self.delete_install_task(&id).is_ok() {
+                purged += 1;
+            }
+        }
+        Ok(purged)
+    }
+
     pub fn delete_install_task(&self, task_id: &str) -> Result<()> {
         Uuid::parse_str(task_id)
             .map_err(|_| CoreError::InvalidInstallRequest("安装任务 ID 格式无效".to_owned()))?;
