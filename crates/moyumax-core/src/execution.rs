@@ -1746,11 +1746,11 @@ impl InstallExecutor {
             InstallStage::ApplyLoader,
             "正在准备实例运行时",
         )?;
-        if let Some((patched_artifact, patched_report)) = self
+        if let Some(produced) = self
             .run_loader_processors(service, task, &java_home, &staging_directory)
             .await?
         {
-            downloads.push((patched_artifact, patched_report));
+            downloads.extend(produced);
         }
         let runtime = build_runtime_manifest(task, &java_home, &downloads);
         let staged_instance = prepare_instance_directory(task, &runtime, &staging_directory)?;
@@ -1969,7 +1969,7 @@ impl InstallExecutor {
         task: &InstallTask,
         java_home: &str,
         staging_directory: &Path,
-    ) -> Result<Option<(ResolvedArtifact, FetchReport)>> {
+    ) -> Result<Option<Vec<(ResolvedArtifact, FetchReport)>>> {
         let install_profile_json = match &task.plan.loader {
             ResolvedLoader::Forge {
                 install_profile, ..
@@ -2048,35 +2048,43 @@ impl InstallExecutor {
             None => crate::java_processor_runner(Path::new(java_home).join("bin/java.exe")),
         };
         crate::run_loader_processors(&plan, runner.as_ref(), &work_dir)?;
-        let patched_metadata = std::fs::metadata(&plan.patched_output)?;
-        let patched_artifact = ResolvedArtifact {
-            kind: ArtifactKind::PatchedGame,
-            relative_path: format!(
+        let mut produced = Vec::new();
+        produced.push(local_produced_artifact(
+            ArtifactKind::PatchedGame,
+            &format!(
                 "minecraft/libraries/{}",
                 plan.patched_coordinate.relative_path()
             ),
-            url: String::new(),
-            size: patched_metadata.len(),
-            sha1: plan.patched_sha1.clone(),
-            sha256: None,
-            sha512: None,
-        };
-        let patched_report = FetchReport {
-            result: DownloadResult {
-                staged_file: plan.patched_output.clone(),
-                disposition: DownloadDisposition::Downloaded,
-                bytes: patched_metadata.len(),
-            },
-            final_label: "本地处理器产出".to_owned(),
-            channel: crate::SourceChannel::Official,
-            attempts: Vec::new(),
-            segmented: false,
-            segment_count: 0,
-            degraded_reason: None,
-            reused_local: true,
-            effective_connections: 1,
-        };
-        Ok(Some((patched_artifact, patched_report)))
+            plan.patched_output.clone(),
+            plan.patched_sha1.clone(),
+        )?);
+        // FML 运行时还依赖处理链中间产物(沙盒实测 NeoForge 21.1.233):
+        // - client-…-srg.jar:全部原版类(经 production client provider 加载,
+        //   与补丁 JAR 同类:提交共享但不上 classpath,否则 NoClassDefFoundError);
+        // - client-…-extra.jar:原版资源数据,官方 ignoreList 写明它在 classpath 上。
+        for (key, kind) in [
+            ("MC_SRG", ArtifactKind::PatchedGame),
+            ("MC_EXTRA", ArtifactKind::LoaderLibrary),
+        ] {
+            let Some(raw) = profile.data.get(key).and_then(|sides| sides.get("client")) else {
+                continue;
+            };
+            let Ok(coordinate) =
+                crate::MavenCoordinate::parse(raw.trim_start_matches('[').trim_end_matches(']'))
+            else {
+                continue;
+            };
+            let staged = library_dir.join(coordinate.relative_path());
+            if staged.is_file() {
+                produced.push(local_produced_artifact(
+                    kind,
+                    &format!("minecraft/libraries/{}", coordinate.relative_path()),
+                    staged,
+                    None,
+                )?);
+            }
+        }
+        Ok(Some(produced))
     }
 
     async fn prepare_java(
@@ -2745,6 +2753,43 @@ fn version_json_library_artifacts(
 }
 
 /// 解析 install_profile 中的处理器库下载工件。
+/// 处理器本地产物打包为工件+获取报告(用于提交共享存储)。
+fn local_produced_artifact(
+    kind: ArtifactKind,
+    relative_path: &str,
+    staged_file: PathBuf,
+    sha1: Option<String>,
+) -> Result<(ResolvedArtifact, FetchReport)> {
+    let metadata = std::fs::metadata(&staged_file)?;
+    let bytes = metadata.len();
+    Ok((
+        ResolvedArtifact {
+            kind,
+            relative_path: relative_path.to_owned(),
+            url: String::new(),
+            size: bytes,
+            sha1,
+            sha256: None,
+            sha512: None,
+        },
+        FetchReport {
+            result: DownloadResult {
+                staged_file,
+                disposition: DownloadDisposition::Downloaded,
+                bytes,
+            },
+            final_label: "本地处理器产出".to_owned(),
+            channel: crate::SourceChannel::Official,
+            attempts: Vec::new(),
+            segmented: false,
+            segment_count: 0,
+            degraded_reason: None,
+            reused_local: true,
+            effective_connections: 1,
+        },
+    ))
+}
+
 fn profile_library_artifacts(profile: &crate::InstallProfile) -> Result<Vec<ResolvedArtifact>> {
     // 处理器引用的 jar 是构建期依赖,只供安装器运行,不进入运行时 classpath;
     // 其余 profile 库(尤其 universal)是运行时必需——FML 要从 classpath
