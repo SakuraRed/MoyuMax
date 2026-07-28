@@ -136,7 +136,7 @@ test("M36-CAT-UI-001 版本选择按游戏版本分组并标注推荐", async ({
 
   const versionSelect = page.getByRole("dialog").getByRole("combobox", { name: "下载版本" });
   const groupLabels = await versionSelect.locator("optgroup").evaluateAll((groups) =>
-    groups.map((group) => group.label),
+    groups.map((group) => (group as HTMLOptGroupElement).label),
   );
   // 与实例(26.2)匹配的组置顶并标推荐,其余版本组全量保留
   expect(groupLabels[0]).toContain("26.2");
