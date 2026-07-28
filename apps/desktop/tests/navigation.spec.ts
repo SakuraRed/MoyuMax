@@ -43,8 +43,22 @@ test("NAV-001 所有主导航按钮在任意页面都可点击", async ({ page }
   }
 });
 
-test("NAV-002 导航账户按钮进入设置页账户区", async ({ page }) => {
+test("NAV-002 导航账户按钮进入账户页", async ({ page }) => {
   await page.getByRole("button", { name: "账户", exact: true }).click();
-  await expect(page.getByRole("heading", { name: "账户" })).toBeVisible();
-  await expect(page.getByRole("button", { name: "添加离线账户" })).toBeVisible();
+  await expect(page.getByRole("button", { name: "添加账户" })).toBeVisible();
+});
+
+test("NAV-003 全局搜索定位实例与页面", async ({ page }) => {
+  await page.getByRole("button", { name: "全局搜索" }).click();
+  const dialog = page.getByRole("dialog", { name: "全局搜索" });
+  await expect(dialog).toBeVisible();
+
+  await dialog.getByRole("textbox").fill("导航实例");
+  await page.keyboard.press("Enter");
+  await expect(page.getByRole("button", { name: "概览", exact: true })).toBeVisible();
+
+  await page.keyboard.press("Control+k");
+  await page.getByRole("dialog", { name: "全局搜索" }).getByRole("textbox").fill("实例");
+  await page.keyboard.press("Escape");
+  await expect(page.getByRole("dialog", { name: "全局搜索" })).toHaveCount(0);
 });

@@ -9,6 +9,7 @@
   import FishtankLoader from "./components/FishtankLoader.svelte";
   import DataCenter from "./components/DataCenter.svelte";
   import GameInstall from "./components/GameInstall.svelte";
+  import GlobalSearch from "./components/GlobalSearch.svelte";
   import Home from "./components/Home.svelte";
   import InstanceCenter from "./components/InstanceCenter.svelte";
   import InstanceGallery from "./components/InstanceGallery.svelte";
@@ -35,6 +36,7 @@
     WindowCloseAction,
   } from "./runtime";
   import { isRestorablePage, sanitizeShellState } from "./shell-state";
+  import { globalSearchOpen, toggleGlobalSearch } from "./search.svelte";
 
   type Phase = "loading" | "onboarding" | "home" | "instances" | "install" | "resources" | "netplay" | "tasks" | "data" | "backups" | "crash" | "accounts" | "settings" | "instanceDetail" | "fatal";
 
@@ -77,6 +79,13 @@
       }
     };
     document.addEventListener("scroll", scrollListener, true);
+    const searchListener = (event: KeyboardEvent) => {
+      if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "k") {
+        event.preventDefault();
+        toggleGlobalSearch();
+      }
+    };
+    document.addEventListener("keydown", searchListener);
     const statePoll = setInterval(() => {
       if (document.hidden) return;
       if (phase === "home") void refreshHomeStateSilently();
@@ -86,6 +95,7 @@
       unregisterClose();
       unregisterIntent();
       document.removeEventListener("scroll", scrollListener, true);
+      document.removeEventListener("keydown", searchListener);
       clearInterval(statePoll);
       clearTimeout(persistTimer);
     };
@@ -619,8 +629,19 @@
   </AppShell>
 {/if}
 
-{#if closeDialog.open && closeDialog.impact}
-  <!-- display:contents 包装让对话框继承 .window 上的设计令牌,自身不产生布局盒 -->
+{#if globalSearchOpen()}
+  <div class="window" style="display: contents">
+    <GlobalSearch
+      {instances}
+      {crashReports}
+      onOpenInstance={(instance) => openInstanceDetail(instance)}
+      onOpenCrash={openCrashReport}
+      onNavigate={navigate}
+    />
+  </div>
+{/if}
+
+{#if closeDialog.open && closeDialog.impact}  <!-- display:contents 包装让对话框继承 .window 上的设计令牌,自身不产生布局盒 -->
   <div class="window" style="display: contents">
     <CloseDialog
       mode={closeDialog.mode}

@@ -3,6 +3,7 @@
 
   import { markAvatarFailed, shellAccount, skinAvatarUrl } from "../accounts.svelte";
   import { netplayRoom, refreshNetplayRoom, setNetplayRoom } from "../netplay.svelte";
+  import { openGlobalSearch } from "../search.svelte";
   import { t, uiBackground, uiBackgroundImageUrl, uiContrast, uiMotion, uiTheme } from "../i18n.svelte";
   import type { MoyuRuntime, NavigationKey } from "../runtime";
   import Fish from "./Fish.svelte";
@@ -17,7 +18,6 @@
     /** 二级页返回按钮 */
     onBack?: (() => void) | undefined;
     searchVisible?: boolean;
-    onSearch?: (() => void) | undefined;
     navigationDisabled?: boolean;
     activeNavigation?: NavigationKey;
     /** 在线状态:false 时标题栏网络点变灰黄 */
@@ -40,7 +40,6 @@
     children,
     titleSuffix,
     onBack = undefined,
-    onSearch = undefined,
     navigationDisabled = false,
     activeNavigation = "home",
     online = true,
@@ -124,7 +123,7 @@
     <span class="tb-title">{pageTitle}</span>
     {#if titleSuffix}<span class="tb-sub">{titleSuffix}</span>{/if}
     <span class="tb-spacer" data-tauri-drag-region></span>
-    <button class="tb-tool" aria-label={t("shell.search.aria")} disabled={!onSearch} onclick={() => onSearch?.()}>
+    <button class="tb-tool" aria-label={t("shell.search.aria")} onclick={() => openGlobalSearch()}>
       <Icon name="search" size={13} />
       {t("shell.search.label")}
     </button>
