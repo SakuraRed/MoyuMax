@@ -3081,6 +3081,13 @@ async fn write_response(
     rate_limiter: &RateLimiter,
     stall_timeout: Duration,
 ) -> Result<()> {
+    // 连接提前关闭守卫:仅当响应明文声明 Content-Length 且未压缩时核对实收字节,
+    // 服务器中途断流会被误当完整文件(实测 NeoForge mappings 截断后处理器崩解)。
+    let declared_length = match response.headers().get(reqwest::header::CONTENT_ENCODING) {
+        Some(_) => None,
+        None => response.content_length(),
+    };
+    let mut received: u64 = 0;
     let mut output = OpenOptions::new()
         .create(true)
         .write(true)
@@ -3123,11 +3130,19 @@ async fn write_response(
         let chunk = chunk?;
         let chunk_len = u64::try_from(chunk.len()).unwrap_or(u64::MAX);
         output.write_all(&chunk).await?;
+        received = received.saturating_add(chunk_len);
         // 全局限速:所有连接共用同一令牌桶,分段下载也不会系统性突破上限。
         rate_limiter.acquire(chunk_len, interrupt).await?;
     }
     output.flush().await?;
     output.sync_data().await?;
+    if let Some(declared) = declared_length
+        && received < declared
+    {
+        return Err(CoreError::TransientDownload(format!(
+            "连接提前关闭：收到 {received} / {declared} 字节，换新连接重试"
+        )));
+    }
     Ok(())
 }
 
