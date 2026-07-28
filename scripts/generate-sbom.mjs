@@ -135,7 +135,7 @@ function renderSbom(components) {
       component: {
         type: "application",
         name: "MoyuMax",
-        version: "0.1.0-preview.1",
+        version: "0.1.0",
         licenses: ["GPL-3.0-only"],
       },
     },

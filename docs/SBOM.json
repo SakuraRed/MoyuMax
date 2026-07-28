@@ -7,7 +7,7 @@
     "component": {
       "type": "application",
       "name": "MoyuMax",
-      "version": "0.1.0-preview.1",
+      "version": "0.1.0",
       "licenses": [
         "GPL-3.0-only"
       ]
@@ -1971,8 +1971,8 @@
       "type": "library",
       "ecosystem": "cargo",
       "name": "moyumax-core",
-      "version": "0.1.0-preview.1",
-      "purl": "pkg:cargo/moyumax-core@0.1.0-preview.1",
+      "version": "0.1.0",
+      "purl": "pkg:cargo/moyumax-core@0.1.0",
       "license": "GPL-3.0-only",
       "repository": "https://github.com/SakuraRed/MoyuMax"
     },
@@ -1980,8 +1980,8 @@
       "type": "library",
       "ecosystem": "cargo",
       "name": "moyumax-desktop",
-      "version": "0.1.0-preview.1",
-      "purl": "pkg:cargo/moyumax-desktop@0.1.0-preview.1",
+      "version": "0.1.0",
+      "purl": "pkg:cargo/moyumax-desktop@0.1.0",
       "license": "GPL-3.0-only",
       "repository": "https://github.com/SakuraRed/MoyuMax"
     },

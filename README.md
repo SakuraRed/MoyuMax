@@ -7,7 +7,7 @@
 [![CI](https://github.com/SakuraRed/MoyuMax/actions/workflows/ci.yml/badge.svg)](https://github.com/SakuraRed/MoyuMax/actions/workflows/ci.yml)
 [![License: GPL-3.0](https://img.shields.io/badge/license-GPL--3.0-green.svg)](LICENSE)
 [![Platform: Windows x64](https://img.shields.io/badge/platform-Windows%20x64-blue.svg)](#下载)
-[![Preview: v0.1.0-preview.1](https://img.shields.io/badge/preview-v0.1.0--preview.1-orange.svg)](#下载)
+[![Release: v0.1.0](https://img.shields.io/badge/release-v0.1.0-brightgreen.svg)](#下载)
 
 简体中文 · [核心设计原则](#设计原则) · [功能特性](#功能特性) · [下载](#下载) · [开发](#开发)
 
@@ -58,7 +58,7 @@ MoyuMax 是一款开源、免费的 Minecraft 启动器，面向 Windows 10 22H2
 
 预览版安装包（x64 NSIS，每用户安装，无需管理员）：
 
-- **[MoyuMax_0.1.0-preview.1_x64-setup.exe](https://github.com/SakuraRed/MoyuMax/releases/latest)**
+- **[MoyuMax_0.1.0_x64-setup.exe](https://github.com/SakuraRed/MoyuMax/releases/latest)**
 - 当前为自签名开发证书，安装时 Windows 提示「未知发布者」属预期；正式发行将附带商业 Authenticode 签名
 - 每个构建附带 [SBOM](docs/SBOM.json) 与[第三方许可清单](docs/THIRD-PARTY-LICENSES.md)
 

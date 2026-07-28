@@ -51,7 +51,7 @@ test("M25-UPDATE-001 已是最新时不产生下载入口", async ({ page }) => 
   await page.getByRole("button", { name: "设置" }).click();
   await page.locator(".sn-item", { hasText: "更新" }).click();
   await expect(page.getByRole("heading", { name: "启动器更新" })).toBeVisible();
-  await expect(page.getByLabel("启动器更新").getByText("0.1.0-preview.1", { exact: true })).toBeVisible();
+  await expect(page.getByLabel("启动器更新").getByText("0.1.0", { exact: true })).toBeVisible();
 
   await page.getByRole("button", { name: "检查更新" }).click();
   await expect(page.getByText("已是最新版本", { exact: true })).toBeVisible();
