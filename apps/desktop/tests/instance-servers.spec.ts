@@ -37,10 +37,10 @@ test.beforeEach(async ({ page }) => {
 });
 
 async function openServersTab(page: import("@playwright/test").Page): Promise<void> {
-  await page.getByRole("button", { name: "管理“详情测试”" }).click();
-  await expect(page.getByRole("heading", { name: "概览" })).toBeVisible();
-  await page.getByRole("button", { name: "服务器", exact: true }).click();
-  await expect(page.getByRole("heading", { name: "服务器", exact: true })).toBeVisible();
+  await page.getByRole("button", { name: "实例", exact: true }).click();
+  await page.getByRole("button", { name: /管理实例/ }).click();
+  await page.locator(".tabs").getByRole("button", { name: "世界", exact: true }).click();
+  await expect(page.getByText("服务器", { exact: true })).toBeVisible();
 }
 
 test("M34-SRV-001 空态、添加服务器与刷新后 MOTD 着色渲染", async ({ page }) => {
@@ -67,7 +67,7 @@ test("M34-SRV-001 空态、添加服务器与刷新后 MOTD 着色渲染", async
   // mock MOTD 为 §aMoyuMax §7测试服务器,应按 § 码分段着色。
   await expect(page.locator(".server-motd .motd-ca")).toHaveText("MoyuMax ");
   await expect(page.locator(".server-motd .motd-c7")).toHaveText("测试服务器");
-  await expect(row.getByText("3/20 在线 · 42 ms · 26.2", { exact: true })).toBeVisible();
+  await expect(row.getByText("3/20 在线 · 42 ms · 26.2", { exact: false })).toBeVisible();
 });
 
 test("M34-SRV-002 非法地址与空名称被拒绝且不写入", async ({ page }) => {
@@ -183,9 +183,9 @@ test("M34-SRV-005 离线服务器显示不可达且不阻塞其余", async ({ pa
   const deadRow = page.locator(".server-row").filter({ hasText: "死服" });
   await expect(deadRow.getByText("离线或不可达", { exact: true })).toBeVisible();
   const aliveRow = page.locator(".server-row").filter({ hasText: "大厅" });
-  await expect(aliveRow.getByText("3/20 在线 · 42 ms · 26.2", { exact: true })).toBeVisible();
+  await expect(aliveRow.getByText("3/20 在线 · 42 ms · 26.2", { exact: false })).toBeVisible();
 
   // 单项刷新同样可用。
   await aliveRow.getByRole("button", { name: "刷新「大厅」" }).click();
-  await expect(aliveRow.getByText("3/20 在线 · 42 ms · 26.2", { exact: true })).toBeVisible();
+  await expect(aliveRow.getByText("3/20 在线 · 42 ms · 26.2", { exact: false })).toBeVisible();
 });

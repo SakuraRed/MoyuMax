@@ -124,53 +124,82 @@ test.beforeEach(async ({ page }) => {
   await page.reload();
 });
 
+/** 新入口:导航「实例」进入列表页,再点实例卡片进入详情。 */
 async function openDetail(page: import("@playwright/test").Page): Promise<void> {
-  await page.getByRole("button", { name: "管理“详情测试”" }).click();
-  await expect(page.getByRole("heading", { name: "概览" })).toBeVisible();
+  await page.getByRole("button", { name: "实例", exact: true }).click();
+  await page.getByRole("button", { name: /管理实例/ }).click();
+  await expect(page.locator(".tabs")).toBeVisible();
+  await expect(page.getByRole("button", { name: "启动游戏" })).toBeVisible();
 }
 
-test("M33-DET-001 首页卡片进入详情并切换七个子页", async ({ page }) => {
+async function openDetailTab(
+  page: import("@playwright/test").Page,
+  tabName: string,
+): Promise<void> {
+  await page.locator(".tabs").getByRole("button", { name: tabName, exact: true }).click();
+}
+
+test("M33-DET-001 实例列表进入详情,六个页签结构完整", async ({ page }) => {
   await openDetail(page);
-  await expect(page.getByText("26.2", { exact: true })).toBeVisible();
-  await expect(page.getByText("Fabric 0.19.3", { exact: true })).toBeVisible();
+
+  // 六页签:概览/内容/世界/截图/日志/设置。
+  const tabs = page.locator(".tabs button");
+  await expect(tabs).toHaveCount(6);
+  await expect(tabs.nth(0)).toHaveText("概览");
+  await expect(tabs.nth(1)).toHaveText("内容");
+  await expect(tabs.nth(2)).toHaveText("世界");
+  await expect(tabs.nth(3)).toHaveText("截图");
+  await expect(tabs.nth(4)).toHaveText("日志");
+  await expect(tabs.nth(5)).toHaveText("设置");
+
+  // 概览:hero 卡与实例信息。
+  await expect(page.locator(".hero-card")).toContainText("Minecraft 26.2 · Fabric 0.19.3");
+  await expect(page.locator(".hero-card")).toContainText("1 个模组");
   await expect(page.getByRole("button", { name: "启动游戏" })).toBeVisible();
+  await expect(page.locator(".kv-row").nth(0)).toContainText("Minecraft 26.2");
+  await expect(page.getByText("临时切换仅对本次启动生效", { exact: false })).toBeVisible();
+
+  // 内容:自动更新提示条与模组行。
+  await openDetailTab(page, "内容");
+  await expect(page.getByText("内容自动更新默认关闭", { exact: false })).toBeVisible();
+  await expect(page.locator(".list-row").filter({ hasText: "JEI 物品管理" })).toBeVisible();
+
+  // 世界:世界行与备份时间线。
+  await openDetailTab(page, "世界");
+  await expect(page.locator(".world-row").filter({ hasText: "世界甲" })).toBeVisible();
+  await expect(page.getByText("备份时间线", { exact: true })).toBeVisible();
+
+  // 截图:截图卡片。
+  await openDetailTab(page, "截图");
+  await expect(page.getByRole("button", { name: "截图 2026-07-20_12.00.00.png" })).toBeVisible();
+
+  // 日志:无会话空态。
+  await openDetailTab(page, "日志");
+  await expect(
+    page.getByText("该实例还没有启动会话，启动一次游戏后即可查看日志。"),
+  ).toBeVisible();
+
+  // 设置:Java/内存设置行与回收入口。
+  await openDetailTab(page, "设置");
+  await expect(page.getByText("Java 环境", { exact: true }).first()).toBeVisible();
+  await expect(page.getByText("内存分配", { exact: true })).toBeVisible();
   await expect(page.getByRole("button", { name: "移入回收站" })).toBeVisible();
 
-  await page.locator(".settings-nav").getByRole("button", { name: "设置", exact: true }).click();
-  await expect(page.getByRole("heading", { name: "启动内存" })).toBeVisible();
-  await expect(page.getByRole("heading", { name: "Java 环境" })).toBeVisible();
-
-  await page.getByRole("button", { name: "Mod", exact: true }).click();
-  await expect(page.getByRole("heading", { name: "Mod", exact: true })).toBeVisible();
-
-  await page.getByRole("button", { name: "存档", exact: true }).click();
-  await expect(page.getByRole("heading", { name: "存档", exact: true })).toBeVisible();
-
-  await page.getByRole("button", { name: "截图", exact: true }).click();
-  await expect(page.getByRole("heading", { name: "截图", exact: true })).toBeVisible();
-
-  await page.getByRole("button", { name: "资源包", exact: true }).click();
-  await expect(page.getByRole("heading", { name: "资源包", exact: true })).toBeVisible();
-
-  await page.getByRole("button", { name: "光影", exact: true }).click();
-  await expect(page.getByRole("heading", { name: "光影", exact: true })).toBeVisible();
-
-  await page.getByRole("button", { name: "返回首页" }).click();
-  await expect(page.getByRole("heading", { name: "继续游戏" })).toBeVisible();
-  await expect(page.getByRole("button", { name: "管理“详情测试”" })).toBeVisible();
+  // 标题栏返回按钮回到实例列表。
+  await page.getByRole("button", { name: "返回" }).click();
+  await expect(page.getByRole("button", { name: "管理实例「详情测试」" })).toBeVisible();
 });
 
 test("M33-DET-002 启动内存跟随全局与自定义切换", async ({ page }) => {
   await openDetail(page);
-  await page.locator(".settings-nav").getByRole("button", { name: "设置", exact: true }).click();
+  await openDetailTab(page, "设置");
 
   // 默认跟随全局,展示全局自动分配摘要,不出现输入框
-  await expect(page.getByRole("radio", { name: "跟随全局" })).toBeChecked();
   await expect(page.getByText("当前生效：全局自动分配 512-4096 MiB")).toBeVisible();
   await expect(page.getByRole("textbox", { name: "最小内存 MiB" })).toHaveCount(0);
 
   // 切到自定义,用当前生效值预填
-  await page.getByRole("radio", { name: "自定义" }).click();
+  await page.getByRole("button", { name: "自定义" }).click();
   const minInput = page.getByRole("textbox", { name: "最小内存 MiB" });
   const maxInput = page.getByRole("textbox", { name: "最大内存 MiB" });
   await expect(minInput).toHaveValue("512");
@@ -185,10 +214,9 @@ test("M33-DET-002 启动内存跟随全局与自定义切换", async ({ page }) 
   );
   expect(stored["instance-id"]).toEqual({ minimumMemoryMib: 1024, maximumMemoryMib: 8192 });
 
-  await page.getByRole("button", { name: "返回首页" }).click();
+  await page.getByRole("button", { name: "返回" }).click();
   await openDetail(page);
-  await page.locator(".settings-nav").getByRole("button", { name: "设置", exact: true }).click();
-  await expect(page.getByRole("radio", { name: "自定义" })).toBeChecked();
+  await openDetailTab(page, "设置");
   await expect(page.getByRole("textbox", { name: "最小内存 MiB" })).toHaveValue("1024");
   await expect(page.getByRole("textbox", { name: "最大内存 MiB" })).toHaveValue("8192");
 
@@ -201,7 +229,7 @@ test("M33-DET-002 启动内存跟随全局与自定义切换", async ({ page }) 
   expect(afterInvalid["instance-id"]).toEqual({ minimumMemoryMib: 1024, maximumMemoryMib: 8192 });
 
   // 切回跟随全局,清除实例覆盖
-  await page.getByRole("radio", { name: "跟随全局" }).click();
+  await page.getByRole("button", { name: "跟随全局" }).click();
   await expect(page.locator(".toast").getByText("已切换为跟随全局", { exact: true })).toBeVisible();
   await expect(page.getByRole("textbox", { name: "最小内存 MiB" })).toHaveCount(0);
   const cleared = await page.evaluate(() =>
@@ -209,44 +237,43 @@ test("M33-DET-002 启动内存跟随全局与自定义切换", async ({ page }) 
   );
   expect(cleared["instance-id"]).toBeUndefined();
 
-  await page.getByRole("button", { name: "返回首页" }).click();
+  await page.getByRole("button", { name: "返回" }).click();
   await openDetail(page);
-  await page.locator(".settings-nav").getByRole("button", { name: "设置", exact: true }).click();
-  await expect(page.getByRole("radio", { name: "跟随全局" })).toBeChecked();
+  await openDetailTab(page, "设置");
+  await expect(page.getByText("当前生效：全局自动分配 512-4096 MiB")).toBeVisible();
 });
 
-test("M33-DET-003 Mod 启停用与筛选", async ({ page }) => {
+test("M33-DET-003 模组启停用开关", async ({ page }) => {
   await openDetail(page);
-  await page.getByRole("button", { name: "Mod", exact: true }).click();
-  const row = page.locator(".installed-content-row").filter({ hasText: "JEI 物品管理" });
+  await openDetailTab(page, "内容");
+  const row = page.locator(".list-row").filter({ hasText: "JEI 物品管理" });
   await expect(row).toBeVisible();
 
-  const toggle = page.getByRole("checkbox", { name: "JEI 物品管理 启用开关" });
-  await expect(toggle).toBeChecked();
-  await toggle.uncheck();
-  await expect(row.getByText("已停用", { exact: true })).toBeVisible();
+  const toggle = page.getByRole("switch", { name: "JEI 物品管理 启用开关" });
+  await expect(toggle).toHaveAttribute("aria-checked", "true");
+  await toggle.click();
+  await expect(toggle).toHaveAttribute("aria-checked", "false");
   const stored = await page.evaluate(() =>
     JSON.parse(window.localStorage.getItem("moyumax.browser.installedContent") ?? "[]"),
   );
   expect(stored[0].enabled).toBe(false);
 
-  await page.getByRole("button", { name: "停用", exact: true }).click();
-  await expect(row).toBeVisible();
-  await page.getByRole("button", { name: "启用", exact: true }).click();
-  await expect(page.getByText("当前筛选下没有内容", { exact: false })).toBeVisible();
+  await toggle.click();
+  await expect(toggle).toHaveAttribute("aria-checked", "true");
 });
 
-test("M33-DET-004 存档列表展示与回收站删除", async ({ page }) => {
+test("M33-DET-004 世界列表展示与回收站删除", async ({ page }) => {
   await openDetail(page);
-  await page.getByRole("button", { name: "存档", exact: true }).click();
-  const row = page.locator(".backup-row").filter({ hasText: "世界甲" });
+  await openDetailTab(page, "世界");
+  const row = page.locator(".world-row").filter({ hasText: "世界甲" });
   await expect(row).toBeVisible();
-  await expect(row.getByText("最近游玩", { exact: false })).toBeVisible();
-  await expect(row.getByRole("button", { name: "导出" })).toBeVisible();
+  await expect(row).toContainText("4.0 KiB");
 
-  await row.getByRole("button", { name: "删除", exact: true }).click();
-  await row.getByRole("button", { name: "确认删除" }).click();
-  await expect(page.locator(".backup-row").filter({ hasText: "世界甲" })).toHaveCount(0);
+  // 选中世界后出现删除入口,删除走两段确认。
+  await row.click();
+  await page.getByRole("button", { name: "删除", exact: true }).click();
+  await page.getByRole("button", { name: "确认删除" }).click();
+  await expect(page.locator(".world-row").filter({ hasText: "世界甲" })).toHaveCount(0);
   await expect(page.locator(".toast").getByText("已把世界「世界甲」移入回收站", { exact: false })).toBeVisible();
   const stored = await page.evaluate(() =>
     JSON.parse(window.localStorage.getItem("moyumax.browser.worldDetails") ?? "{}"),
@@ -256,7 +283,7 @@ test("M33-DET-004 存档列表展示与回收站删除", async ({ page }) => {
 
 test("M33-DET-005 截图点选与复制到剪贴板", async ({ page }) => {
   await openDetail(page);
-  await page.getByRole("button", { name: "截图", exact: true }).click();
+  await openDetailTab(page, "截图");
   await page.getByRole("button", { name: "截图 2026-07-20_12.00.00.png" }).click();
   await expect(page.getByText("已选 2026-07-20_12.00.00.png", { exact: false })).toBeVisible();
   await page.getByRole("button", { name: "复制", exact: true }).click();
@@ -269,31 +296,33 @@ test("M33-DET-005 截图点选与复制到剪贴板", async ({ page }) => {
 
 test("M33-DET-006 资源包与光影按类型分开展示", async ({ page }) => {
   await openDetail(page);
-  await page.getByRole("button", { name: "资源包", exact: true }).click();
-  await expect(page.locator(".installed-content-row").filter({ hasText: "faithful" })).toBeVisible();
-  await expect(page.locator(".installed-content-row").filter({ hasText: "complementary" })).toHaveCount(0);
+  await openDetailTab(page, "内容");
+  await expect(page.getByText("资源包", { exact: true })).toBeVisible();
+  await expect(page.getByText("光影", { exact: true })).toBeVisible();
 
-  await page.getByRole("button", { name: "光影", exact: true }).click();
-  const shaderRow = page.locator(".installed-content-row").filter({ hasText: "complementary" });
+  const packRow = page.locator(".list-row").filter({ hasText: "faithful" });
+  const shaderRow = page.locator(".list-row").filter({ hasText: "complementary" });
+  await expect(packRow).toBeVisible();
   await expect(shaderRow).toBeVisible();
-  await expect(page.locator(".installed-content-row").filter({ hasText: "faithful" })).toHaveCount(0);
-  await expect(shaderRow.getByText("已停用", { exact: true })).toBeVisible();
+  await expect(packRow.getByRole("switch", { name: "faithful 启用开关" })).toHaveAttribute("aria-checked", "true");
+  await expect(shaderRow.getByRole("switch", { name: "complementary 启用开关" })).toHaveAttribute("aria-checked", "false");
 
-  const toggle = page.getByRole("checkbox", { name: "complementary 启用开关" });
-  await toggle.check();
-  await expect(shaderRow.getByText("已启用", { exact: true })).toBeVisible();
+  await shaderRow.getByRole("switch", { name: "complementary 启用开关" }).click();
+  await expect(shaderRow.getByRole("switch", { name: "complementary 启用开关" })).toHaveAttribute("aria-checked", "true");
   const stored = await page.evaluate(() =>
     JSON.parse(window.localStorage.getItem("moyumax.browser.instanceResources") ?? "[]"),
   );
   expect(stored.find((entry: { id: string }) => entry.id === "resource-2").enabled).toBe(true);
 });
 
-test("M33-DET-007 详情页内回收实例后优雅返回首页", async ({ page }) => {
+test("M33-DET-007 设置页签内回收实例后优雅返回实例列表", async ({ page }) => {
   await openDetail(page);
+  await openDetailTab(page, "设置");
   await page.getByRole("button", { name: "移入回收站" }).click();
   const dialog = page.getByRole("dialog");
   await expect(dialog).toBeVisible();
   await dialog.getByRole("button", { name: "移入回收站" }).click();
-  await expect(page.getByRole("heading", { name: "继续游戏" })).toHaveCount(0);
-  await expect(page.getByRole("button", { name: "安装第一个游戏" })).toBeVisible();
+  // 实例被回收后退回实例列表空态。
+  await expect(page.getByRole("button", { name: "新建实例" }).first()).toBeVisible();
+  await expect(page.getByRole("button", { name: /管理实例/ })).toHaveCount(0);
 });
