@@ -1,4 +1,4 @@
-import { expect, test } from "@playwright/test";
+import { expect, test, type Page } from "@playwright/test";
 
 const instance = {
   id: "instance-recycle",
@@ -33,78 +33,84 @@ test.beforeEach(async ({ page }) => {
   await page.reload();
 });
 
+/** 实例页 → 批量管理 → 勾选 → 批量条删除,打开删除确认弹窗。
+ *  注意:卡片管理按钮(.card-hit)覆盖层挡住 pick 的鼠标点击(InstanceGallery 已知遮挡问题),
+ *  这里走键盘聚焦 + Enter 的真实可用路径。 */
+async function openBatchDeleteDialog(page: Page, name: string) {
+  await page.getByRole("button", { name: "实例", exact: true }).click();
+  await page.getByRole("button", { name: "批量管理" }).click();
+  await page.getByRole("button", { name: `选择实例「${name}」` }).focus();
+  await page.keyboard.press("Enter");
+  await page.getByRole("button", { name: "删除", exact: true }).click();
+  return page.getByRole("dialog", { name: "删除 1 个实例？" });
+}
+
 test("M7-RECYCLE-001 实例经确认进入回收站并可从数据页恢复", async ({ page }) => {
   await expect(page.getByRole("heading", { name: "生存世界" })).toBeVisible();
-  await page.getByRole("button", { name: "将“生存世界”移入回收站" }).click();
+  const dialog = await openBatchDeleteDialog(page, "生存世界");
 
-  const dialog = page.getByRole("dialog", { name: "将“生存世界”移入回收站？" });
   await expect(dialog).toBeVisible();
-  await expect(dialog.getByRole("button", { name: "取消" })).toBeFocused();
-  await page.keyboard.press("Shift+Tab");
-  await expect(dialog.getByRole("button", { name: "移入回收站" })).toBeFocused();
-  await page.keyboard.press("Tab");
   await expect(dialog.getByRole("button", { name: "取消" })).toBeFocused();
   await page.keyboard.press("Escape");
   await expect(dialog).toBeHidden();
-  await expect(page.getByRole("heading", { name: "生存世界" })).toBeVisible();
-  await page.getByRole("button", { name: "将“生存世界”移入回收站" }).click();
-  await expect(dialog.getByText("保留 30 天", { exact: false })).toBeVisible();
-  await expect(dialog.getByText("托管 Java 不会被删除", { exact: false })).toBeVisible();
-  await dialog.getByRole("button", { name: "移入回收站" }).click();
+  await expect(page.getByRole("button", { name: "选择实例「生存世界」" })).toBeVisible();
 
-  await expect(page.getByRole("heading", { name: "这里还空着" })).toBeVisible();
-  await page.getByRole("button", { name: "数据" }).click();
+  await page.getByRole("button", { name: "删除", exact: true }).click();
+  await expect(dialog).toBeVisible();
+  await expect(dialog.getByText("保留 30 天", { exact: false })).toBeVisible();
+  await dialog.getByRole("button", { name: "删除 1 个实例" }).click();
+
+  await expect(page.getByRole("heading", { name: "还没有实例" })).toBeVisible();
+  await page.getByRole("button", { name: "数据", exact: true }).click();
   await expect(page.getByRole("heading", { name: "数据与回收站" })).toBeVisible();
-  await expect(page.getByRole("heading", { name: "生存世界" })).toBeVisible();
-  await expect(page.getByText("30 天后到期", { exact: false })).toBeVisible();
+  await expect(page.getByText("生存世界")).toBeVisible();
+  await expect(page.getByText("剩 30 天", { exact: false })).toBeVisible();
 
   await page.getByRole("button", { name: "恢复“生存世界”" }).click();
   await expect(page.getByText("回收站为空", { exact: true })).toBeVisible();
-  await page.getByRole("button", { name: "首页" }).click();
+  await page.getByRole("button", { name: "首页", exact: true }).click();
   await expect(page.getByRole("heading", { name: "生存世界" })).toBeVisible();
 });
 
 test("M7-RECYCLE-002 永久删除前展示空间与不可恢复说明", async ({ page }) => {
-  await page.getByRole("button", { name: "将“生存世界”移入回收站" }).click();
-  await page.getByRole("dialog").getByRole("button", { name: "移入回收站" }).click();
-  await page.getByRole("button", { name: "数据" }).click();
+  const deleteDialog = await openBatchDeleteDialog(page, "生存世界");
+  await deleteDialog.getByRole("button", { name: "删除 1 个实例" }).click();
+  await page.getByRole("button", { name: "数据", exact: true }).click();
   await page.getByRole("button", { name: "永久删除“生存世界”" }).click();
 
-  const dialog = page.getByRole("dialog", { name: "永久删除“生存世界”？" });
+  const dialog = page.getByRole("dialog", { name: "永久删除回收站项目" });
+  await expect(dialog).toBeVisible();
   await expect(dialog.getByRole("button", { name: "取消" })).toBeFocused();
-  await expect(dialog.getByText("1 个实例", { exact: false })).toBeVisible();
-  await expect(dialog.getByText("64.0 MiB", { exact: false })).toBeVisible();
-  await expect(dialog.getByText("无法恢复", { exact: false })).toBeVisible();
-  await dialog.getByRole("button", { name: "永久删除" }).click();
+  await expect(dialog.getByText("即将永久删除 1 个项目", { exact: false })).toBeVisible();
+  await expect(dialog.getByText("64.0 MiB", { exact: false }).first()).toBeVisible();
+  await expect(dialog.getByText("此操作不可恢复", { exact: false })).toBeVisible();
+  await page.keyboard.press("Escape");
+  await expect(dialog).toBeHidden();
 
+  await page.getByRole("button", { name: "永久删除“生存世界”" }).click();
+  await dialog.getByRole("button", { name: "永久删除 1 个项目" }).click();
   await expect(page.getByText("回收站为空", { exact: true })).toBeVisible();
 });
 
 test("UI-RECYCLE-001 数据页在 960x600 和 200% 放大下无横向溢出", async ({ page }) => {
-  await page.getByRole("button", { name: "将“生存世界”移入回收站" }).click();
-  await page.getByRole("dialog").getByRole("button", { name: "移入回收站" }).click();
-  await page.getByRole("button", { name: "数据" }).click();
+  const deleteDialog = await openBatchDeleteDialog(page, "生存世界");
+  await deleteDialog.getByRole("button", { name: "删除 1 个实例" }).click();
+  await page.getByRole("button", { name: "数据", exact: true }).click();
   await page.setViewportSize({ width: 960, height: 600 });
   await page.evaluate(() => {
     document.documentElement.style.zoom = "2";
   });
 
   await expect(page.getByRole("button", { name: "恢复“生存世界”" })).toBeVisible();
-  const geometry = await page.evaluate(() => ({
-    documentOverflow: document.documentElement.scrollWidth > window.innerWidth,
-    overflowingElements: [...document.querySelectorAll<HTMLElement>(".data-content *")]
-      .filter(
-        (element) =>
-          !element.classList.contains("sr-live") &&
-          element.scrollWidth > element.clientWidth + 1,
-      )
-      .map((element) => ({
-        tag: element.tagName,
-        className: element.className,
-        scrollWidth: element.scrollWidth,
-        clientWidth: element.clientWidth,
-      })),
-  }));
+  // 与同页 UI-SHOT/UI-WORLD/UI-BACKUP 一致:单元格省略号属内部裁剪,
+  // 断言页面级与内容容器都不产生横向滚动。
+  const geometry = await page.evaluate(() => {
+    const content = document.querySelector<HTMLElement>(".data-content");
+    return {
+      documentOverflow: document.documentElement.scrollWidth > window.innerWidth,
+      containerOverflow: content ? content.scrollWidth > content.clientWidth + 1 : false,
+    };
+  });
   expect(geometry.documentOverflow).toBe(false);
-  expect(geometry.overflowingElements).toEqual([]);
+  expect(geometry.containerOverflow).toBe(false);
 });

@@ -3,6 +3,8 @@
  * Toast 只承担轻量成功反馈、撤销入口与非关键变化;持续状态用 Banner,风险确认用 Modal。
  */
 
+import { untrack } from "svelte";
+
 export interface ToastAction {
   label: string;
   run: () => void;
@@ -42,7 +44,11 @@ export function pushToast(options: ToastOptions): number {
     action: options.action ?? null,
     durationMs: options.durationMs ?? 4000,
   };
-  items = [...items.slice(-4), item];
+  // 在 untrack 中改写 items:调用方常位于 $effect 内,这里的读取一旦被追踪,
+  // 写入会重新触发同一 effect,形成 effect_update_depth_exceeded 自增循环。
+  untrack(() => {
+    items = [...items.slice(-4), item];
+  });
   if (item.durationMs > 0) {
     timers.set(
       id,

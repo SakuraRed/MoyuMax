@@ -33,9 +33,14 @@ test.beforeEach(async ({ page }) => {
   await page.reload();
 });
 
+/** 导航底部账户卡直达顶级账户页。 */
+async function openAccountsPage(page: import("@playwright/test").Page): Promise<void> {
+  await page.getByRole("button", { name: "账户", exact: true }).click();
+  await expect(page.getByRole("heading", { name: "账户" })).toBeVisible();
+}
+
 test("M30-MS-001 设备码登录完成后账户入库", async ({ page }) => {
-  await page.getByRole("button", { name: "设置" }).click();
-  await page.locator(".sn-item", { hasText: "账户" }).click();
+  await openAccountsPage(page);
   await page.getByRole("button", { name: "添加 Microsoft 账户" }).click();
 
   const panel = page.locator(".device-code-panel");
@@ -47,16 +52,15 @@ test("M30-MS-001 设备码登录完成后账户入库", async ({ page }) => {
   await expect(panel.getByRole("status")).toContainText("正在等待浏览器中的授权");
 
   await expect(panel).toHaveCount(0, { timeout: 10000 });
-  await expect(page.getByRole("heading", { name: "Steve" })).toBeVisible();
-  await expect(page.getByText("Microsoft", { exact: true }).first()).toBeVisible();
+  await expect(page.locator(".acct-row").filter({ hasText: "Steve" })).toBeVisible();
+  await expect(page.getByText("MICROSOFT", { exact: true })).toBeVisible();
 });
 
 test("M30-MS-002 轮询期间取消登录", async ({ page }) => {
   await page.evaluate(() => {
     window.localStorage.setItem("moyumax.browser.msLoginScenario", "pending");
   });
-  await page.getByRole("button", { name: "设置" }).click();
-  await page.locator(".sn-item", { hasText: "账户" }).click();
+  await openAccountsPage(page);
   await page.getByRole("button", { name: "添加 Microsoft 账户" }).click();
 
   const panel = page.locator(".device-code-panel");
@@ -71,8 +75,7 @@ test("M30-MS-003 登录失败显示可读错误", async ({ page }) => {
   await page.evaluate(() => {
     window.localStorage.setItem("moyumax.browser.msLoginScenario", "fail");
   });
-  await page.getByRole("button", { name: "设置" }).click();
-  await page.locator(".sn-item", { hasText: "账户" }).click();
+  await openAccountsPage(page);
   await page.getByRole("button", { name: "添加 Microsoft 账户" }).click();
 
   await expect(page.locator(".device-code-panel")).toBeVisible();
@@ -87,8 +90,7 @@ test("UI-MS-001 设备码面板在 960x600 和 200% 放大下不溢出", async (
     window.localStorage.setItem("moyumax.browser.msLoginScenario", "pending");
   });
   await page.setViewportSize({ width: 960, height: 600 });
-  await page.getByRole("button", { name: "设置" }).click();
-  await page.locator(".sn-item", { hasText: "账户" }).click();
+  await openAccountsPage(page);
   await page.getByRole("button", { name: "添加 Microsoft 账户" }).click();
   await expect(page.locator(".device-code-panel")).toBeVisible();
   await page.evaluate(() => {

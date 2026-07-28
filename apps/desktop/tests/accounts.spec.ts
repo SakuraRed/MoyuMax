@@ -48,43 +48,49 @@ test.beforeEach(async ({ page }) => {
   await page.reload();
 });
 
-test("M20-ACCT-001 创建离线账户并自动成为默认", async ({ page }) => {
-  await page.getByRole("button", { name: "设置" }).click();
-  await page.locator(".sn-item", { hasText: "账户" }).click();
+/** 导航底部账户卡直达顶级账户页。 */
+async function openAccountsPage(page: import("@playwright/test").Page): Promise<void> {
+  await page.getByRole("button", { name: "账户", exact: true }).click();
   await expect(page.getByRole("heading", { name: "账户" })).toBeVisible();
+}
+
+test("M20-ACCT-001 创建离线账户并自动成为默认", async ({ page }) => {
+  await openAccountsPage(page);
   await expect(page.getByText("还没有账户", { exact: false })).toBeVisible();
 
+  // 无账户时添加菜单默认展开,直接可选离线类型。
   await page.getByRole("button", { name: "添加离线账户" }).click();
   await page.getByRole("textbox", { name: "离线玩家名" }).fill("Steve_2026");
-  await expectElementPadding(page, ".account-form", { block: 16, inline: 20 });
+  await expectElementPadding(page, ".acct-form", { block: 16, inline: 20 });
   await page.getByRole("button", { name: "创建离线账户" }).click();
 
-  const row = page.locator(".backup-row").filter({ hasText: "Steve_2026" });
+  const row = page.locator(".acct-row").filter({ hasText: "Steve_2026" });
   await expect(row).toBeVisible();
-  await expect(row.getByText("离线", { exact: true })).toBeVisible();
+  await expect(row.getByText("离线账户", { exact: true })).toBeVisible();
   await expect(row.getByText("默认", { exact: true })).toBeVisible();
-  await expect(row.getByText("无法加入正版服务器", { exact: false })).toBeVisible();
+  await expect(row.getByText("不能加入开启正版验证的服务器", { exact: false })).toBeVisible();
 });
 
 test("M20-ACCT-002 外置登录添加账户且凭据错误可读", async ({ page }) => {
-  await page.getByRole("button", { name: "设置" }).click();
-  await page.locator(".sn-item", { hasText: "账户" }).click();
-  await page.getByRole("button", { name: "添加外置账户" }).click();
+  await openAccountsPage(page);
+  await page.getByRole("button", { name: "添加 LittleSkin 账户" }).click();
   await page.getByRole("textbox", { name: "外置账户用户名" }).fill("Alex@littleskin.cn");
   await page.getByRole("textbox", { name: "外置账户密码" }).fill("s3cret");
   await page.getByRole("button", { name: "登录并添加" }).click();
 
-  const row = page.locator(".backup-row").filter({ hasText: "Alex" });
+  const row = page.locator(".acct-row").filter({ hasText: "Alex" });
   await expect(row).toBeVisible();
-  await expect(row.getByText("外置", { exact: true })).toBeVisible();
+  await expect(page.getByText("第三方认证", { exact: true })).toBeVisible();
+  await expect(row.getByText("LittleSkin", { exact: false })).toBeVisible();
   await expect(row.getByText("令牌仅保存在本地", { exact: false })).toBeVisible();
 
-  await page.getByRole("button", { name: "添加外置账户" }).click();
+  await page.getByRole("button", { name: "添加账户" }).click();
+  await page.getByRole("button", { name: "添加 LittleSkin 账户" }).click();
   await page.getByRole("textbox", { name: "外置账户用户名" }).fill("Bad@littleskin.cn");
   await page.getByRole("textbox", { name: "外置账户密码" }).fill("wrong");
   await page.getByRole("button", { name: "登录并添加" }).click();
   await expect(page.getByRole("alert").getByText("凭据无效或会话已过期", { exact: false })).toBeVisible();
-  await expect(page.locator(".backup-row").filter({ hasText: "Bad" })).toHaveCount(0);
+  await expect(page.locator(".acct-row").filter({ hasText: "Bad" })).toHaveCount(0);
 });
 
 test("M20-ACCT-003 默认唯一且移除默认后最早剩余接任", async ({ page }) => {
@@ -97,18 +103,17 @@ test("M20-ACCT-003 默认唯一且移除默认后最早剩余接任", async ({ p
       serverUrl: "https://littleskin.cn/api/yggdrasil",
     }),
   ]);
-  await page.getByRole("button", { name: "设置" }).click();
-  await page.locator(".sn-item", { hasText: "账户" }).click();
+  await openAccountsPage(page);
 
-  const authlibRow = page.locator(".backup-row").filter({ hasText: "Alex" });
+  const authlibRow = page.locator(".acct-row").filter({ hasText: "Alex" });
   await authlibRow.getByRole("button", { name: "设为默认" }).click();
-  await expect(page.locator(".backup-row").filter({ hasText: "Alex" }).getByText("默认", { exact: true })).toBeVisible();
-  await expect(page.locator(".backup-row").filter({ hasText: "Steve_2026" }).getByText("默认", { exact: true })).toHaveCount(0);
+  await expect(page.locator(".acct-row").filter({ hasText: "Alex" }).getByText("默认", { exact: true })).toBeVisible();
+  await expect(page.locator(".acct-row").filter({ hasText: "Steve_2026" }).getByText("默认", { exact: true })).toHaveCount(0);
 
   await page.getByRole("button", { name: "移除账户 Alex" }).click();
   await authlibRow.getByRole("button", { name: "确认移除" }).click();
-  await expect(page.locator(".backup-row").filter({ hasText: "Alex" })).toHaveCount(0);
-  await expect(page.locator(".backup-row").filter({ hasText: "Steve_2026" }).getByText("默认", { exact: true })).toBeVisible();
+  await expect(page.locator(".acct-row").filter({ hasText: "Alex" })).toHaveCount(0);
+  await expect(page.locator(".acct-row").filter({ hasText: "Steve_2026" }).getByText("默认", { exact: true })).toBeVisible();
 });
 
 test("M20-ACCT-004 会话过期的账户刷新失败并保留过期标记", async ({ page }) => {
@@ -122,20 +127,46 @@ test("M20-ACCT-004 会话过期的账户刷新失败并保留过期标记", asyn
       sessionState: "expired",
     }),
   ]);
-  await page.getByRole("button", { name: "设置" }).click();
-  await page.locator(".sn-item", { hasText: "账户" }).click();
+  await openAccountsPage(page);
 
-  await expect(page.getByText("会话已过期", { exact: true })).toBeVisible();
-  await page.getByRole("button", { name: "刷新会话" }).click();
+  const row = page.locator(".acct-row").filter({ hasText: "Alex" });
+  await expect(row.getByText("会话已过期", { exact: true })).toBeVisible();
+  await expect(row.getByRole("button", { name: "重新登录" })).toBeVisible();
+  await row.getByRole("button", { name: "刷新会话" }).click();
   await expect(page.getByRole("alert").getByText("请重新登录", { exact: false })).toBeVisible();
-  await expect(page.getByText("会话已过期", { exact: true })).toBeVisible();
+  await expect(row.getByText("会话已过期", { exact: true })).toBeVisible();
 });
 
 test("M20-ACCT-005 Microsoft 提供真实设备码登录入口", async ({ page }) => {
-  await page.getByRole("button", { name: "设置" }).click();
-  await page.locator(".sn-item", { hasText: "账户" }).click();
+  await openAccountsPage(page);
   await expect(page.getByRole("button", { name: "添加 Microsoft 账户" })).toBeVisible();
   await expect(page.getByText("登录功能在后续里程碑提供", { exact: false })).toHaveCount(0);
+});
+
+test("M20-ACCT-006 本地保存密码先经风险确认且复选框默认不勾选", async ({ page }) => {
+  await openAccountsPage(page);
+  await page.getByRole("button", { name: "添加 LittleSkin 账户" }).click();
+  await page.getByRole("textbox", { name: "外置账户用户名" }).fill("Alex@littleskin.cn");
+  await page.getByRole("textbox", { name: "外置账户密码" }).fill("s3cret");
+  await page.getByRole("checkbox", { name: "为该账户在本地保存密码(本地加密)" }).check();
+  await page.getByRole("button", { name: "登录并添加" }).click();
+
+  const dialog = page.getByRole("dialog", { name: "为「Alex@littleskin.cn」启用本地密码保存" });
+  await expect(dialog).toBeVisible();
+  await expect(dialog.getByText("默认只保存登录令牌", { exact: false })).toBeVisible();
+  await expect(dialog.getByText("忘记主密码只能清除已保存密码", { exact: false })).toBeVisible();
+  const confirm = dialog.getByRole("button", { name: "设置主密码并启用" });
+  await expect(confirm).toBeDisabled();
+  await dialog.getByRole("button", { name: "取消" }).click();
+  await expect(dialog).toBeHidden();
+  await expect(page.locator(".acct-row").filter({ hasText: "Alex" })).toHaveCount(0);
+
+  await page.getByRole("button", { name: "登录并添加" }).click();
+  await expect(dialog).toBeVisible();
+  await dialog.getByRole("checkbox", { name: "我已了解上述风险" }).check();
+  await expect(confirm).toBeEnabled();
+  await confirm.click();
+  await expect(page.locator(".acct-row").filter({ hasText: "Alex" })).toBeVisible();
 });
 
 test("UI-ACCT-001 账户区与添加表单在 960x600 和 200% 放大下不溢出", async ({ page }) => {
@@ -143,32 +174,25 @@ test("UI-ACCT-001 账户区与添加表单在 960x600 和 200% 放大下不溢�
     accountEntry({ id: "acct-offline", username: "Steve_2026", isDefault: true }),
   ]);
   await page.setViewportSize({ width: 960, height: 600 });
-  await page.getByRole("button", { name: "设置" }).click();
-  await page.locator(".sn-item", { hasText: "账户" }).click();
+  await openAccountsPage(page);
+  await page.getByRole("button", { name: "添加账户" }).click();
   await page.getByRole("button", { name: "添加外置账户" }).click();
   await expect(page.getByRole("textbox", { name: "外置账户用户名" })).toBeVisible();
   await page.evaluate(() => {
     document.documentElement.style.zoom = "2";
   });
 
-  const geometry = await page.evaluate(() => ({
-    scrollWidth: document.documentElement.scrollWidth,
-    viewportWidth: window.innerWidth,
-    overflowingElements: [...document.querySelectorAll<HTMLElement>(".java-content *")]
-      .filter(
-        (element) =>
-          !element.classList.contains("sr-live") &&
-          element.scrollWidth > element.clientWidth + 1,
-      )
-      .map((element) => ({
-        tag: element.tagName,
-        className: element.className,
-        scrollWidth: element.scrollWidth,
-        clientWidth: element.clientWidth,
-      })),
-  }));
-  expect(geometry.scrollWidth).toBeLessThanOrEqual(geometry.viewportWidth);
-  expect(geometry.overflowingElements).toEqual([]);
+  // 与同页 UI-SHOT/UI-WORLD/UI-BACKUP 一致:行内省略号属内部裁剪,
+  // 断言页面级与内容容器都不产生横向滚动。
+  const geometry = await page.evaluate(() => {
+    const content = document.querySelector<HTMLElement>(".acct-content");
+    return {
+      documentOverflow: document.documentElement.scrollWidth > window.innerWidth,
+      containerOverflow: content ? content.scrollWidth > content.clientWidth + 1 : false,
+    };
+  });
+  expect(geometry.documentOverflow).toBe(false);
+  expect(geometry.containerOverflow).toBe(false);
 });
 
 async function seedAccounts(
