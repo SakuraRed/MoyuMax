@@ -530,6 +530,12 @@ details.adv .adv-body { padding: 4px 16px 16px; }
   border-radius: var(--r);
 }
 
+/* 高对比:描边提升到一级文字色,焦点与边界始终可辨 */
+.window[data-contrast="high"] {
+  --glass-border: var(--text-1);
+  --glass-highlight: var(--text-1);
+}
+
 /* ============ 浅色主题令牌 ============ */
 .window[data-theme="light"] {
   --bg-0: #eef4f5;
