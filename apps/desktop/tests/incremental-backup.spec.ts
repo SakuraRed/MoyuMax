@@ -81,7 +81,7 @@ test("M19-INC-001 备份时间线显示定时触发与增量类型徽章", async
 
 test("M19-INC-002 备份设置持久化并校验边界", async ({ page }) => {
   await page.getByRole("button", { name: "设置" }).click();
-  await page.locator(".sn-item", { hasText: "备份" }).click();
+  await page.locator(".sn-item", { hasText: "存储" }).click();
   await expect(page.getByRole("heading", { name: "世界备份" })).toBeVisible();
 
   const interval = page.getByRole("spinbutton", { name: "运行期间备份间隔（分钟）" });
@@ -98,7 +98,7 @@ test("M19-INC-002 备份设置持久化并校验边界", async ({ page }) => {
 
   await page.reload();
   await page.getByRole("button", { name: "设置" }).click();
-  await page.locator(".sn-item", { hasText: "备份" }).click();
+  await page.locator(".sn-item", { hasText: "存储" }).click();
   await expect(page.getByRole("spinbutton", { name: "运行期间备份间隔（分钟）" })).toHaveValue("5");
   await expect(page.getByRole("spinbutton", { name: "每个实例保留备份数量" })).toHaveValue("3");
 
@@ -114,7 +114,7 @@ test("M19-INC-002 备份设置持久化并校验边界", async ({ page }) => {
 
 test("M19-INC-003 关闭定时备份的零间隔可保存", async ({ page }) => {
   await page.getByRole("button", { name: "设置" }).click();
-  await page.locator(".sn-item", { hasText: "备份" }).click();
+  await page.locator(".sn-item", { hasText: "存储" }).click();
   const interval = page.getByRole("spinbutton", { name: "运行期间备份间隔（分钟）" });
   await interval.fill("0");
   await interval.blur();
@@ -135,7 +135,7 @@ test("UI-BACKUP-002 备份设置与时间线在 960x600 和 200% 放大下不溢
   await page.reload();
   await page.setViewportSize({ width: 960, height: 600 });
   await page.getByRole("button", { name: "设置" }).click();
-  await page.locator(".sn-item", { hasText: "备份" }).click();
+  await page.locator(".sn-item", { hasText: "存储" }).click();
   await expect(page.getByRole("heading", { name: "世界备份" })).toBeVisible();
   await page.evaluate(() => {
     document.documentElement.style.zoom = "2";

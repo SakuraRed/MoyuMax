@@ -1456,7 +1456,7 @@ export const zhCN: Record<string, string> = {
   "data.locations.statusOk": "正常",
   "data.locations.singleNote": "当前版本使用单一主数据位置;多存储位置与数据迁移将在后续版本提供。",
   "data.recycle.retention": "删除的对象保留 30 天,到期自动清除;恢复会回到原位置。",
-  "data.recycle.restoreAll": "全部恢复",
+  "data.recycle.restoreAll": "恢复所有项目",
   "data.recycle.emptyBin": "清空回收站",
   "data.recycle.colObject": "对象",
   "data.recycle.colKind": "类型",

@@ -46,20 +46,20 @@ test.beforeEach(async ({ page }) => {
 
 test("M28-THEME-001 纯色背景应用与持久化", async ({ page }) => {
   await page.getByRole("button", { name: "设置" }).click();
-  await page.locator(".sn-item", { hasText: "外观与语言" }).click();
+  await page.locator(".sn-item", { hasText: "外观" }).click();
   await page.getByLabel("背景", { exact: true }).selectOption("color");
   await page.getByRole("button", { name: "应用颜色" }).click();
 
   await expect(page.locator(".window")).toHaveAttribute("data-background", "color");
-  const background = await page.locator(".window").evaluate((element) =>
-    getComputedStyle(element).getPropertyValue("--bg-app").trim(),
+  const styled = await page.locator(".window").evaluate((element) =>
+    element.getAttribute("style") ?? "",
   );
-  expect(background).toBe("#1b1b1f");
+  expect(styled).toContain("--bg-window: #1b1b1f");
 
   await page.reload();
   await expect(page.locator(".window")).toHaveAttribute("data-background", "color");
   await page.getByRole("button", { name: "设置" }).click();
-  await page.locator(".sn-item", { hasText: "外观与语言" }).click();
+  await page.locator(".sn-item", { hasText: "外观" }).click();
   await page.getByLabel("背景", { exact: true }).selectOption("default");
   await expect(page.locator(".window")).toHaveAttribute("data-background", "default");
 });
@@ -69,7 +69,7 @@ test("M28-THEME-002 图片背景在减少动画时降级", async ({ page }) => {
     window.localStorage.setItem("moyumax.browser.pickedBackgroundImage", "D:\Pictures\wall.png");
   });
   await page.getByRole("button", { name: "设置" }).click();
-  await page.locator(".sn-item", { hasText: "外观与语言" }).click();
+  await page.locator(".sn-item", { hasText: "外观" }).click();
   await page.getByLabel("背景", { exact: true }).selectOption("image");
   await page.getByRole("button", { name: "选择图片" }).click();
 
@@ -79,12 +79,14 @@ test("M28-THEME-002 图片背景在减少动画时降级", async ({ page }) => {
   );
   expect(styled).toContain("background-image");
 
+  await page.locator(".sn-item", { hasText: "无障碍" }).click();
   await page.getByRole("group", { name: "动画偏好" }).getByRole("button", { name: "减少动画", exact: true }).click();
   const degraded = await page.locator(".window").evaluate((element) =>
     element.getAttribute("style") ?? "",
   );
   expect(degraded).not.toContain("background-image");
 
+  await page.locator(".sn-item", { hasText: "外观" }).click();
   await page.getByRole("button", { name: "清除图片" }).click();
   await expect(page.locator(".window")).toHaveAttribute("data-background", "default");
 });
@@ -95,7 +97,7 @@ test("M28-THEME-003 主题包应用配色且高对比忽略", async ({ page }) =
     window.localStorage.setItem("moyumax.browser.pickedThemePack", "D:\Themes\tundra.json");
   }, VALID_PACK);
   await page.getByRole("button", { name: "设置" }).click();
-  await page.locator(".sn-item", { hasText: "外观与语言" }).click();
+  await page.locator(".sn-item", { hasText: "外观" }).click();
   await page.getByLabel("背景", { exact: true }).selectOption("themePack");
   await page.getByRole("button", { name: "导入主题包" }).click();
 
@@ -106,12 +108,14 @@ test("M28-THEME-003 主题包应用配色且高对比忽略", async ({ page }) =
   );
   expect(styled).toContain("--accent: #7cc46c");
 
+  await page.locator(".sn-item", { hasText: "无障碍" }).click();
   await page.getByRole("group", { name: "对比度偏好" }).getByRole("button", { name: "高对比", exact: true }).click();
   const degraded = await page.locator(".window").evaluate((element) =>
     element.getAttribute("style") ?? "",
   );
   expect(degraded).not.toContain("--accent: #7cc46c");
 
+  await page.locator(".sn-item", { hasText: "外观" }).click();
   await page.getByRole("button", { name: "移除主题包" }).click();
   await expect(page.locator(".window")).toHaveAttribute("data-background", "default");
 });
@@ -130,7 +134,7 @@ test("M28-THEME-004 恶意主题包被拒绝", async ({ page }) => {
     window.localStorage.setItem("moyumax.browser.pickedThemePack", "D:\Themes\evil.json");
   });
   await page.getByRole("button", { name: "设置" }).click();
-  await page.locator(".sn-item", { hasText: "外观与语言" }).click();
+  await page.locator(".sn-item", { hasText: "外观" }).click();
   await page.getByLabel("背景", { exact: true }).selectOption("themePack");
   await page.getByRole("button", { name: "导入主题包" }).click();
 
@@ -141,7 +145,7 @@ test("M28-THEME-004 恶意主题包被拒绝", async ({ page }) => {
 test("UI-THEME-002 背景设置区在 960x600 和 200% 放大下不发生横向溢出", async ({ page }) => {
   await page.setViewportSize({ width: 960, height: 600 });
   await page.getByRole("button", { name: "设置" }).click();
-  await page.locator(".sn-item", { hasText: "外观与语言" }).click();
+  await page.locator(".sn-item", { hasText: "外观" }).click();
   await page.getByLabel("背景", { exact: true }).selectOption("themePack");
   await expect(page.getByRole("button", { name: "导入主题包" })).toBeVisible();
   await page.evaluate(() => {

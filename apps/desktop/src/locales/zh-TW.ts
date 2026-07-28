@@ -1451,7 +1451,7 @@ export const zhTW: Record<string, string> = {
   "data.locations.statusOk": "正常",
   "data.locations.singleNote": "目前版本使用單一主資料位置;多儲存位置與資料遷移將在後續版本提供。",
   "data.recycle.retention": "刪除的對象保留 30 天,到期自動清除;還原會回到原位置。",
-  "data.recycle.restoreAll": "全部還原",
+  "data.recycle.restoreAll": "還原所有項目",
   "data.recycle.emptyBin": "清空資源回收筒",
   "data.recycle.colObject": "對象",
   "data.recycle.colKind": "類型",

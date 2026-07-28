@@ -142,7 +142,7 @@ test("UI-A11Y-001 来源详情在 960x600 和 200% 放大下不溢出", async ({
   await page.evaluate(() => {
     document.documentElement.style.zoom = "2";
   });
-  await expect(page.getByText(/来源:Modrinth 官方/)).toBeVisible();
+  await expect(page.locator(".task-source").first()).toContainText("来源:Modrinth 官方");
   const overflow = await page.evaluate(() =>
     [...document.querySelectorAll<HTMLElement>(".task-source")].some(
       (element) => element.scrollWidth > element.clientWidth + 1,

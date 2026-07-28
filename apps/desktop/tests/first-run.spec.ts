@@ -7,40 +7,48 @@ test.beforeEach(async ({ page }) => {
 });
 
 test("M1-FIRST-RUN-002 默认流程持久化并在刷新后进入首页", async ({ page }) => {
-  await expect(page.getByRole("heading", { name: "欢迎使用 MoyuMax" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "MoyuMax" })).toBeVisible();
+  // 焦点默认落在主按钮
+  await expect(page.getByRole("button", { name: "开始设置" })).toBeFocused();
+
+  await page.getByRole("button", { name: "开始设置" }).click();
+  await expect(page.getByRole("heading", { name: "语言与数据位置" })).toBeVisible();
+  await assertOnboardingLayoutStable(page);
 
   await page.getByRole("button", { name: "下一步" }).click();
-  await expect(page.getByRole("heading", { name: "数据位置" })).toBeVisible();
-  await assertRegionsDoNotOverlap(page);
+  await expect(page.getByRole("heading", { name: "隐私与更新" })).toBeVisible();
+  await assertOnboardingLayoutStable(page);
 
-  await page.getByRole("button", { name: "下一步" }).click();
-  await expect(page.getByRole("heading", { name: "隐私选择" })).toBeVisible();
-  await assertRegionsDoNotOverlap(page);
-
-  await page.getByRole("button", { name: "完成设置" }).click();
-  await expect(page.getByRole("heading", { name: "一切就绪" })).toBeVisible();
-  await assertRegionsDoNotOverlap(page);
-
-  await page.getByRole("button", { name: "开始使用" }).click();
+  await page.getByRole("button", { name: "完成，开始摸鱼" }).click();
   await expect(page.getByRole("heading", { name: "这里还空着" })).toBeVisible();
 
   await page.reload();
   await expect(page.getByRole("heading", { name: "这里还空着" })).toBeVisible();
-  await expect(page.getByRole("heading", { name: "欢迎使用 MoyuMax" })).toHaveCount(0);
+  await expect(page.getByRole("button", { name: "开始设置" })).toHaveCount(0);
+});
+
+test("M1-FIRST-RUN-003 先看看跳过引导并直接进入首页", async ({ page }) => {
+  await page.getByRole("button", { name: "先看看" }).click();
+  await expect(page.getByRole("heading", { name: "这里还空着" })).toBeVisible();
+
+  await page.reload();
+  await expect(page.getByRole("heading", { name: "这里还空着" })).toBeVisible();
+  await expect(page.getByRole("button", { name: "开始设置" })).toHaveCount(0);
 });
 
 test("UI-A11Y-001 在 960x600 和 200% 放大下主区域不重叠", async ({ page }) => {
   await page.setViewportSize({ width: 960, height: 600 });
   await page.reload();
 
-  await assertRegionsDoNotOverlap(page);
-  await expect(page.getByRole("button", { name: "下一步" })).toBeVisible();
+  await assertOnboardingLayoutStable(page);
+  await expect(page.getByRole("button", { name: "开始设置" })).toBeVisible();
+  await page.getByRole("button", { name: "开始设置" }).click();
 
   await page.evaluate(() => {
     document.documentElement.style.zoom = "2";
   });
 
-  await assertRegionsDoNotOverlap(page);
+  await assertOnboardingLayoutStable(page);
   await expect(page.getByRole("button", { name: "下一步" })).toBeVisible();
 
   const geometry = await page.evaluate(() => {
@@ -57,40 +65,31 @@ test("UI-A11Y-001 在 960x600 和 200% 放大下主区域不重叠", async ({ pa
   expect(geometry.actionsHasHorizontalOverflow).toBe(false);
 });
 
-test("UI-A11Y-001 文本与卡片边缘保持可读内边距", async ({ page }) => {
+test("UI-A11Y-001 引导卡片内边距充足且关键控件可达", async ({ page }) => {
+  await page.getByRole("button", { name: "开始设置" }).click();
   await expectElementPadding(page, ".wizard-card", { block: 18, inline: 22 });
-  await expectContentInset(page, ".choice", ".choice-copy", {
-    top: 16,
-    right: 20,
-    bottom: 16,
-  });
-  await expectElementPadding(page, ".choice-copy strong em", { block: 5, inline: 12 });
 
-  const legendGap = await page.evaluate(() => {
-    const legend = document.querySelector<HTMLElement>(".choice-section legend");
-    const group = document.querySelector<HTMLElement>(".choice-group");
-    if (!legend || !group) throw new Error("language group is unavailable");
-    return group.getBoundingClientRect().top - legend.getBoundingClientRect().bottom;
-  });
-  expect(legendGap).toBeGreaterThanOrEqual(7);
+  await expect(page.getByRole("combobox", { name: "界面语言" })).toBeVisible();
+  const dataLocation = page.getByRole("textbox", { name: "数据位置" });
+  await expect(dataLocation).toBeVisible();
+  await expect(dataLocation).toHaveAttribute("readonly", "");
+
+  await page.getByRole("button", { name: "更改" }).click();
+  await expect(dataLocation).not.toHaveAttribute("readonly", "");
+  await page.getByRole("button", { name: "使用默认" }).click();
+  await expect(dataLocation).toHaveAttribute("readonly", "");
 
   await page.getByRole("button", { name: "下一步" }).click();
-  await expectContentInset(page, ".choice", ".choice-copy", {
-    top: 16,
-    right: 20,
-    bottom: 16,
-  });
-
-  await page.getByRole("button", { name: "下一步" }).click();
-  await expectContentInset(page, ".setting-row", ".setting-row > span:first-child", {
-    top: 16,
-    bottom: 16,
-    left: 20,
-  });
-  await expectElementPadding(page, ".setting-row strong em", { block: 5, inline: 12 });
-
-  await page.getByRole("button", { name: "完成设置" }).click();
-  await expectElementPadding(page, ".summary-list > div", { block: 16, inline: 20 });
+  const noReport = page.getByRole("radio", { name: /不上报任何诊断与遥测/ });
+  await expect(noReport).toBeVisible();
+  await expect(noReport).toHaveAttribute("aria-checked", "true");
+  await expect(
+    page.getByRole("radio", { name: /允许上报匿名崩溃摘要/ }),
+  ).toHaveAttribute("aria-checked", "false");
+  await expect(
+    page.getByRole("switch", { name: "自动检查新版本" }),
+  ).toHaveAttribute("aria-checked", "true");
+  await expectElementPadding(page, ".opt", { block: 12, inline: 14 });
 });
 
 test("M2-INSTALL-001 默认配置生成可恢复安装任务", async ({ page }) => {
@@ -98,7 +97,7 @@ test("M2-INSTALL-001 默认配置生成可恢复安装任务", async ({ page }) 
 
   await page.getByRole("button", { name: "安装第一个游戏" }).click();
   await expect(page.getByRole("heading", { name: "安装第一个游戏" })).toBeVisible();
-  await expect(page.getByRole("radio", { name: /1\.21\.8/ })).toHaveAttribute(
+  await expect(page.getByRole("radio", { name: /Minecraft 1\.21\.8/ })).toHaveAttribute(
     "aria-checked",
     "true",
   );
@@ -132,6 +131,7 @@ test("M2-INSTALL-001 默认配置生成可恢复安装任务", async ({ page }) 
   await expect(page.getByText("1.21.8 Fabric", { exact: false })).toBeVisible();
 
   await page.reload();
+  await page.getByRole("button", { name: "任务", exact: true }).click();
   await expect(page.getByText("1.21.8 Fabric", { exact: false })).toBeVisible();
 });
 
@@ -221,9 +221,12 @@ async function expectContentInset(
   }
 }
 
-async function assertRegionsDoNotOverlap(
+async function assertOnboardingLayoutStable(
   page: import("@playwright/test").Page,
 ): Promise<void> {
+  // 启动加载阶段后再测量，避免读到骨架屏。
+  await page.locator(".titlebar").waitFor();
+  await page.locator(".center-stage, .wizard").first().waitFor();
   const geometry = await page.evaluate(() => {
     const rectangle = (selector: string) => {
       const element = document.querySelector<HTMLElement>(selector);
@@ -237,31 +240,27 @@ async function assertRegionsDoNotOverlap(
       };
     };
 
+    const stageSelector = document.querySelector(".center-stage")
+      ? ".center-stage"
+      : ".wizard";
     return {
       titlebar: rectangle(".titlebar"),
-      navigation: rectangle(".navrail"),
-      topbar: rectangle(".topbar"),
-      content: rectangle(".content"),
-      statusbar: rectangle(".statusbar"),
+      stage: rectangle(stageSelector),
       documentWidth: document.documentElement.scrollWidth,
       viewportWidth: window.innerWidth,
     };
   });
 
-  expect(geometry.titlebar.bottom).toBeLessThanOrEqual(geometry.topbar.top);
-  expect(geometry.navigation.right).toBeLessThanOrEqual(geometry.topbar.left);
-  expect(geometry.topbar.bottom).toBeLessThanOrEqual(geometry.content.top);
-  expect(geometry.content.bottom).toBeLessThanOrEqual(geometry.statusbar.top);
+  expect(geometry.titlebar.bottom).toBeLessThanOrEqual(geometry.stage.top);
   expect(geometry.documentWidth).toBeLessThanOrEqual(geometry.viewportWidth);
 }
 
 async function completeDefaultOnboarding(
   page: import("@playwright/test").Page,
 ): Promise<void> {
+  await page.getByRole("button", { name: "开始设置" }).click();
   await page.getByRole("button", { name: "下一步" }).click();
-  await page.getByRole("button", { name: "下一步" }).click();
-  await page.getByRole("button", { name: "完成设置" }).click();
-  await page.getByRole("button", { name: "开始使用" }).click();
+  await page.getByRole("button", { name: "完成，开始摸鱼" }).click();
 }
 
 async function assertDocumentHasNoHorizontalOverflow(

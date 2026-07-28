@@ -19,14 +19,14 @@ test.beforeEach(async ({ page }) => {
   await page.reload();
 });
 
-async function openDownloadSettings(page: Page): Promise<void> {
+async function openNetworkSettings(page: Page): Promise<void> {
   await page.getByRole("button", { name: "设置", exact: true }).click();
-  await page.locator(".sn-item", { hasText: "下载" }).click();
-  await expect(page.getByRole("heading", { name: "下载" })).toBeVisible();
+  await page.locator(".sn-item", { hasText: "网络" }).click();
+  await expect(page.getByRole("heading", { name: "网络" })).toBeVisible();
 }
 
 test("PROXY-001 默认跟随系统,切换直连立即持久化并回读", async ({ page }) => {
-  await openDownloadSettings(page);
+  await openNetworkSettings(page);
 
   const proxySelect = page.getByRole("combobox", { name: "代理", exact: true });
   await expect(proxySelect).toHaveValue("system");
@@ -45,12 +45,12 @@ test("PROXY-001 默认跟随系统,切换直连立即持久化并回读", async 
 
   // 回读:离开设置页再进入,选择保持
   await page.getByRole("button", { name: "首页", exact: true }).click();
-  await openDownloadSettings(page);
+  await openNetworkSettings(page);
   await expect(page.getByRole("combobox", { name: "代理", exact: true })).toHaveValue("direct");
 });
 
 test("PROXY-002 自定义代理非法地址拒绝且不写入", async ({ page }) => {
-  await openDownloadSettings(page);
+  await openNetworkSettings(page);
 
   await page.getByRole("combobox", { name: "代理", exact: true }).selectOption("custom");
   const urlInput = page.getByRole("textbox", { name: "代理地址" });
@@ -83,7 +83,7 @@ test("PROXY-002 自定义代理非法地址拒绝且不写入", async ({ page })
 });
 
 test("PROXY-003 自定义代理合法地址保存并回读", async ({ page }) => {
-  await openDownloadSettings(page);
+  await openNetworkSettings(page);
 
   await page.getByRole("combobox", { name: "代理", exact: true }).selectOption("custom");
   const urlInput = page.getByRole("textbox", { name: "代理地址" });
@@ -99,7 +99,7 @@ test("PROXY-003 自定义代理合法地址保存并回读", async ({ page }) =>
 
   // 回读:离开设置页再进入,模式与地址保持
   await page.getByRole("button", { name: "首页", exact: true }).click();
-  await openDownloadSettings(page);
+  await openNetworkSettings(page);
   await expect(page.getByRole("combobox", { name: "代理", exact: true })).toHaveValue("custom");
   await expect(page.getByRole("textbox", { name: "代理地址" })).toHaveValue(
     "http://127.0.0.1:10808",

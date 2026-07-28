@@ -1,20 +1,17 @@
 <script lang="ts">
   import { tick, untrack } from "svelte";
 
-  import { t } from "../i18n.svelte";
+  import { t, uiContrast, uiMotion, uiTheme } from "../i18n.svelte";
   import {
     buildSelection,
     createOnboardingState,
-    goBack,
-    goForward,
     setOnboardingError,
     setSubmitting,
     updateOnboardingDraft,
   } from "../onboarding";
   import type { OnboardingState } from "../onboarding";
   import type { BootstrapState, Language, OnboardingSelection } from "../runtime";
-  import AppShell from "./AppShell.svelte";
-  import Icon from "./Icon.svelte";
+  import Fish from "./Fish.svelte";
 
   interface Props {
     bootstrap: BootstrapState;
@@ -39,68 +36,81 @@
   let flow: OnboardingState = $state(
     untrack(() => createOnboardingState(bootstrap.defaults)),
   );
-  let usesCustomDataDirectory = $state(false);
+  // welcome:扑通鱼欢迎页;wizard:两步引导(flow.step 复用 language/privacy 两个状态位)。
+  let stage = $state<"welcome" | "wizard">("welcome");
+  let editingDataDirectory = $state(false);
   let wizardRoot: HTMLElement | undefined = $state();
 
-  // 语言选项的标题与说明刻意保留各语言自名/自描述，不随界面语言切换，不入字典。
-  const languages: ReadonlyArray<{
-    value: Language;
-    title: string;
-    subtitle: string;
-  }> = [
-    { value: "zh-CN", title: "简体中文", subtitle: "检测到系统语言：中文（简体，中国）" },
-    { value: "zh-TW", title: "繁體中文", subtitle: "介面語言：繁體中文" },
-    { value: "en", title: "English", subtitle: "Interface language: English" },
+  // 语言选项的标题刻意保留各语言自名，不随界面语言切换，不入字典。
+  const languages: ReadonlyArray<{ value: Language; title: string }> = [
+    { value: "zh-CN", title: "简体中文" },
+    { value: "zh-TW", title: "繁體中文" },
+    { value: "en", title: "English" },
   ];
 
-  const stepKeys = ["onboarding.step.language", "onboarding.step.data", "onboarding.step.privacy"] as const;
+  const wizardStep = $derived(flow.step === "privacy" ? 2 : 1);
 
+  // 仅在欢迎页/步骤切换时移动焦点到主按钮；草稿编辑不抢焦点。
+  let lastFocusKey = "";
   $effect(() => {
-    flow.step;
+    const key = `${stage}:${flow.step}`;
+    if (key === lastFocusKey) return;
+    lastFocusKey = key;
     void tick().then(() => {
       wizardRoot?.querySelector<HTMLElement>("[data-autofocus]")?.focus();
     });
   });
 
+  function beginSetup(): void {
+    stage = "wizard";
+  }
+
   function chooseLanguage(language: Language): void {
     flow = updateOnboardingDraft(flow, { language });
-  }
-
-  function useDefaultDataDirectory(): void {
-    usesCustomDataDirectory = false;
-    flow = updateOnboardingDraft(flow, {
-      dataDirectory: bootstrap.defaultDataDirectory,
-    });
-  }
-
-  function useCustomDataDirectory(): void {
-    usesCustomDataDirectory = true;
-    if (flow.draft.dataDirectory === bootstrap.defaultDataDirectory) {
-      flow = updateOnboardingDraft(flow, { dataDirectory: "" });
-    }
   }
 
   function updateDataDirectory(value: string): void {
     flow = updateOnboardingDraft(flow, { dataDirectory: value });
   }
 
+  function toggleDataDirectoryEdit(): void {
+    if (editingDataDirectory) {
+      flow = updateOnboardingDraft(flow, { dataDirectory: bootstrap.defaultDataDirectory });
+      editingDataDirectory = false;
+    } else {
+      editingDataDirectory = true;
+      void tick().then(() => {
+        wizardRoot?.querySelector<HTMLInputElement>("[data-data-directory]")?.focus();
+      });
+    }
+  }
+
+  function setTelemetry(enabled: boolean): void {
+    flow = updateOnboardingDraft(flow, { telemetryEnabled: enabled });
+  }
+
+  function setUpdateChecks(enabled: boolean): void {
+    flow = updateOnboardingDraft(flow, { updateChecksEnabled: enabled });
+  }
+
   function next(): void {
-    flow = goForward(flow);
+    flow = { ...flow, step: "privacy", errorMessage: null };
   }
 
   function previous(): void {
-    flow = goBack(flow);
+    flow = { ...flow, step: "language", errorMessage: null };
   }
 
   async function complete(): Promise<void> {
     flow = setSubmitting(flow, true);
     try {
-      await onPersist(buildSelection(flow));
-      flow = goForward(setSubmitting(flow, false));
+      const selection = buildSelection(flow);
+      await onPersist(selection);
+      onStart(selection);
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
-      flow = { ...setOnboardingError(flow, message), step: "data" };
-      usesCustomDataDirectory = true;
+      flow = { ...setOnboardingError(flow, message), step: "language" };
+      editingDataDirectory = true;
     }
   }
 
@@ -108,214 +118,274 @@
     flow = setSubmitting(flow, true);
     try {
       await onSkip();
-      flow = {
-        ...flow,
-        draft: { ...bootstrap.defaults },
-        step: "done",
-        isSubmitting: false,
-      };
+      onStart({ ...bootstrap.defaults });
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       flow = setOnboardingError(flow, message);
     }
   }
-
-  function languageLabel(language: Language): string {
-    return languages.find((candidate) => candidate.value === language)?.title ?? language;
-  }
 </script>
 
-<AppShell
-  pageTitle={t("onboarding.pageTitle")}
-  titleSuffix={t("onboarding.titleSuffix")}
-  dataDirectory={flow.draft.dataDirectory || bootstrap.defaultDataDirectory}
-  navigationDisabled
-  {onMinimize}
-  {onToggleMaximize}
-  {onClose}
+<div
+  class="window"
+  data-theme={uiTheme()}
+  data-motion={uiMotion()}
+  data-contrast={uiContrast()}
+  bind:this={wizardRoot}
 >
-  <main class="content wizard-content" bind:this={wizardRoot}>
-    <section class="wizard-card" aria-label={t("onboarding.wizardAria")}>
-      <ol class="steps" aria-label={t("onboarding.stepsAria")}>
-        {#each stepKeys as name, index}
-          {@const stepNumber = index + 1}
-          {@const completeStep = stepNumber < (["language", "data", "privacy", "done"].indexOf(flow.step) + 1)}
-          {@const currentStep = stepNumber === (["language", "data", "privacy"].indexOf(flow.step) + 1)}
-          <li class:done={completeStep} class:current={currentStep} aria-current={currentStep ? "step" : undefined}>
-            <span>{#if completeStep}<Icon name="check" size={12} />{:else}{stepNumber}{/if}</span>{t(name)}
-          </li>
-          {#if index < stepKeys.length - 1}<i aria-hidden="true"></i>{/if}
-        {/each}
-      </ol>
+  <header class="titlebar" data-tauri-drag-region="deep">
+    <span class="tb-title">{stage === "welcome" ? "MoyuMax" : t("onboarding.setupTitle")}</span>
+    {#if stage === "wizard"}
+      <span class="tb-sub">{t("onboarding.stepCounter").replace("{step}", String(wizardStep)).replace("{total}", "2")}</span>
+    {/if}
+    <span class="tb-spacer" data-tauri-drag-region></span>
+    <button class="tb-win" aria-label={t("shell.window.minimize")} onclick={() => void onMinimize()}><i class="min-line"></i></button>
+    <button class="tb-win" aria-label={t("shell.window.maximize")} onclick={() => void onToggleMaximize()}>▢</button>
+    <button class="tb-win close" aria-label={t("shell.window.close")} onclick={() => void onClose()}>✕</button>
+  </header>
 
-      {#if flow.step === "language"}
-        <div class="wizard-body">
-          <h1>{t("onboarding.language.title")}</h1>
-          <p class="muted intro">{t("onboarding.language.intro")}</p>
-          <fieldset class="choice-section">
-            <legend>{t("onboarding.language.legend")}</legend>
-            <div class="choice-group">
-              {#each languages as language, index}
-                <label class:selected={flow.draft.language === language.value} class="choice">
-                  <input
-                    type="radio"
-                    name="language"
-                    value={language.value}
-                    checked={flow.draft.language === language.value}
-                    data-autofocus={index === 0 ? "true" : undefined}
-                    onchange={() => chooseLanguage(language.value)}
-                  />
-                  <span class="radio-mark"></span>
-                  <span class="choice-copy">
-                    <strong>
-                      {language.title}{#if language.value === "zh-CN"}<em>{t("onboarding.language.systemTag")}</em>{/if}
-                    </strong>
-                    <small>{language.subtitle}</small>
-                  </span>
-                </label>
-              {/each}
-            </div>
-          </fieldset>
-        </div>
-        <footer class="wizard-actions">
-          <span><button class="inline-link" onclick={() => void skip()}>{t("onboarding.skip")}</button></span>
-          <span><button class="button primary" onclick={next}>{t("onboarding.next")} <Icon name="arrow-right" size={14} /></button></span>
-        </footer>
-      {:else if flow.step === "data"}
-        <div class="wizard-body">
-          <h1>{t("onboarding.step.data")}</h1>
-          <p class="muted intro">{t("onboarding.data.intro")}</p>
-          {#if flow.errorMessage}
-            <div class="error-block" role="alert">
-              <strong>{t("onboarding.data.errorTitle")}</strong>
-              <span>{t("onboarding.data.errorBody")}</span>
-              <span>{t("onboarding.data.errorHint")}</span>
-              <details><summary>{t("onboarding.data.errorDetails")}</summary><code>{flow.errorMessage}</code></details>
-            </div>
-          {/if}
-          <div class="choice-group" role="radiogroup" aria-label={t("onboarding.step.data")}>
-            <button
-              class:selected={!usesCustomDataDirectory}
-              class="choice"
-              role="radio"
-              aria-checked={!usesCustomDataDirectory}
-              data-autofocus={!usesCustomDataDirectory ? "true" : undefined}
-              onclick={useDefaultDataDirectory}
-            >
-              <span class="radio-mark"></span>
-              <span class="choice-copy">
-                <strong>{t("onboarding.data.defaultTitle")}</strong>
-                <small>{t("onboarding.data.defaultDescription")}</small>
-                <code>{bootstrap.defaultDataDirectory}</code>
-              </span>
-            </button>
-            <button
-              class:selected={usesCustomDataDirectory}
-              class="choice"
-              role="radio"
-              aria-checked={usesCustomDataDirectory}
-              onclick={useCustomDataDirectory}
-            >
-              <span class="radio-mark"></span>
-              <span class="choice-copy">
-                <strong>{t("onboarding.data.customTitle")}</strong>
-                <small>{t("onboarding.data.customDescription")}</small>
-                <span class="warning-copy">{t("onboarding.data.customWarning")}</span>
-              </span>
-            </button>
-          </div>
-          {#if usesCustomDataDirectory}
-            <label class="path-field">
-              {t("onboarding.data.pathLabel")}
-              <input
-                name="data-directory"
-                value={flow.draft.dataDirectory}
-                placeholder={t("onboarding.data.pathPlaceholder")}
-                autocomplete="off"
-                data-autofocus="true"
-                oninput={(event) => updateDataDirectory(event.currentTarget.value)}
-              />
-            </label>
-          {/if}
-          <p class="hint">{t("onboarding.data.migrationHint")}</p>
-        </div>
-        <footer class="wizard-actions">
-          <span><button class="inline-link" onclick={() => void skip()}>{t("onboarding.skip")}</button></span>
-          <span>
-            <button class="button ghost" onclick={previous}>{t("onboarding.previous")}</button>
-            <button class="button primary" onclick={next}>{t("onboarding.next")} <Icon name="arrow-right" size={14} /></button>
-          </span>
-        </footer>
-      {:else if flow.step === "privacy"}
-        <div class="wizard-body">
-          <h1>{t("onboarding.privacy.title")}</h1>
-          <p class="muted intro">{t("onboarding.privacy.intro")}</p>
-          <div class="settings-panel">
-            <label class="setting-row">
-              <span><strong>{t("onboarding.privacy.telemetry.title")}<em>{t("onboarding.privacy.tagOff")}</em></strong><small>{t("onboarding.privacy.telemetry.description")}</small></span>
-              <input
-                type="checkbox"
-                role="switch"
-                name="telemetry"
-                checked={flow.draft.telemetryEnabled}
-                data-autofocus="true"
-                onchange={(event) => flow = updateOnboardingDraft(flow, { telemetryEnabled: event.currentTarget.checked })}
-              />
-              <span class="switch" aria-hidden="true"></span>
-            </label>
-            <label class="setting-row">
-              <span><strong>{t("onboarding.privacy.updates.title")}<em>{t("onboarding.privacy.tagOn")}</em></strong><small>{t("onboarding.privacy.updates.description")}</small></span>
-              <input
-                type="checkbox"
-                role="switch"
-                name="updates"
-                checked={flow.draft.updateChecksEnabled}
-                onchange={(event) => flow = updateOnboardingDraft(flow, { updateChecksEnabled: event.currentTarget.checked })}
-              />
-              <span class="switch" aria-hidden="true"></span>
-            </label>
-            <label class="setting-row">
-              <span><strong>{t("onboarding.privacy.nat.title")}<em>{t("onboarding.privacy.tagOff")}</em></strong><small>{t("onboarding.privacy.nat.description")}</small></span>
-              <input
-                type="checkbox"
-                role="switch"
-                name="nat"
-                checked={flow.draft.natDetectionEnabled}
-                onchange={(event) => flow = updateOnboardingDraft(flow, { natDetectionEnabled: event.currentTarget.checked })}
-              />
-              <span class="switch" aria-hidden="true"></span>
-            </label>
-          </div>
-        </div>
-        <footer class="wizard-actions">
-          <span><button class="inline-link" onclick={() => void skip()}>{t("onboarding.skip")}</button></span>
-          <span>
-            <button class="button ghost" onclick={previous}>{t("onboarding.previous")}</button>
-            <button class="button primary" disabled={flow.isSubmitting} onclick={() => void complete()}>
-              {flow.isSubmitting ? t("onboarding.privacy.saving") : t("onboarding.privacy.complete")}
-            </button>
-          </span>
-        </footer>
-      {:else}
-        <div class="done-heading">
-          <span class="done-mark"><Icon name="check" size={18} /></span>
-          <div><h1>{t("onboarding.done.title")}</h1><p class="muted">{t("onboarding.done.description")}</p></div>
-        </div>
-        <dl class="summary-list">
-          <div><dt>{t("onboarding.done.languageLabel")}</dt><dd>{languageLabel(flow.draft.language)}</dd><span>{t("onboarding.done.savedTag")}</span></div>
-          <div><dt>{t("onboarding.step.data")}</dt><dd>{flow.draft.dataDirectory}</dd><span>{t("onboarding.done.localTag")}</span></div>
-          <div><dt>{t("onboarding.done.telemetryLabel")}</dt><dd>{flow.draft.telemetryEnabled ? t("onboarding.done.telemetryAllowed") : t("onboarding.done.telemetryOff")}</dd><span>{flow.draft.telemetryEnabled ? t("onboarding.done.stateOn") : t("onboarding.done.stateOff")}</span></div>
-          <div><dt>{t("onboarding.done.updatesLabel")}</dt><dd>{flow.draft.updateChecksEnabled ? t("onboarding.done.updatesOn") : t("onboarding.done.updatesOff")}</dd><span>{flow.draft.updateChecksEnabled ? t("onboarding.done.stateOn") : t("onboarding.done.stateOff")}</span></div>
-          <div><dt>{t("onboarding.done.natLabel")}</dt><dd>{flow.draft.natDetectionEnabled ? t("onboarding.done.natOn") : t("onboarding.done.natOff")}</dd><span>{flow.draft.natDetectionEnabled ? t("onboarding.done.stateOn") : t("onboarding.done.stateOff")}</span></div>
-          <div><dt>{t("onboarding.done.isolationLabel")}</dt><dd>{t("onboarding.done.isolationValue")}</dd><span>{t("onboarding.done.recommendedTag")}</span></div>
-        </dl>
-        <div class="done-actions">
-          <button class="button primary large" data-autofocus="true" onclick={() => onStart(buildSelection(flow))}>
-            <Icon name="play" size={14} />{t("onboarding.done.start")}
-          </button>
-        </div>
-        <p class="tiny centered">{t("onboarding.done.reviewHint")}</p>
+  {#if stage === "welcome"}
+    <main class="center-stage">
+      <Fish variant="dryland" />
+      <h1 class="brand-line"><span class="name">MoyuMax</span></h1>
+      <p class="muted" style="text-align:center;max-width:46ch;margin:0">{t("onboarding.welcome.description")}</p>
+      <div class="row" style="margin-top:6px">
+        <button class="btn primary large" data-autofocus="true" disabled={flow.isSubmitting} onclick={beginSetup}>
+          {t("onboarding.welcome.start")}
+        </button>
+        <button class="btn ghost" disabled={flow.isSubmitting} onclick={() => void skip()}>
+          {t("onboarding.welcome.skip")}
+        </button>
+      </div>
+      {#if flow.errorMessage}
+        <div class="banner danger" role="alert" style="max-width:520px"><span>{flow.errorMessage}</span></div>
       {/if}
-    </section>
-  </main>
-</AppShell>
+    </main>
+  {:else}
+    <main class="wizard">
+      <div class="wizard-card panel">
+        <div class="steps" aria-hidden="true"><i class:on={wizardStep >= 1}></i><i class:on={wizardStep >= 2}></i></div>
+
+        {#if wizardStep === 1}
+          <div class="wizard-body">
+            <h1 class="panel-title" style="font-size:17px;margin:0">{t("onboarding.step1.title")}</h1>
+            <p class="panel-desc" style="margin:4px 0 18px">{t("onboarding.step1.description")}</p>
+            {#if flow.errorMessage}
+              <div class="banner danger" role="alert" style="margin-bottom:14px">
+                <div>
+                  <strong>{t("onboarding.data.errorTitle")}</strong>
+                  <div>{t("onboarding.data.errorBody")} {t("onboarding.data.errorHint")}</div>
+                  <div class="mono" style="margin-top:4px;word-break:break-all">{flow.errorMessage}</div>
+                </div>
+              </div>
+            {/if}
+            <div class="col" style="gap:16px">
+              <div class="field">
+                <label for="onboarding-language">{t("onboarding.step1.languageLabel")}</label>
+                <select
+                  id="onboarding-language"
+                  class="input"
+                  value={flow.draft.language}
+                  onchange={(event) => chooseLanguage(event.currentTarget.value as Language)}
+                >
+                  {#each languages as language}
+                    <option value={language.value}>
+                      {language.value === bootstrap.defaults.language
+                        ? t("onboarding.step1.systemOption").replace("{name}", language.title)
+                        : language.title}
+                    </option>
+                  {/each}
+                </select>
+              </div>
+              <div class="field">
+                <label for="onboarding-data-directory">{t("onboarding.step1.dataLabel")}</label>
+                <div class="row">
+                  <input
+                    id="onboarding-data-directory"
+                    class="input"
+                    style="flex:1"
+                    value={flow.draft.dataDirectory || bootstrap.defaultDataDirectory}
+                    readonly={!editingDataDirectory}
+                    data-data-directory="true"
+                    placeholder={t("onboarding.data.pathPlaceholder")}
+                    autocomplete="off"
+                    oninput={(event) => updateDataDirectory(event.currentTarget.value)}
+                  />
+                  <button class="btn secondary" onclick={toggleDataDirectoryEdit}>
+                    {editingDataDirectory ? t("onboarding.step1.useDefault") : t("onboarding.step1.change")}
+                  </button>
+                </div>
+                <span class="help">{t("onboarding.step1.dataHelp")}</span>
+              </div>
+            </div>
+          </div>
+          <footer class="wizard-actions">
+            <button class="btn ghost" disabled={flow.isSubmitting} onclick={() => void skip()}>{t("onboarding.skipWizard")}</button>
+            <button class="btn primary" data-autofocus="true" onclick={next}>{t("onboarding.next")}</button>
+          </footer>
+        {:else}
+          <div class="wizard-body">
+            <h1 class="panel-title" style="font-size:17px;margin:0">{t("onboarding.step2.title")}</h1>
+            <p class="panel-desc" style="margin:4px 0 18px">{t("onboarding.step2.description")}</p>
+            <div class="col" style="gap:12px" role="radiogroup" aria-label={t("onboarding.step2.telemetryAria")}>
+              <button
+                type="button"
+                class="opt"
+                class:sel={!flow.draft.telemetryEnabled}
+                role="radio"
+                aria-checked={!flow.draft.telemetryEnabled}
+                onclick={() => setTelemetry(false)}
+              >
+                <span class="radio" aria-hidden="true"></span>
+                <div>
+                  <b>{t("onboarding.step2.telemetryOff.title")}</b>
+                  <span>{t("onboarding.step2.telemetryOff.description")}</span>
+                </div>
+              </button>
+              <button
+                type="button"
+                class="opt"
+                class:sel={flow.draft.telemetryEnabled}
+                role="radio"
+                aria-checked={flow.draft.telemetryEnabled}
+                onclick={() => setTelemetry(true)}
+              >
+                <span class="radio" aria-hidden="true"></span>
+                <div>
+                  <b>{t("onboarding.step2.telemetryOn.title")}</b>
+                  <span>{t("onboarding.step2.telemetryOn.description")}</span>
+                </div>
+              </button>
+            </div>
+            <div class="set-row" style="border:none;padding:12px 0 0">
+              <div class="sr-main">
+                <div class="sr-name">{t("onboarding.step2.updates.title")}</div>
+                <div class="sr-desc">{t("onboarding.step2.updates.description")}</div>
+              </div>
+              <button
+                type="button"
+                class="switch"
+                class:on={flow.draft.updateChecksEnabled}
+                role="switch"
+                aria-checked={flow.draft.updateChecksEnabled}
+                aria-label={t("onboarding.step2.updates.title")}
+                onclick={() => setUpdateChecks(!flow.draft.updateChecksEnabled)}
+              ></button>
+            </div>
+          </div>
+          <footer class="wizard-actions">
+            <button class="btn ghost" onclick={previous}>{t("onboarding.previous")}</button>
+            <button class="btn primary" data-autofocus="true" disabled={flow.isSubmitting} onclick={() => void complete()}>
+              {flow.isSubmitting ? t("onboarding.privacy.saving") : t("onboarding.step2.complete")}
+            </button>
+          </footer>
+        {/if}
+      </div>
+    </main>
+  {/if}
+</div>
+
+<style>
+  .center-stage {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 20px;
+    padding: 40px;
+    overflow: auto;
+  }
+  .brand-line {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    margin: 0;
+  }
+  .brand-line .name {
+    font-size: 22px;
+    font-weight: 700;
+    letter-spacing: 0.02em;
+  }
+
+  .wizard {
+    flex: 1;
+    display: flex;
+    padding: 32px;
+    overflow: auto;
+  }
+  .wizard-card {
+    width: 620px;
+    max-width: 100%;
+    padding: 28px 32px;
+    margin: auto;
+  }
+  .steps {
+    display: flex;
+    gap: 8px;
+    margin-bottom: 22px;
+  }
+  .steps i {
+    height: 4px;
+    width: 44px;
+    border-radius: 999px;
+    background: var(--glass-strong);
+  }
+  .steps i.on {
+    background: var(--accent);
+  }
+
+  .wizard-body {
+    margin-top: 0;
+  }
+  .wizard-actions {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 10px;
+    margin-top: 26px;
+    padding-top: 0;
+    border-top: none;
+  }
+
+  .opt {
+    display: flex;
+    gap: 14px;
+    align-items: flex-start;
+    width: 100%;
+    border: 1px solid var(--glass-border);
+    border-radius: var(--r);
+    padding: 14px 16px;
+    cursor: pointer;
+    background: rgba(0, 0, 0, 0.15);
+    color: var(--text-1);
+    font-family: var(--font);
+    text-align: left;
+  }
+  .opt.sel {
+    border-color: var(--accent);
+    background: var(--accent-soft);
+  }
+  .opt .radio {
+    width: 16px;
+    height: 16px;
+    border-radius: 50%;
+    border: 2px solid var(--text-3);
+    margin-top: 3px;
+    flex: none;
+  }
+  .opt.sel .radio {
+    border-color: var(--accent);
+    background: radial-gradient(circle, var(--accent) 45%, transparent 50%);
+  }
+  .opt b {
+    font-size: 13.5px;
+    display: block;
+  }
+  .opt span {
+    font-size: 12px;
+    color: var(--text-2);
+    display: block;
+    margin-top: 2px;
+  }
+</style>

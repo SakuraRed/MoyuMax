@@ -55,7 +55,7 @@ async function seed(page: Page, environments: unknown[]): Promise<void> {
   );
   await page.reload();
   await page.getByRole("button", { name: "设置" }).click();
-  await page.locator(".sn-item", { hasText: "Java 环境" }).click();
+  await page.locator(".sn-item", { hasText: "Java" }).click();
   await expect(page.getByRole("heading", { name: "Java 环境" })).toBeVisible();
 }
 
@@ -64,7 +64,7 @@ test("M13-JAVA-001 环境列表显示版本、大小、健康与引用实例", a
 
   await expect(page.getByText("Azul Zulu 21.0.12+8")).toBeVisible();
   await expect(page.getByText("已就绪", { exact: true })).toBeVisible();
-  await expect(page.getByText("1 个实例", { exact: true })).toBeVisible();
+  await expect(page.getByText(/被引用：实例甲/)).toBeVisible();
   await expect(page.getByText(/188\.0 MiB|179 MiB|188 MiB/)).toBeVisible();
 
   await page.getByRole("button", { name: "验证" }).click();
@@ -79,8 +79,10 @@ test("M13-JAVA-002 删除被引用环境需确认并列出受影响实例", asyn
   await expect(dialog).toBeVisible();
   await expect(dialog.getByText(/「实例甲」/)).toBeVisible();
   await expect(dialog.getByText(/无法直接启动/)).toBeVisible();
+  // 默认焦点在「取消」,回车不会执行删除
+  await expect(dialog.getByRole("button", { name: "取消" })).toBeFocused();
 
-  await dialog.getByRole("button", { name: /删除 Azul Zulu/ }).click();
+  await dialog.getByRole("button", { name: "仍要删除" }).click();
   await expect(page.getByText(/已删除；受影响的 1 个实例/)).toBeVisible();
   await expect(page.getByText("已删除", { exact: true }).first()).toBeVisible();
   await expect(page.getByRole("button", { name: "一键恢复" })).toBeVisible();
@@ -130,7 +132,7 @@ test("UI-A11Y-001 Java 环境页在 960x600 与 200% 放大下不溢出", async 
   const dialog = page.getByRole("dialog", { name: "删除 Java 环境" });
   await expect(dialog).toBeVisible();
   const geometry = await page.evaluate(() => {
-    const root = document.querySelector<HTMLElement>(".confirmation-dialog");
+    const root = document.querySelector<HTMLElement>(".modal");
     if (!root) throw new Error("dialog missing");
     return {
       overflow: root.scrollWidth > root.clientWidth + 1,
