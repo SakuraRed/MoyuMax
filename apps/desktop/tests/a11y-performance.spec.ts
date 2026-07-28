@@ -93,7 +93,7 @@ test("M23-A11Y-003 首页主操作全部可键盘到达且焦点可见", async (
   }
   const names = focused.map((entry) => entry.name).join("|");
   expect(names).toContain("启动游戏");
-  expect(names).toContain("安装");
+  expect(names).toContain("任务中心");
   expect(focused.some((entry) => entry.name === "资源")).toBe(true);
   expect(focused.some((entry) => entry.name === "任务")).toBe(true);
   expect(focused.some((entry) => entry.name === "设置")).toBe(true);
