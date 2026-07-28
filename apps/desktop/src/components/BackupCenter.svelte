@@ -11,8 +11,8 @@
     OnboardingSelection,
     WorldBackupSummary,
   } from "../runtime";
+  import { pushToast } from "../toast.svelte";
   import AppShell from "./AppShell.svelte";
-  import Icon from "./Icon.svelte";
 
   interface Props {
     runtime: MoyuRuntime;
@@ -26,7 +26,6 @@
 
   let {
     runtime,
-    settings,
     instances,
     onNavigate,
     onMinimize,
@@ -42,7 +41,6 @@
   let groups = $state<BackupGroup[]>([]);
   let loading = $state(true);
   let errorMessage = $state("");
-  let notice = $state("");
   let busy = $state("");
   let rollbackCandidate = $state<WorldBackupSummary | null>(null);
   let deleteCandidate = $state<WorldBackupSummary | null>(null);
@@ -79,18 +77,15 @@
   async function createManual(): Promise<void> {
     if (!manualInstanceId) return;
     busy = "manual";
-    errorMessage = "";
-    notice = "";
     try {
       const backup = await runtime.createManualWorldBackup(manualInstanceId);
-      if (backup.state === "skipped") {
-        notice = t("backups.manualSkipped");
-      } else {
-        notice = t("backups.manualDone");
-      }
+      pushToast({
+        tone: backup.state === "skipped" ? "warn" : "ok",
+        title: backup.state === "skipped" ? t("backups.manualSkipped") : t("backups.manualDone"),
+      });
       await refresh();
     } catch (error) {
-      errorMessage = error instanceof Error ? error.message : String(error);
+      pushToast({ tone: "danger", title: error instanceof Error ? error.message : String(error) });
     } finally {
       busy = "";
     }
@@ -99,14 +94,13 @@
   async function confirmRollback(): Promise<void> {
     if (!rollbackCandidate) return;
     busy = rollbackCandidate.id;
-    errorMessage = "";
     try {
       await runtime.rollbackWorldBackup(rollbackCandidate.id);
       rollbackCandidate = null;
-      notice = t("backups.rollbackDone");
+      pushToast({ tone: "ok", title: t("backups.rollbackDone") });
       await refresh();
     } catch (error) {
-      errorMessage = error instanceof Error ? error.message : String(error);
+      pushToast({ tone: "danger", title: error instanceof Error ? error.message : String(error) });
     } finally {
       busy = "";
     }
@@ -115,14 +109,13 @@
   async function confirmDelete(): Promise<void> {
     if (!deleteCandidate) return;
     busy = deleteCandidate.id;
-    errorMessage = "";
     try {
       await runtime.deleteWorldBackup(deleteCandidate.id);
       deleteCandidate = null;
-      notice = t("backups.deleteDone");
+      pushToast({ tone: "ok", title: t("backups.deleteDone") });
       await refresh();
     } catch (error) {
-      errorMessage = error instanceof Error ? error.message : String(error);
+      pushToast({ tone: "danger", title: error instanceof Error ? error.message : String(error) });
     } finally {
       busy = "";
     }
@@ -154,6 +147,12 @@
     }
   }
 
+  function stateTag(state: BackupState): string {
+    if (state === "ready") return "ok";
+    if (state === "failed") return "danger";
+    return "neutral";
+  }
+
   function formatTime(unixSeconds: number): string {
     return new Intl.DateTimeFormat(uiLanguage(), {
       dateStyle: "medium",
@@ -180,109 +179,143 @@
 
 <AppShell
   pageTitle={t("backups.pageTitle")}
-  dataDirectory={settings.dataDirectory}
   activeNavigation="data"
+  onBack={() => onNavigate("data")}
   {onNavigate}
-  connectionStatus={t("data.connectionStatus")}
   {runtime}
   {onMinimize}
   {onToggleMaximize}
   {onClose}
 >
-  <main class="content backup-content">
-    <div class="backup-scroll" data-scroll-region="main">
-      <header class="data-heading">
-        <div>
-          <h1>{t("backups.heading")}</h1>
-          <p>{t("backups.description")}</p>
-        </div>
-        <div class="local-content-actions">
-          <select value={manualInstanceId} onchange={(event) => { manualInstanceId = (event.currentTarget as HTMLSelectElement).value; }} aria-label={t("backups.manualTarget")}>
-            {#each groups as group}
-              <option value={group.instance.id}>{group.instance.name}</option>
-            {/each}
-          </select>
-          <button class="button primary compact" disabled={busy !== "" || !manualInstanceId} onclick={() => void createManual()}>{busy === "manual" ? t("backups.manualRunning") : t("backups.manualRun")}</button>
-          <button class="button ghost compact" onclick={() => onNavigate("settings")}>{t("backups.openSettings")}</button>
-        </div>
-      </header>
-
-      {#if errorMessage}
-        <div class="error-block" role="alert"><strong>{t("backups.errorTitle")}</strong><span>{errorMessage}</span></div>
-      {/if}
-      {#if notice}
-        <div class="java-notice" role="status">{notice}</div>
-      {/if}
-
-      {#if loading}
-        <div class="content-loading" aria-live="polite"><span>{t("backups.loading")}</span></div>
-      {:else if groups.length === 0}
-        <section class="task-empty">
-          <Icon name="box" size={28} />
-          <h2>{t("backups.emptyTitle")}</h2>
-          <p>{t("backups.emptyDescription")}</p>
-        </section>
-      {:else}
-        {#each groups as group}
-          <section class="backup-settings" aria-labelledby="backup-group-{group.instance.id}">
-            <header>
-              <div>
-                <h2 id="backup-group-{group.instance.id}">{group.instance.name}</h2>
-                <p>{t("backups.groupSummary").replace("{count}", String(group.backups.length)).replace("{size}", formatBytes(group.backups.reduce((sum, backup) => sum + backup.archiveBytes, 0)))}</p>
-              </div>
-            </header>
-            {#if group.backups.length === 0}
-              <div class="local-content-empty">{t("backups.groupEmpty")}</div>
-            {:else}
-              <div class="backup-list">
-                {#each group.backups as backup}
-                  <article class="backup-row">
-                    <div>
-                      <div class="backup-title-line">
-                        <h3>{formatTime(backup.createdAtUnixSeconds)}</h3>
-                        <span>{triggerLabel(backup.trigger)}</span>
-                        <span class:account-expired={backup.state === "failed"}>{stateLabel(backup.state)}</span>
-                      </div>
-                      <p>{t("backups.rowSummary").replace("{worlds}", String(backup.worldCount)).replace("{size}", formatBytes(backup.archiveBytes))}{#if backup.errorSummary} · {backup.errorSummary}{/if}</p>
-                    </div>
-                    <div class="backup-side">
-                      <button class="button ghost compact" disabled={busy !== "" || backup.state !== "ready"} onclick={() => { rollbackCandidate = backup; deleteCandidate = null; }}>{t("backups.rollback")}</button>
-                      {#if deleteCandidate?.id === backup.id}
-                        <button class="button danger-subtle compact" disabled={busy !== ""} onclick={() => void confirmDelete()}>{t("backups.deleteConfirm")}</button>
-                        <button class="button ghost compact" disabled={busy !== ""} onclick={() => { deleteCandidate = null; }}>{t("common.cancel")}</button>
-                      {:else}
-                        <button class="button danger-subtle compact" aria-label={t("backups.deleteAria")} disabled={busy !== ""} onclick={() => { deleteCandidate = backup; rollbackCandidate = null; }}>{t("backups.delete")}</button>
-                      {/if}
-                    </div>
-                  </article>
-                {/each}
-              </div>
-            {/if}
-          </section>
-        {/each}
-      {/if}
+  <main class="content">
+    <div class="row spread" style="margin-bottom:16px">
+      <div>
+        <h1 class="page-title">{t("backups.heading")}</h1>
+        <p class="muted" style="margin-top:2px">{t("backups.description")}</p>
+      </div>
+      <div class="row">
+        <select
+          class="input"
+          value={manualInstanceId}
+          onchange={(event) => { manualInstanceId = (event.currentTarget as HTMLSelectElement).value; }}
+          aria-label={t("backups.manualTarget")}
+        >
+          {#each groups as group}
+            <option value={group.instance.id}>{group.instance.name}</option>
+          {/each}
+        </select>
+        <button class="btn primary" disabled={busy !== "" || !manualInstanceId} onclick={() => void createManual()}>{busy === "manual" ? t("backups.manualRunning") : t("backups.manualRun")}</button>
+        <button class="btn ghost" onclick={() => onNavigate("settings")}>{t("backups.openSettings")}</button>
+      </div>
     </div>
+
+    {#if errorMessage}
+      <div class="banner danger" role="alert" style="margin-bottom:16px">
+        <div><strong>{t("backups.errorTitle")}</strong><div>{errorMessage}</div></div>
+      </div>
+    {/if}
+
+    {#if loading}
+      <div class="skel" style="height:120px;margin-bottom:16px"></div>
+      <div class="skel" style="height:120px"></div>
+    {:else if groups.length === 0}
+      <div class="empty-stage">
+        <h2 style="font-size:17px">{t("backups.emptyTitle")}</h2>
+        <p class="muted" style="max-width:44ch;text-align:center">{t("backups.emptyDescription")}</p>
+      </div>
+    {:else}
+      {#each groups as group}
+        <section class="panel pad" style="margin-bottom:16px" aria-labelledby="backup-group-{group.instance.id}">
+          <div class="row spread">
+            <div>
+              <h2 class="panel-title" id="backup-group-{group.instance.id}">{group.instance.name}</h2>
+              <div class="panel-desc" style="margin-top:2px">{t("backups.groupSummary").replace("{count}", String(group.backups.length)).replace("{size}", formatBytes(group.backups.reduce((sum, backup) => sum + backup.archiveBytes, 0)))}</div>
+            </div>
+          </div>
+          {#if group.backups.length === 0}
+            <p class="dim" style="padding:10px 0">{t("backups.groupEmpty")}</p>
+          {:else}
+            <div style="margin-top:8px">
+              {#each group.backups as backup}
+                <div class="tl-item">
+                  <span class="tl-dot" class:failed={backup.state === "failed"}></span>
+                  <div class="lr-main">
+                    <div class="lr-name">{triggerLabel(backup.trigger)} <span class="dim" style="font-weight:400">{formatTime(backup.createdAtUnixSeconds)}</span></div>
+                    <div class="lr-sub">{t("backups.rowSummary").replace("{worlds}", String(backup.worldCount)).replace("{size}", formatBytes(backup.archiveBytes))}{#if backup.errorSummary} · {backup.errorSummary}{/if}</div>
+                  </div>
+                  <span class="tag {stateTag(backup.state)}">{stateLabel(backup.state)}</span>
+                  <div class="row" style="gap:4px">
+                    <button class="btn small ghost" disabled={busy !== "" || backup.state !== "ready"} onclick={() => { rollbackCandidate = backup; deleteCandidate = null; }}>{t("backups.rollback")}</button>
+                    {#if deleteCandidate?.id === backup.id}
+                      <button class="btn small danger-soft" disabled={busy !== ""} onclick={() => void confirmDelete()}>{t("backups.deleteConfirm")}</button>
+                      <button class="btn small ghost" disabled={busy !== ""} onclick={() => { deleteCandidate = null; }}>{t("common.cancel")}</button>
+                    {:else}
+                      <button class="btn small ghost" aria-label={t("backups.deleteAria")} disabled={busy !== ""} onclick={() => { deleteCandidate = backup; rollbackCandidate = null; }}>{t("backups.delete")}</button>
+                    {/if}
+                  </div>
+                </div>
+              {/each}
+            </div>
+          {/if}
+        </section>
+      {/each}
+    {/if}
   </main>
 
   {#if rollbackCandidate}
-    <div class="modal-backdrop" role="presentation">
+    <div class="modal-mask" role="presentation">
       <div
-        class="confirmation-dialog"
+        class="modal"
         role="dialog"
         aria-modal="true"
         aria-labelledby="rollback-dialog-title"
         tabindex="-1"
         onkeydown={(event) => { if (event.key === "Escape" && busy === "") rollbackCandidate = null; }}
       >
-        <header>
-          <h2 id="rollback-dialog-title">{t("backups.rollbackTitle")}</h2>
+        <h3 id="rollback-dialog-title">{t("backups.rollbackTitle")}</h3>
+        <div class="m-body">
           <p>{t("backups.rollbackBody").replace("{time}", formatTime(rollbackCandidate.createdAtUnixSeconds)).replace("{name}", rollbackCandidate.instanceName)}</p>
-        </header>
-        <div class="confirmation-actions">
-          <button class="button" data-dialog-autofocus disabled={busy !== ""} onclick={() => { rollbackCandidate = null; }}>{t("common.cancel")}</button>
-          <button class="button primary" disabled={busy !== ""} onclick={() => void confirmRollback()}>{busy !== "" ? t("backups.rollbackRunning") : t("backups.rollbackConfirm")}</button>
+          <p class="dim" style="margin-top:8px">{t("backups.rollbackNote")}</p>
+        </div>
+        <div class="m-acts">
+          <button class="btn secondary" data-dialog-autofocus disabled={busy !== ""} onclick={() => { rollbackCandidate = null; }}>{t("common.cancel")}</button>
+          <button class="btn primary" disabled={busy !== ""} onclick={() => void confirmRollback()}>{busy !== "" ? t("backups.rollbackRunning") : t("backups.rollbackConfirm")}</button>
         </div>
       </div>
     </div>
   {/if}
 </AppShell>
+
+<style>
+  .page-title {
+    font-size: 17px;
+  }
+  .empty-stage {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 12px;
+    padding: 80px 0;
+  }
+  .tl-item {
+    display: flex;
+    gap: 12px;
+    align-items: center;
+    padding: 10px 0;
+    border-top: 1px solid rgba(255, 255, 255, 0.05);
+  }
+  .tl-item:first-of-type {
+    border-top: none;
+  }
+  .tl-dot {
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    background: var(--accent);
+    flex: none;
+  }
+  .tl-dot.failed {
+    background: var(--danger);
+  }
+</style>

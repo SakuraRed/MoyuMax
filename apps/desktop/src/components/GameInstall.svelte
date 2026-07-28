@@ -1499,6 +1499,12 @@
   .modpack-preview h3 {
     margin: 0;
     font-size: 14px;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  .modpack-preview .row {
+    flex-wrap: wrap;
   }
   .modpack-preview p {
     margin: 0;

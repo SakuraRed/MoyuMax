@@ -21,8 +21,8 @@ test.beforeEach(async ({ page }) => {
 });
 
 test("NET-001 创建联机房间并管理生命周期", async ({ page }) => {
-  await expect(page.locator(".sn-item", { hasText: "联机房间" })).toBeVisible();
-  await expect(page.locator(".sn-item", { hasText: "NAT 类型检测" })).toBeVisible();
+  await expect(page.getByRole("button", { name: "联机房间" })).toBeVisible();
+  await expect(page.getByRole("button", { name: "NAT 类型检测" })).toBeVisible();
 
   await page.getByRole("textbox", { name: "房间号" }).fill("tundra-01");
   await page.getByRole("textbox", { name: "房间密码" }).fill("secret-12345");
@@ -91,7 +91,7 @@ test("NET-006 客机输入主机端口建立直连通道", async ({ page }) => {
 });
 
 test("NET-004 NAT 检测展示结果", async ({ page }) => {
-  await page.locator(".sn-item", { hasText: "NAT 类型检测" }).click();
+  await page.getByRole("button", { name: "NAT 类型检测" }).click();
   await page.getByRole("button", { name: "检测 NAT 类型" }).click();
   await expect(page.getByText("203.0.113.55:54321")).toBeVisible();
   await expect(page.getByText("你在 NAT 之后", { exact: false })).toBeVisible();

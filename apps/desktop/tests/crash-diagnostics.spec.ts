@@ -1,31 +1,5 @@
 import { expect, test } from "@playwright/test";
 
-type PaddingExpectation = {
-  block: number;
-  inline: number;
-};
-
-async function expectElementPadding(
-  page: import("@playwright/test").Page,
-  selector: string,
-  expected: PaddingExpectation,
-) {
-  const padding = await page.locator(selector).first().evaluate((element) => {
-    const style = window.getComputedStyle(element);
-    return {
-      top: Number.parseFloat(style.paddingTop),
-      right: Number.parseFloat(style.paddingRight),
-      bottom: Number.parseFloat(style.paddingBottom),
-      left: Number.parseFloat(style.paddingLeft),
-    };
-  });
-
-  expect(padding.top).toBeGreaterThanOrEqual(expected.block);
-  expect(padding.right).toBeGreaterThanOrEqual(expected.inline);
-  expect(padding.bottom).toBeGreaterThanOrEqual(expected.block);
-  expect(padding.left).toBeGreaterThanOrEqual(expected.inline);
-}
-
 test.beforeEach(async ({ page }) => {
   await page.goto("/");
   await page.evaluate(() => {
