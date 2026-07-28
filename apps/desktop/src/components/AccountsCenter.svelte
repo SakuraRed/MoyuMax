@@ -765,7 +765,7 @@
   .acct-avatar {
     width: 38px;
     height: 38px;
-    border-radius: 50%;
+    border-radius: 4px;
     flex: none;
     display: grid;
     place-items: center;

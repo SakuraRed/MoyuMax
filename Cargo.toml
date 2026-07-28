@@ -29,5 +29,5 @@ tempfile = "=3.27.0"
 thiserror = "=2.0.19"
 tokio = { version = "=1.53.1", features = ["fs", "io-util", "macros", "process", "rt-multi-thread", "sync", "time"] }
 uuid = { version = "=1.24.0", features = ["serde", "v4"] }
-windows-sys = { version = "=0.60.2", features = ["Win32_System_Console", "Win32_System_SystemInformation", "Win32_System_Registry"] }
+windows-sys = { version = "=0.60.2", features = ["Win32_System_Console", "Win32_System_SystemInformation", "Win32_System_Registry", "Win32_Storage_FileSystem"] }
 zip = { version = "=6.0.0", default-features = false, features = ["deflate"] }

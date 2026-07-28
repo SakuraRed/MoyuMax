@@ -1445,7 +1445,10 @@ export const zhTW: Record<string, string> = {
   // 資料頁儲存面板與資源回收筒表格(mockup 07)
   "data.storage.title": "儲存空間",
   "data.storage.used": "已用",
-  "data.storage.gapNote": "實例佔用與磁碟總量暫無統計介面,將在儲存概覽能力接入後展示。",
+  "data.storage.diskTotal": "已用，共 {total}",
+  "data.storage.diskFree": "剩餘 {free}",
+  "data.storage.gapNote": "實例佔用為目錄實測值;備份、Java 與資源回收筒按清單累計,可能滯後於最新變動。",
+  "data.storage.legend.instances": "實例",
   "data.storage.legend.backups": "備份",
   "data.storage.legend.java": "Java",
   "data.storage.legend.recycle": "資源回收筒",

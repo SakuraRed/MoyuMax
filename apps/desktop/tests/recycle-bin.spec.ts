@@ -72,6 +72,17 @@ test("M7-RECYCLE-001 实例经确认进入回收站并可从数据页恢复", as
   await expect(page.getByRole("heading", { name: "生存世界" })).toBeVisible();
 });
 
+test("M37-DATA-001 存储空间展示实例占用与磁盘余量", async ({ page }) => {
+  await page.getByRole("button", { name: "数据" }).click();
+  const storage = page.getByLabel("存储空间");
+  await expect(storage).toBeVisible();
+  await expect(storage.getByText("已用，共 96.0 GiB", { exact: false })).toBeVisible();
+  await expect(storage.getByText("剩余 58.0 GiB", { exact: false })).toBeVisible();
+  const legend = storage.locator(".legend");
+  await expect(legend).toContainText("实例");
+  await expect(legend).toContainText("64.0 MiB");
+});
+
 test("M7-RECYCLE-002 永久删除前展示空间与不可恢复说明", async ({ page }) => {
   const deleteDialog = await openBatchDeleteDialog(page, "生存世界");
   await deleteDialog.getByRole("button", { name: "删除 1 个实例" }).click();

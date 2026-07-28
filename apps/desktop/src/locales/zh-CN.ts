@@ -1450,7 +1450,10 @@ export const zhCN: Record<string, string> = {
   // 数据页存储面板与回收站表格(mockup 07)
   "data.storage.title": "存储空间",
   "data.storage.used": "已用",
-  "data.storage.gapNote": "实例占用与磁盘总量暂无统计接口,将在存储概览能力接入后展示。",
+  "data.storage.diskTotal": "已用，共 {total}",
+  "data.storage.diskFree": "剩余 {free}",
+  "data.storage.gapNote": "实例占用为目录实测值;备份、Java 与回收站按清单累计,可能滞后于最新变动。",
+  "data.storage.legend.instances": "实例",
   "data.storage.legend.backups": "备份",
   "data.storage.legend.java": "Java",
   "data.storage.legend.recycle": "回收站",

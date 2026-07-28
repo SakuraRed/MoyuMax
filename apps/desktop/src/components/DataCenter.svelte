@@ -60,17 +60,23 @@
   let pendingDelete = $state<string | null>(null);
   let message = $state("");
   let errorMessage = $state("");
+  let storageOverview = $state<{
+    instancesBytes: number;
+    diskTotalBytes: number | null;
+    diskFreeBytes: number | null;
+  } | null>(null);
 
-  // 存储空间:只统计 runtime 有真实数据来源的维度(备份/Java/回收站)。
-  // 实例磁盘占用与磁盘总量/剩余没有统计接口,不展示、不估算。
+  // 存储空间:实例占用目录实测;备份/Java/回收站按清单累计;磁盘总量与剩余来自系统。
+  const instanceBytes = $derived(storageOverview?.instancesBytes ?? 0);
   const backupBytes = $derived(backups.reduce((sum, backup) => sum + backup.archiveBytes, 0));
   const javaBytes = $derived(
     javaEnvironments.reduce((sum, environment) => sum + environment.sizeBytes, 0),
   );
   const recycleBytes = $derived(items.reduce((sum, item) => sum + item.sizeBytes, 0));
-  const knownUsedBytes = $derived(backupBytes + javaBytes + recycleBytes);
+  const knownUsedBytes = $derived(instanceBytes + backupBytes + javaBytes + recycleBytes);
   const storageSegments = $derived(
     [
+      { key: "instances", labelKey: "data.storage.legend.instances", bytes: instanceBytes, color: "var(--accent)" },
       { key: "backups", labelKey: "data.storage.legend.backups", bytes: backupBytes, color: "rgba(63,216,194,0.55)" },
       { key: "java", labelKey: "data.storage.legend.java", bytes: javaBytes, color: "rgba(63,216,194,0.30)" },
       { key: "recycle", labelKey: "data.storage.legend.recycle", bytes: recycleBytes, color: "rgba(255,255,255,0.22)" },
@@ -95,11 +101,12 @@
     loading = true;
     errorMessage = "";
     try {
-      [items, backups, worldInstances, javaEnvironments] = await Promise.all([
+      [items, backups, worldInstances, javaEnvironments, storageOverview] = await Promise.all([
         runtime.listRecycleBinItems(),
         runtime.listWorldBackups(),
         runtime.listInstances(),
         runtime.listJavaEnvironments(),
+        runtime.storageOverview().catch(() => null),
       ]);
       if (!worldInstances.some((instance) => instance.id === worldInstanceId)) {
         worldInstanceId =
@@ -436,7 +443,10 @@
         </div>
         <div class="row" style="align-items:baseline;gap:10px;margin:8px 0 12px">
           <span style="font-size:26px;font-weight:700">{formatBytes(knownUsedBytes)}</span>
-          <span class="muted">{t("data.storage.used")}</span>
+          <span class="muted">{#if storageOverview?.diskTotalBytes}{t("data.storage.diskTotal").replace("{total}", formatBytes(storageOverview.diskTotalBytes))}{:else}{t("data.storage.used")}{/if}</span>
+          {#if storageOverview?.diskFreeBytes}
+            <span class="dim" style="margin-left:auto">{t("data.storage.diskFree").replace("{free}", formatBytes(storageOverview.diskFreeBytes))}</span>
+          {/if}
         </div>
         {#if storageSegments.length > 0}
           <div class="spacebar" aria-hidden="true">

@@ -481,7 +481,7 @@
   .acct-chip .avatar {
     width: 26px;
     height: 26px;
-    border-radius: 50%;
+    border-radius: 4px;
     background: linear-gradient(135deg, #3fd8c2, #2e82b4);
     display: grid;
     place-items: center;

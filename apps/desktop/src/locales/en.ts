@@ -1445,7 +1445,10 @@ export const en: Record<string, string> = {
   // Data page storage panels and recycle bin table (mockup 07)
   "data.storage.title": "Storage",
   "data.storage.used": "used",
-  "data.storage.gapNote": "Instance usage and disk totals will appear once the storage overview API lands.",
+  "data.storage.diskTotal": "used, of {total}",
+  "data.storage.diskFree": "{free} free",
+  "data.storage.gapNote": "Instance usage is measured on disk; backups, Java and the recycle bin are totals from their manifests and may lag recent changes.",
+  "data.storage.legend.instances": "Instances",
   "data.storage.legend.backups": "Backups",
   "data.storage.legend.java": "Java",
   "data.storage.legend.recycle": "Recycle bin",

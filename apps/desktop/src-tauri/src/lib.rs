@@ -2381,6 +2381,67 @@ fn list_recycle_bin_items(service: State<'_, AppService>) -> Result<Vec<RecycleB
         .map_err(|error| error.to_string())
 }
 
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct StorageOverviewResponse {
+    instances_bytes: u64,
+    disk_total_bytes: Option<u64>,
+    disk_free_bytes: Option<u64>,
+}
+
+/// 数据目录所在磁盘的总容量与可用空间(Windows GetDiskFreeSpaceExW)。
+fn disk_space_of(path: &std::path::Path) -> (Option<u64>, Option<u64>) {
+    use std::os::windows::ffi::OsStrExt;
+
+    use windows_sys::Win32::Storage::FileSystem::GetDiskFreeSpaceExW;
+
+    let wide: Vec<u16> = path
+        .as_os_str()
+        .encode_wide()
+        .chain(std::iter::once(0))
+        .collect();
+    let mut free_available: u64 = 0;
+    let mut total: u64 = 0;
+    let mut total_free: u64 = 0;
+    // SAFETY:wide 是以 NUL 结尾的有效 UTF-16 缓冲;三个输出参数均指向有效局部变量。
+    let ok = unsafe {
+        GetDiskFreeSpaceExW(
+            wide.as_ptr(),
+            &mut free_available as *mut u64 as *mut _,
+            &mut total as *mut u64 as *mut _,
+            &mut total_free as *mut u64 as *mut _,
+        )
+    };
+    if ok == 0 {
+        return (None, None);
+    }
+    (Some(total), Some(total_free))
+}
+
+/// 存储概览:实例占用 + 数据目录所在磁盘的总量与剩余。
+#[tauri::command]
+async fn storage_overview(
+    service: State<'_, AppService>,
+) -> Result<StorageOverviewResponse, String> {
+    let service = service.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let overview = service
+            .storage_overview()
+            .map_err(|error| error.to_string())?;
+        let directory = service
+            .selected_data_directory()
+            .map_err(|error| error.to_string())?;
+        let (disk_total_bytes, disk_free_bytes) = disk_space_of(&directory);
+        Ok(StorageOverviewResponse {
+            instances_bytes: overview.instances_bytes,
+            disk_total_bytes,
+            disk_free_bytes,
+        })
+    })
+    .await
+    .map_err(|error| format!("存储统计中断：{error}"))?
+}
+
 #[tauri::command]
 async fn recycle_instance(
     service: State<'_, AppService>,
@@ -3149,6 +3210,7 @@ pub fn run() {
             resolve_content_task_recovery,
             list_instances,
             list_recycle_bin_items,
+            storage_overview,
             recycle_instance,
             restore_recycle_bin_item,
             purge_recycle_bin_item,

@@ -976,6 +976,12 @@ export interface MoyuRuntime {
   resolveContentTaskRecovery(taskId: string, decision: RecoveryDecision): Promise<void>;
   listInstances(): Promise<ManagedInstance[]>;
   listRecycleBinItems(): Promise<RecycleBinItem[]>;
+  /** 存储概览:实例占用实测 + 数据目录所在磁盘总量与剩余(可能为 null)。 */
+  storageOverview(): Promise<{
+    instancesBytes: number;
+    diskTotalBytes: number | null;
+    diskFreeBytes: number | null;
+  }>;
   recycleInstance(instanceId: string): Promise<RecycleBinItem>;
   restoreRecycleBinItem(itemId: string): Promise<ManagedInstance>;
   purgeRecycleBinItem(itemId: string): Promise<RecyclePurgeResult>;
@@ -1423,6 +1429,8 @@ function createTauriRuntime(): MoyuRuntime {
     listInstances: () => invoke<ManagedInstance[]>("list_instances"),
     listRecycleBinItems: () =>
       invoke<RecycleBinItem[]>("list_recycle_bin_items"),
+    storageOverview: () =>
+      invoke<{ instancesBytes: number; diskTotalBytes: number | null; diskFreeBytes: number | null }>("storage_overview"),
     recycleInstance: (instanceId) =>
       invoke<RecycleBinItem>("recycle_instance", { instanceId }),
     restoreRecycleBinItem: (itemId) =>
@@ -2901,6 +2909,21 @@ function createBrowserRuntime(): MoyuRuntime {
     },
     async listRecycleBinItems() {
       return browserRecycleEntries().map(({ instance: _instance, ...item }) => item);
+    },
+    async storageOverview() {
+      const serialized = window.localStorage.getItem("moyumax.browser.storageOverview");
+      if (serialized) {
+        return JSON.parse(serialized) as {
+          instancesBytes: number;
+          diskTotalBytes: number | null;
+          diskFreeBytes: number | null;
+        };
+      }
+      return {
+        instancesBytes: browserInstances().length * 64 * 1024 * 1024,
+        diskTotalBytes: 96 * 1024 * 1024 * 1024,
+        diskFreeBytes: 58 * 1024 * 1024 * 1024,
+      };
     },
     async recycleInstance(instanceId) {
       const instances = browserInstances();
