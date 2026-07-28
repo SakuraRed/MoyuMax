@@ -53,7 +53,7 @@ test("UI-LAUNCH-001 首页可以启动和停止本地实例", async ({ page }) =
   const startButton = page.getByRole("button", { name: "启动游戏" });
   await expect(startButton).toBeFocused();
   await startButton.click();
-  await expect(page.getByText("正在运行", { exact: true })).toBeVisible();
+  await expect(page.locator(".hero-card").getByText("正在运行", { exact: true })).toBeVisible();
   await expect(page.getByRole("button", { name: "安全终止" })).toBeVisible();
 
   await page.getByRole("button", { name: "安全终止" }).click();

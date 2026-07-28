@@ -436,17 +436,17 @@
 .banner .b-act { margin-left: auto; display: flex; gap: 8px; flex: none; }
 
 .modal-mask {
-  position: absolute; inset: 0;
+  position: fixed; inset: 0;
   background: rgba(4, 10, 14, 0.6);
   backdrop-filter: blur(6px);
   -webkit-backdrop-filter: blur(6px);
   display: grid; place-items: center;
+  padding: 24px;
   z-index: 40;
 }
 .modal {
-  width: 520px;
-  max-width: calc(100% - 48px);
-  max-height: calc(100% - 48px);
+  width: min(520px, 100%);
+  max-height: 100%;
   overflow: hidden auto;
   background: rgba(18, 36, 46, 0.96);
   border: 1px solid var(--glass-border);

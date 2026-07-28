@@ -235,7 +235,7 @@ test("UI-TRAY-007 冷启动后首个可交互窗口立即可用", async ({ page 
   });
   await expect(page.getByRole("button", { name: "启动游戏" })).toBeVisible();
   await page.getByRole("button", { name: "启动游戏" }).click();
-  await expect(page.getByText("正在运行", { exact: true })).toBeVisible();
+  await expect(page.locator(".hero-card").getByText("正在运行", { exact: true })).toBeVisible();
 });
 
 test("UI-A11Y-001 关闭对话框在 960x600 和 200% 放大下不溢出", async ({ page }) => {
@@ -254,11 +254,14 @@ test("UI-A11Y-001 关闭对话框在 960x600 和 200% 放大下不溢出", async
   const geometry = await page.evaluate(() => {
     const root = document.querySelector<HTMLElement>(".close-dialog");
     if (!root) throw new Error("close dialog is unavailable");
+    const dialog = root.getBoundingClientRect();
+    const doc = document.documentElement.getBoundingClientRect();
     return {
       horizontalOverflow: root.scrollWidth > root.clientWidth + 1,
       beyondViewport:
-        root.getBoundingClientRect().right > window.innerWidth + 1 ||
-        root.getBoundingClientRect().bottom > window.innerHeight + 1,
+        dialog.right > doc.right + 1 ||
+        dialog.bottom > doc.bottom + 1 ||
+        dialog.left < doc.left - 1,
     };
   });
   expect(geometry.horizontalOverflow).toBe(false);
