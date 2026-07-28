@@ -70,7 +70,7 @@ async function seedBase(page: Page, options?: { instances?: string }) {
 async function openContinuityDetail(page: Page) {
   await page.getByRole("searchbox", { name: "搜索在线资源" }).fill("continuity");
   await page.getByRole("button", { name: "搜索", exact: true }).click();
-  const card = page.locator(".content-result-card").filter({ hasText: "Continuity" });
+  const card = page.locator(".res-row").filter({ hasText: "Continuity" });
   await card.getByRole("button", { name: "详情", exact: true }).click();
   await expect(page.getByRole("heading", { name: "Continuity" })).toBeVisible();
 }
@@ -84,7 +84,7 @@ test("M32-DET-UI-001 进入详情并返回后保留搜索状态", async ({ page 
 
   await expect(page.getByText("连续性 (Continuity)", { exact: true })).toBeVisible();
   await expect(page.getByText("34.2M 次下载")).toBeVisible();
-  await expect(page.getByText("来源：Modrinth")).toBeVisible();
+  await expect(page.getByText("Modrinth（下载默认走 MCI Mirror 内置镜像）", { exact: true })).toBeVisible();
   await expect(page.getByRole("button", { name: "打开 Modrinth 源站" })).toBeVisible();
   await expect(page.getByRole("button", { name: "MCMOD 百科" })).toBeVisible();
   await expect(page.getByRole("button", { name: "复制名称" })).toBeVisible();
@@ -94,7 +94,7 @@ test("M32-DET-UI-001 进入详情并返回后保留搜索状态", async ({ page 
   await page.getByRole("button", { name: "返回结果列表" }).click();
   await expect(page.getByRole("searchbox", { name: "搜索在线资源" })).toHaveValue("continuity");
   await expect(
-    page.locator(".content-result-card").filter({ hasText: "Continuity" }),
+    page.locator(".res-row").filter({ hasText: "Continuity" }),
   ).toBeVisible();
 });
 
@@ -134,8 +134,9 @@ test("M32-DET-UI-003 详情内加载器筛选 chip 过滤文件", async ({ page 
 test("M32-DET-UI-004 有实例时模组详情下载进入安装计划", async ({ page }) => {
   await openContinuityDetail(page);
   const row = page.locator(".detail-file-row").filter({ hasText: "3.1.0+26.2" });
-  await row.getByRole("button", { name: "下载", exact: true }).click();
-  await expect(page.getByRole("heading", { name: "安装计划预览" })).toBeVisible();
+  await row.getByRole("button", { name: "安装", exact: true }).click();
+  const dialog = page.getByRole("dialog");
+  await expect(dialog.getByRole("heading", { name: "确认安装到「测试实例」" })).toBeVisible();
 });
 
 test("M32-DET-UI-005 无实例时详情下载跳过版本选择直接落盘", async ({ page }) => {
@@ -143,7 +144,7 @@ test("M32-DET-UI-005 无实例时详情下载跳过版本选择直接落盘", as
   await page.getByRole("button", { name: "资源包", exact: true }).click();
   await page.getByRole("searchbox", { name: "搜索在线资源" }).fill("continuity");
   await page.getByRole("button", { name: "搜索", exact: true }).click();
-  const card = page.locator(".content-result-card").filter({ hasText: "Continuity" });
+  const card = page.locator(".res-row").filter({ hasText: "Continuity" });
   await card.getByRole("button", { name: "详情", exact: true }).click();
   await expect(page.getByRole("heading", { name: "Continuity" })).toBeVisible();
 
@@ -189,15 +190,16 @@ test("M32-DET-UI-006 整合包详情下载进入安装预览", async ({ page }) 
   await page.reload();
   await page.getByRole("button", { name: "资源", exact: true }).first().click();
   await page.getByRole("button", { name: "整合包", exact: true }).click();
-  const card = page.locator(".content-result-card").filter({ hasText: "Continuity" });
+  const card = page.locator(".res-row").filter({ hasText: "Continuity" });
   await card.getByRole("button", { name: "详情", exact: true }).click();
   await expect(page.getByRole("heading", { name: "Continuity" })).toBeVisible();
 
   await page.getByRole("button", { name: /Minecraft 26\.2/ }).click();
   const row = page.locator(".detail-file-row").filter({ hasText: "3.1.0+26.2" });
-  await row.getByRole("button", { name: "下载", exact: true }).click();
-  await expect(page.getByRole("heading", { name: "整合包预览" })).toBeVisible();
-  await expect(page.getByText("Tundra Adventures 1.0.0")).toBeVisible();
+  await row.getByRole("button", { name: "安装", exact: true }).click();
+  const dialog = page.getByRole("dialog");
+  await expect(dialog.getByRole("heading", { name: "整合包预览" })).toBeVisible();
+  await expect(dialog.getByText("Tundra Adventures 1.0.0")).toBeVisible();
 });
 
 test("M32-DET-UI-007 复制链接后按钮进入已复制状态", async ({ page }) => {
@@ -210,7 +212,7 @@ test("M32-DET-UI-007 复制链接后按钮进入已复制状态", async ({ page 
 test("M32-FAV-UI-001 结果卡收藏后出现在收藏子页并可取消", async ({ page }) => {
   await page.getByRole("searchbox", { name: "搜索在线资源" }).fill("continuity");
   await page.getByRole("button", { name: "搜索", exact: true }).click();
-  const card = page.locator(".content-result-card").filter({ hasText: "Continuity" });
+  const card = page.locator(".res-row").filter({ hasText: "Continuity" });
   const star = card.getByRole("button", { name: "收藏 Continuity" });
   await star.click();
   await expect(star).toHaveAttribute("aria-pressed", "true");

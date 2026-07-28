@@ -50,7 +50,8 @@ test("M29-PACK-001 导入整合包预览并确认安装", async ({ page }) => {
   await page.evaluate(() => {
     window.localStorage.setItem("moyumax.browser.pickedModpackFile", "D:\\Packs\\tundra.mrpack");
   });
-  await page.getByRole("button", { name: "安装" }).first().click();
+  await page.getByRole("button", { name: "实例", exact: true }).first().click();
+  await page.getByRole("button", { name: "新建实例" }).click();
   await expect(page.getByRole("heading", { name: "整合包" })).toBeVisible();
 
   await page.getByRole("button", { name: "导入整合包…" }).click();
@@ -96,7 +97,10 @@ test("M29-PACK-002 实例卡显示整合包徽章并完成更新", async ({ page
   });
   await page.reload();
 
-  await expect(page.getByText("Tundra Adventures 1.0.0 · Modrinth", { exact: true })).toBeVisible();
+  await page.getByRole("button", { name: "实例", exact: true }).first().click();
+  await page.getByRole("button", { name: "管理实例「Tundra Adventures 1.0.0」" }).click();
+  await page.locator(".tabs").getByRole("button", { name: "设置", exact: true }).click();
+  await expect(page.getByText("Tundra Adventures 1.0.0 · Modrinth", { exact: false })).toBeVisible();
   await page.getByRole("button", { name: "更新整合包" }).click();
   await expect(
     page.getByRole("status").getByText("「Tundra Adventures」已从 1.0.0 更新到 2.0.0；以下已改动文件保留未覆盖：config/user.cfg", { exact: true }),
@@ -108,7 +112,8 @@ test("M29-PACK-003 整合包导入失败显示可读错误", async ({ page }) =>
     window.localStorage.removeItem("moyumax.browser.modpackPreview");
     window.localStorage.setItem("moyumax.browser.pickedModpackFile", "D:\\Packs\\broken.mrpack");
   });
-  await page.getByRole("button", { name: "安装" }).first().click();
+  await page.getByRole("button", { name: "实例", exact: true }).first().click();
+  await page.getByRole("button", { name: "新建实例" }).click();
   await page.getByRole("button", { name: "导入整合包…" }).click();
   await expect(page.getByRole("alert").getByText("modrinth.index.json 或 manifest.json", { exact: false })).toBeVisible();
 });
@@ -118,7 +123,8 @@ test("UI-PACK-001 整合包导入区在 960x600 和 200% 放大下不发生横�
     window.localStorage.setItem("moyumax.browser.pickedModpackFile", "D:\\Packs\\tundra.mrpack");
   });
   await page.setViewportSize({ width: 960, height: 600 });
-  await page.getByRole("button", { name: "安装" }).first().click();
+  await page.getByRole("button", { name: "实例", exact: true }).first().click();
+  await page.getByRole("button", { name: "新建实例" }).click();
   await page.getByRole("button", { name: "导入整合包…" }).click();
   await expect(page.getByRole("heading", { name: "Tundra Adventures" })).toBeVisible();
   await page.evaluate(() => {
@@ -132,6 +138,9 @@ test("UI-PACK-001 整合包导入区在 960x600 和 200% 放大下不发生横�
       .filter(
         (element) =>
           !element.classList.contains("sr-live") &&
+          // 文本框内部滚动自身内容（如只读路径），不属于布局横向溢出
+          !(element instanceof HTMLInputElement) &&
+          !(element instanceof HTMLTextAreaElement) &&
           element.clientWidth > 0 &&
           element.scrollWidth > element.clientWidth + 1,
       )

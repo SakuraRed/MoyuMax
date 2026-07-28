@@ -58,8 +58,9 @@ test("M31-CAT-UI-001 在线目录默认显示并可按类型搜索模组", async
   await page.getByRole("searchbox", { name: "搜索在线资源" }).fill("continuity");
   await page.getByRole("button", { name: "搜索", exact: true }).click();
   await expect(page.getByText("Continuity", { exact: true })).toBeVisible();
-  await page.getByRole("button", { name: "查看安装计划" }).click();
-  await expect(page.getByRole("heading", { name: "安装计划预览" })).toBeVisible();
+  await page.getByRole("button", { name: "安装", exact: true }).click();
+  const dialog = page.getByRole("dialog");
+  await expect(dialog.getByRole("heading", { name: "确认安装到「测试实例」" })).toBeVisible();
 });
 
 test("M31-CAT-UI-002 在线整合包预览并安装", async ({ page }) => {
@@ -70,9 +71,10 @@ test("M31-CAT-UI-002 在线整合包预览并安装", async ({ page }) => {
   await page.getByRole("button", { name: "搜索", exact: true }).click();
   await page.getByRole("button", { name: "安装", exact: true }).click();
 
-  await expect(page.getByRole("heading", { name: "整合包预览" })).toBeVisible();
-  await expect(page.getByText("Tundra Adventures 1.0.0")).toBeVisible();
-  await page.getByRole("button", { name: "确认安装" }).click();
+  const dialog = page.getByRole("dialog");
+  await expect(dialog.getByRole("heading", { name: "整合包预览" })).toBeVisible();
+  await expect(dialog.getByText("Tundra Adventures 1.0.0")).toBeVisible();
+  await dialog.getByRole("button", { name: "确认安装" }).click();
   await expect(page.getByText("「Tundra Adventures」安装完成")).toBeVisible();
 });
 
@@ -81,8 +83,9 @@ test("M31-CAT-UI-003 在线资源包安装到所选实例", async ({ page }) => 
   await page.getByRole("searchbox", { name: "搜索在线资源" }).fill("continuity");
   await page.getByRole("button", { name: "搜索", exact: true }).click();
   await page.getByRole("button", { name: "安装", exact: true }).click();
-  await expect(page.getByRole("heading", { name: "安装 Continuity" })).toBeVisible();
-  await page.getByRole("button", { name: "确认安装" }).click();
+  const dialog = page.getByRole("dialog");
+  await expect(dialog.getByRole("heading", { name: "安装 Continuity" })).toBeVisible();
+  await dialog.getByRole("button", { name: "确认安装" }).click();
   await expect(page.getByText("已安装到", { exact: false })).toBeVisible();
 });
 
@@ -92,12 +95,13 @@ test("M35-CAT-UI-001 资源包安装可挑选版本", async ({ page }) => {
   await page.getByRole("button", { name: "搜索", exact: true }).click();
   await page.getByRole("button", { name: "安装", exact: true }).click();
 
-  const versionSelect = page.getByRole("combobox", { name: "下载版本" });
+  const dialog = page.getByRole("dialog");
+  const versionSelect = dialog.getByRole("combobox", { name: "下载版本" });
   await expect(versionSelect).toBeVisible();
   const options = await versionSelect.locator("option").allTextContents();
   expect(options.length).toBeGreaterThan(1);
   await versionSelect.selectOption({ index: 1 });
-  await page.getByRole("button", { name: "确认安装" }).click();
+  await dialog.getByRole("button", { name: "确认安装" }).click();
   await expect(page.getByText("已安装到", { exact: false })).toBeVisible();
 });
 
