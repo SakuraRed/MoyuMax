@@ -40,19 +40,31 @@ async fn all_supported_loaders_install_and_launch_into_minecraft() {
         .clone();
 
     let fabric = recommended(
-        metadata.compatible_fabric_loaders(GAME_VERSION).await.unwrap(),
+        metadata
+            .compatible_fabric_loaders(GAME_VERSION)
+            .await
+            .unwrap(),
         "fabric",
     );
     let quilt = recommended(
-        metadata.compatible_quilt_loaders(GAME_VERSION).await.unwrap(),
+        metadata
+            .compatible_quilt_loaders(GAME_VERSION)
+            .await
+            .unwrap(),
         "quilt",
     );
     let forge = recommended(
-        metadata.compatible_forge_versions(GAME_VERSION).await.unwrap(),
+        metadata
+            .compatible_forge_versions(GAME_VERSION)
+            .await
+            .unwrap(),
         "forge",
     );
     let neoforge = recommended(
-        metadata.compatible_neoforge_versions(GAME_VERSION).await.unwrap(),
+        metadata
+            .compatible_neoforge_versions(GAME_VERSION)
+            .await
+            .unwrap(),
         "neoforge",
     );
 
@@ -60,7 +72,7 @@ async fn all_supported_loaders_install_and_launch_into_minecraft() {
         (
             LoaderCase {
                 kind: "vanilla",
-                markers: &["Loading Minecraft"],
+                markers: &["Backend library: LWJGL", "Setting user:"],
             },
             LoaderChoice::Vanilla,
         ),
@@ -81,14 +93,14 @@ async fn all_supported_loaders_install_and_launch_into_minecraft() {
         (
             LoaderCase {
                 kind: "forge",
-                markers: &["net.minecraftforge", "Loading Minecraft"],
+                markers: &["Backend library: LWJGL", "net.minecraftforge"],
             },
             LoaderChoice::Forge { version: forge },
         ),
         (
             LoaderCase {
                 kind: "neoforge",
-                markers: &["neoforge", "NeoForge", "FML"],
+                markers: &["Backend library: LWJGL", "neoforge", "FML"],
             },
             LoaderChoice::NeoForge { version: neoforge },
         ),
@@ -100,10 +112,7 @@ async fn all_supported_loaders_install_and_launch_into_minecraft() {
         summary.push(outcome);
     }
 
-    let failures: Vec<_> = summary
-        .iter()
-        .filter(|outcome| !outcome.success)
-        .collect();
+    let failures: Vec<_> = summary.iter().filter(|outcome| !outcome.success).collect();
     for outcome in &summary {
         println!(
             "[matrix] {} => install={} launch={} note={}",
@@ -113,14 +122,19 @@ async fn all_supported_loaders_install_and_launch_into_minecraft() {
     if let Some(result_file) = std::env::var_os("MOYUMAX_LIVE_RESULT_FILE") {
         std::fs::write(
             std::path::PathBuf::from(result_file),
-            serde_json::to_vec_pretty(&serde_json::json!(summary.iter().map(|o| {
-                serde_json::json!({
-                    "loader": o.kind,
-                    "installed": o.installed,
-                    "launched": o.launched,
-                    "note": o.note,
-                })
-            }).collect::<Vec<_>>()))
+            serde_json::to_vec_pretty(&serde_json::json!(
+                summary
+                    .iter()
+                    .map(|o| {
+                        serde_json::json!({
+                            "loader": o.kind,
+                            "installed": o.installed,
+                            "launched": o.launched,
+                            "note": o.note,
+                        })
+                    })
+                    .collect::<Vec<_>>()
+            ))
             .unwrap(),
         )
         .unwrap();
@@ -221,8 +235,12 @@ async fn run_case(
     let monitor = tokio::spawn(async move {
         for _ in 0..300 {
             tokio::time::sleep(std::time::Duration::from_millis(500)).await;
-            let stdout = tokio::fs::read_to_string(&stdout_path).await.unwrap_or_default();
-            let stderr = tokio::fs::read_to_string(&stderr_path).await.unwrap_or_default();
+            let stdout = tokio::fs::read_to_string(&stdout_path)
+                .await
+                .unwrap_or_default();
+            let stderr = tokio::fs::read_to_string(&stderr_path)
+                .await
+                .unwrap_or_default();
             let output = format!("{stdout}\n{stderr}").to_lowercase();
             if markers.iter().any(|marker| output.contains(marker)) {
                 let _ = stop_sender.send(());
@@ -241,7 +259,9 @@ async fn run_case(
         .unwrap()
         .iter()
         .all(|report| report.launch_session_id != completed.id);
-    let clean_exit = format!("{:?}", completed.state).to_lowercase().contains(STOPPED_STATE);
+    let clean_exit = format!("{:?}", completed.state)
+        .to_lowercase()
+        .contains(STOPPED_STATE);
     CaseOutcome {
         kind,
         installed: true,

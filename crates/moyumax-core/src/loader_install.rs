@@ -226,20 +226,21 @@ pub fn read_main_class(jar: &Path) -> Result<String> {
     let mut archive = ZipArchive::new(file)
         .map_err(|error| CoreError::Archive(format!("处理器 JAR 无法读取：{error}")))?;
     let manifest = read_zip_text(&mut archive, "META-INF/MANIFEST.MF")?;
-    // Manifest 行可以折行(每 72 字符续行以空格开头)。
+    // Manifest 折行规则:仅以下一个空格开头的行才是续行;
+    // Main-Class 未折行时,下一属性(如 Specification-Title)不得并入。
     let mut main_class: Option<String> = None;
-    let mut continuation = false;
+    let mut in_main_class = false;
     for line in manifest.lines() {
-        if continuation {
-            if let Some(value) = &mut main_class {
+        if line.starts_with(' ') {
+            if in_main_class && let Some(value) = &mut main_class {
                 value.push_str(line.trim());
             }
-            continuation = false;
             continue;
         }
+        in_main_class = false;
         if let Some(value) = line.strip_prefix("Main-Class:") {
             main_class = Some(value.trim().to_owned());
-            continuation = true;
+            in_main_class = true;
         }
     }
     main_class
@@ -545,4 +546,52 @@ fn parse_bracketed_coordinate(raw: &str) -> Result<MavenCoordinate> {
 
 fn path_text(path: &Path) -> String {
     path.to_string_lossy().into_owned()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use zip::{ZipWriter, write::SimpleFileOptions};
+
+    fn jar_with_manifest(manifest: &str) -> (tempfile::TempDir, std::path::PathBuf) {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("processor.jar");
+        let file = fs::File::create(&path).expect("create jar");
+        let mut writer = ZipWriter::new(file);
+        writer
+            .start_file("META-INF/MANIFEST.MF", SimpleFileOptions::default())
+            .expect("start manifest");
+        std::io::Write::write_all(&mut writer, manifest.as_bytes()).expect("write manifest");
+        writer.finish().expect("finish jar");
+        (dir, path)
+    }
+
+    #[test]
+    fn main_class_single_line_does_not_absorb_next_attribute() {
+        // Forge installertools 的真实 manifest:Main-Class 未折行,
+        // 下一行是 Specification-Title,不得并入(矩阵实机暴露的回归)。
+        let manifest = "Manifest-Version: 1.0\r\nMain-Class: net.minecraftforge.installertools.ConsoleTool\r\nSpecification-Title: Installer Tools\r\nSpecification-Version: 2.1.0\r\n";
+        let (_dir, jar) = jar_with_manifest(manifest);
+        assert_eq!(
+            read_main_class(&jar).expect("main class"),
+            "net.minecraftforge.installertools.ConsoleTool"
+        );
+    }
+
+    #[test]
+    fn main_class_wrapped_line_joins_space_continuations() {
+        let manifest = "Manifest-Version: 1.0\r\nMain-Class: net.minecraftforge.installertools.Console\r\n Tool\r\nSpecification-Title: Installer Tools\r\n";
+        let (_dir, jar) = jar_with_manifest(manifest);
+        assert_eq!(
+            read_main_class(&jar).expect("main class"),
+            "net.minecraftforge.installertools.ConsoleTool"
+        );
+    }
+
+    #[test]
+    fn main_class_missing_is_an_error() {
+        let manifest = "Manifest-Version: 1.0\r\nSpecification-Title: Installer Tools\r\n";
+        let (_dir, jar) = jar_with_manifest(manifest);
+        assert!(read_main_class(&jar).is_err());
+    }
 }
