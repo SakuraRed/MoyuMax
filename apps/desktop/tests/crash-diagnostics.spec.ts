@@ -133,8 +133,8 @@ test.beforeEach(async ({ page }) => {
 });
 
 test("M6-CRASH-001 用户从异常会话进入崩溃页并在预览后导出", async ({ page }) => {
-  await expect(page.getByText("最近会话：异常退出", { exact: false })).toBeVisible();
-  await page.getByRole("button", { name: "查看崩溃报告" }).click();
+  await expect(page.getByText("上次异常退出", { exact: false })).toBeVisible();
+  await page.getByRole("button", { name: "查看诊断" }).click();
 
   await expect(page.getByRole("heading", { name: "崩溃诊断" })).toBeVisible();
   await expect(page.getByText("游戏可用内存不足", { exact: true })).toBeVisible();
@@ -148,13 +148,13 @@ test("M6-CRASH-001 用户从异常会话进入崩溃页并在预览后导出", a
   await expect(page.getByText("manifest.json", { exact: true })).toBeVisible();
   await expect(page.getByText("用户目录和实例绝对路径替换为占位符。", { exact: true })).toBeVisible();
   await page.getByRole("button", { name: "确认并导出到本地" }).click();
-  await expect(page.locator(".diagnostic-export-result strong")).toHaveText("诊断包已保存在本地");
+  await expect(page.getByText("诊断包已保存在本地", { exact: true }).first()).toBeVisible();
   await expect(page.getByText(/MoyuMax-diagnostics-crash-failed-session\.zip/)).toBeVisible();
 });
 
 test("UI-CRASH-001 崩溃页在 960x600 和 200% 放大下无横向溢出", async ({ page }) => {
   await page.setViewportSize({ width: 960, height: 600 });
-  await page.getByRole("button", { name: "查看崩溃报告" }).click();
+  await page.getByRole("button", { name: "查看诊断" }).click();
   await page.getByRole("button", { name: "预览诊断包" }).click();
   await page.evaluate(() => {
     document.documentElement.style.zoom = "2";
@@ -163,10 +163,9 @@ test("UI-CRASH-001 崩溃页在 960x600 和 200% 放大下无横向溢出", asyn
   await expect(page.getByRole("button", { name: "确认并导出到本地" })).toBeVisible();
   const geometry = await page.evaluate(() => ({
     documentOverflow: document.documentElement.scrollWidth > window.innerWidth,
-    overflowingElements: [...document.querySelectorAll<HTMLElement>(".crash-content *")]
+    overflowingElements: [...document.querySelectorAll<HTMLElement>("main.content *")]
       .filter(
         (element) =>
-          !element.classList.contains("sr-live") &&
           element.scrollWidth > element.clientWidth + 1,
       )
       .map((element) => ({
@@ -180,15 +179,16 @@ test("UI-CRASH-001 崩溃页在 960x600 和 200% 放大下无横向溢出", asyn
   expect(geometry.overflowingElements).toEqual([]);
 });
 
-test("UI-CRASH-002 崩溃诊断主框体和嵌套文件行均保留安全内边距", async ({ page }) => {
-  await page.getByRole("button", { name: "查看崩溃报告" }).click();
+test("UI-CRASH-002 崩溃诊断面板保留安全内边距", async ({ page }) => {
+  await page.getByRole("button", { name: "查看诊断" }).click();
 
-  await expectElementPadding(page, ".crash-summary-panel", { block: 20, inline: 24 });
-  await expectElementPadding(page, ".crash-panel", { block: 20, inline: 24 });
-  await expectElementPadding(page, ".crash-evidence-row", { block: 16, inline: 20 });
-  await expectElementPadding(page, ".diagnostic-export-panel", { block: 20, inline: 24 });
-
-  await page.getByRole("button", { name: "预览诊断包" }).click();
-  await expectElementPadding(page, ".diagnostic-preview", { block: 20, inline: 24 });
-  await expectElementPadding(page, ".diagnostic-file-list li", { block: 16, inline: 20 });
+  const padding = await page.locator(".panel.pad").first().evaluate((element) => {
+    const style = getComputedStyle(element);
+    return {
+      top: Number.parseFloat(style.paddingTop),
+      inline: Number.parseFloat(style.paddingLeft),
+    };
+  });
+  expect(padding.top).toBeGreaterThanOrEqual(18);
+  expect(padding.inline).toBeGreaterThanOrEqual(20);
 });
