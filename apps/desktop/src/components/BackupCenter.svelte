@@ -240,7 +240,7 @@
                 <div class="tl-item">
                   <span class="tl-dot" class:failed={backup.state === "failed"}></span>
                   <div class="lr-main">
-                    <div class="lr-name">{triggerLabel(backup.trigger)} <span class="dim" style="font-weight:400">{formatTime(backup.createdAtUnixSeconds)}</span></div>
+                    <div class="lr-name"><span>{triggerLabel(backup.trigger)}</span> <span class="dim" style="font-weight:400">{formatTime(backup.createdAtUnixSeconds)}</span></div>
                     <div class="lr-sub">{t("backups.rowSummary").replace("{worlds}", String(backup.worldCount)).replace("{size}", formatBytes(backup.archiveBytes))}{#if backup.errorSummary} · {backup.errorSummary}{/if}</div>
                   </div>
                   <span class="tag {stateTag(backup.state)}">{stateLabel(backup.state)}</span>

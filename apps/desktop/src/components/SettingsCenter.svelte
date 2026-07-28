@@ -1461,11 +1461,11 @@
               </div>
               <div class="set-row">
                 <div class="sr-main"><div class="sr-name">{t("settings.about.repository")}</div></div>
-                <span class="mono">github.com/SakuraRed/MoyuMax</span>
+                <span class="mono" style="word-break:break-all;text-align:right">github.com/SakuraRed/MoyuMax</span>
               </div>
               <div class="set-row">
                 <div class="sr-main"><div class="sr-name">{t("settings.about.sbom")}</div></div>
-                <span class="mono">docs/SBOM.json · docs/THIRD-PARTY-LICENSES.md</span>
+                <span class="mono" style="word-break:break-all;text-align:right">docs/SBOM.json · docs/THIRD-PARTY-LICENSES.md</span>
               </div>
             </div>
             <div class="banner warn" style="margin-top:12px">

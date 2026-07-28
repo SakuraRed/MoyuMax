@@ -36,10 +36,11 @@ test.beforeEach(async ({ page }) => {
 });
 
 async function openExport(page: import("@playwright/test").Page): Promise<void> {
-  await page.getByRole("button", { name: "管理“导出测试”" }).click();
-  await expect(page.getByRole("heading", { name: "概览" })).toBeVisible();
-  await page.getByRole("button", { name: "导出", exact: true }).click();
-  await expect(page.getByRole("heading", { name: "导出整合包" })).toBeVisible();
+  await page.getByRole("button", { name: "实例", exact: true }).click();
+  await page.getByRole("button", { name: "管理实例「导出测试」" }).click();
+  await expect(page.getByRole("heading", { name: "导出测试" })).toBeVisible();
+  await page.getByLabel("实例管理").getByRole("button", { name: "设置", exact: true }).click();
+  await expect(page.getByText("导出整合包", { exact: true })).toBeVisible();
 }
 
 test("M30-EXP-001 导出表单渲染并带默认值", async ({ page }) => {
@@ -62,10 +63,9 @@ test("M30-EXP-002 导出成功显示报告并记录选项", async ({ page }) => 
   await page.getByRole("button", { name: "开始导出" }).click();
 
   await expect(page.locator(".toast").getByText("整合包导出完成", { exact: true })).toBeVisible();
-  const report = page.getByRole("term").filter({ hasText: "产物路径" });
-  await expect(report).toBeVisible();
-  await expect(page.locator("code").filter({ hasText: "导出测试-1.0.0.mrpack" })).toBeVisible();
-  await expect(page.getByRole("definition").filter({ hasText: "4.0 KiB" })).toBeVisible();
+  await expect(page.getByText("产物路径", { exact: true })).toBeVisible();
+  await expect(page.getByText("导出测试-1.0.0.mrpack", { exact: false })).toBeVisible();
+  await expect(page.getByText("4.0 KiB", { exact: true })).toBeVisible();
 
   const record = await page.evaluate(() =>
     window.localStorage.getItem("moyumax.browser.lastModpackExport"),

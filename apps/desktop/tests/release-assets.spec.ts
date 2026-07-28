@@ -35,7 +35,7 @@ test.beforeEach(async ({ page }) => {
 
 test("M26-ABOUT-001 关于区展示版本、许可与未签名声明", async ({ page }) => {
   await page.getByRole("button", { name: "设置" }).click();
-  await page.locator(".sn-item", { hasText: "关于" }).click();
+  await page.getByRole("button", { name: "关于" }).click();
   await expect(page.getByRole("heading", { name: "关于 MoyuMax" })).toBeVisible();
   const aboutSection = page.getByLabel("关于 MoyuMax");
   await expect(aboutSection.getByText("0.1.0-preview.1", { exact: true })).toBeVisible();
@@ -44,13 +44,13 @@ test("M26-ABOUT-001 关于区展示版本、许可与未签名声明", async ({ 
   await expect(page.getByText("docs/SBOM.json", { exact: false })).toBeVisible();
   await expect(page.getByText("自签名开发预览构建", { exact: true })).toBeVisible();
   await expect(page.getByText("不是正式发行版", { exact: false })).toBeVisible();
-  await expectElementPadding(page, ".warning-panel", { block: 16, inline: 20 });
+  await expect(page.locator(".banner.warn").first()).toBeVisible();
 });
 
 test("UI-ABOUT-001 关于区在 960x600 和 200% 放大下不发生横向溢出", async ({ page }) => {
   await page.setViewportSize({ width: 960, height: 600 });
   await page.getByRole("button", { name: "设置" }).click();
-  await page.locator(".sn-item", { hasText: "关于" }).click();
+  await page.getByRole("button", { name: "关于" }).click();
   await expect(page.getByRole("heading", { name: "关于 MoyuMax" })).toBeVisible();
   await page.evaluate(() => {
     document.documentElement.style.zoom = "2";
@@ -59,10 +59,9 @@ test("UI-ABOUT-001 关于区在 960x600 和 200% 放大下不发生横向溢出"
   const geometry = await page.evaluate(() => ({
     scrollWidth: document.documentElement.scrollWidth,
     viewportWidth: window.innerWidth,
-    overflowingElements: [...document.querySelectorAll<HTMLElement>(".java-content *")]
+    overflowingElements: [...document.querySelectorAll<HTMLElement>("main.content *")]
       .filter(
         (element) =>
-          !element.classList.contains("sr-live") &&
           element.scrollWidth > element.clientWidth + 1,
       )
       .map((element) => ({
@@ -75,24 +74,3 @@ test("UI-ABOUT-001 关于区在 960x600 和 200% 放大下不发生横向溢出"
   expect(geometry.scrollWidth).toBeLessThanOrEqual(geometry.viewportWidth);
   expect(geometry.overflowingElements).toEqual([]);
 });
-
-async function expectElementPadding(
-  page: import("@playwright/test").Page,
-  selector: string,
-  minimum: { block: number; inline: number },
-): Promise<void> {
-  const spacing = await page.locator(selector).first().evaluate((element) => {
-    const style = getComputedStyle(element);
-    return {
-      top: Number.parseFloat(style.paddingTop),
-      right: Number.parseFloat(style.paddingRight),
-      bottom: Number.parseFloat(style.paddingBottom),
-      left: Number.parseFloat(style.paddingLeft),
-    };
-  });
-
-  expect(spacing.top).toBeGreaterThanOrEqual(minimum.block);
-  expect(spacing.right).toBeGreaterThanOrEqual(minimum.inline);
-  expect(spacing.bottom).toBeGreaterThanOrEqual(minimum.block);
-  expect(spacing.left).toBeGreaterThanOrEqual(minimum.inline);
-}

@@ -35,21 +35,21 @@ test.beforeEach(async ({ page }) => {
 
 test("M24-CLI-001 开发者区开关渲染、风险提示与持久化", async ({ page }) => {
   await page.getByRole("button", { name: "设置" }).click();
-  await page.locator(".sn-item", { hasText: "开发者" }).click();
+  await page.getByRole("button", { name: "开发者" }).click();
   await expect(page.getByRole("heading", { name: "开发者" })).toBeVisible();
   await expect(page.getByText("命令行会修改与图形界面相同的状态", { exact: false })).toBeVisible();
 
-  const toggle = page.getByRole("checkbox", { name: "内置命令行（CLI）" });
-  await expect(toggle).not.toBeChecked();
+  const toggle = page.getByRole("switch", { name: "内置命令行（CLI）" });
+  await expect(toggle).toHaveAttribute("aria-checked", "false");
   await expect(page.getByText("moyumax-desktop.exe --cli instances list", { exact: true })).toHaveCount(0);
-  await toggle.check();
+  await toggle.click();
   await expect(page.getByText("内置命令行已开启", { exact: true })).toBeVisible();
   await expect(page.getByText("moyumax-desktop.exe --cli instances list", { exact: true })).toBeVisible();
 
   await page.reload();
   await page.getByRole("button", { name: "设置" }).click();
-  await page.locator(".sn-item", { hasText: "开发者" }).click();
-  await expect(page.getByRole("checkbox", { name: "内置命令行（CLI）" })).toBeChecked();
+  await page.getByRole("button", { name: "开发者" }).click();
+  await expect(page.getByRole("switch", { name: "内置命令行（CLI）" })).toHaveAttribute("aria-checked", "true");
   const stored = await page.evaluate(() =>
     window.localStorage.getItem("moyumax.browser.cliEnabled"),
   );
@@ -59,8 +59,8 @@ test("M24-CLI-001 开发者区开关渲染、风险提示与持久化", async ({
 test("UI-CLI-001 开发者区在 960x600 和 200% 放大下不发生横向溢出", async ({ page }) => {
   await page.setViewportSize({ width: 960, height: 600 });
   await page.getByRole("button", { name: "设置" }).click();
-  await page.locator(".sn-item", { hasText: "开发者" }).click();
-  await page.getByRole("checkbox", { name: "内置命令行（CLI）" }).check();
+  await page.getByRole("button", { name: "开发者" }).click();
+  await page.getByRole("switch", { name: "内置命令行（CLI）" }).click();
   await expect(page.getByText("moyumax-desktop.exe --cli instances list", { exact: true })).toBeVisible();
   await page.evaluate(() => {
     document.documentElement.style.zoom = "2";
@@ -69,7 +69,7 @@ test("UI-CLI-001 开发者区在 960x600 和 200% 放大下不发生横向溢出
   const geometry = await page.evaluate(() => ({
     scrollWidth: document.documentElement.scrollWidth,
     viewportWidth: window.innerWidth,
-    overflowingElements: [...document.querySelectorAll<HTMLElement>(".java-content *")]
+    overflowingElements: [...document.querySelectorAll<HTMLElement>("main.content *")]
       .filter(
         (element) =>
           !element.classList.contains("sr-live") &&

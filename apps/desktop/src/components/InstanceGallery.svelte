@@ -602,6 +602,8 @@
   }
   .inst-card > .row button {
     pointer-events: auto;
+    position: relative;
+    z-index: 1;
   }
   .inst-card.checked {
     border-color: var(--accent);

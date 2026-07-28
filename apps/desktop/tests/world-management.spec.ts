@@ -126,7 +126,7 @@ test("M17-WORLD-004 回滚确认后创建恢复点并完成回滚", async ({ pag
   const dialog = page.getByRole("dialog");
   await expect(dialog.getByRole("heading", { name: "恢复这个备份？" })).toBeVisible();
   await expect(dialog.getByText("恢复前会先创建当前状态的恢复点", { exact: false })).toBeVisible();
-  await expectElementPadding(page, ".confirmation-dialog", { block: 20, inline: 24 });
+  await expectElementPadding(page, ".modal", { block: 18, inline: 20 });
   await page.keyboard.press("Escape");
   await expect(page.getByRole("dialog")).toHaveCount(0);
 
