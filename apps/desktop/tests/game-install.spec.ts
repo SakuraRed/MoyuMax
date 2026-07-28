@@ -280,8 +280,10 @@ test("PCL32-NAV-001 安装中切换页面后任务视图不丢失", async ({ pag
   await page.getByRole("button", { name: "开始安装" }).click();
   await expect(page.getByRole("heading", { name: "安装任务已进入队列" })).toBeVisible();
 
-  // 切到首页再切回实例页:任务在服务端持续,视图应恢复排队态而不是回到配置页。
+  // 切到首页再切回实例列表,经"新建实例"重新进入安装页:任务在服务端持续,
+  // 视图应恢复排队态而不是回到配置页。
   await page.getByRole("button", { name: "首页", exact: true }).first().click();
   await page.getByRole("button", { name: "实例", exact: true }).first().click();
+  await page.getByRole("button", { name: "新建实例" }).first().click();
   await expect(page.getByRole("heading", { name: "安装任务已进入队列" })).toBeVisible();
 });

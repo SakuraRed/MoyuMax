@@ -26,7 +26,7 @@
     VersionCatalog,
   } from "../runtime";
   import AppShell from "./AppShell.svelte";
-  import FishtankLoader from "./FishtankLoader.svelte";
+  import Fish from "./Fish.svelte";
   import Icon from "./Icon.svelte";
 
   interface Props {
@@ -45,6 +45,13 @@
   /** Modrinth 上 Fabric API 的项目 ID（PCL 同款附带安装对象）。 */
   const FABRIC_API_PROJECT_ID = "P7dR8mSH";
 
+  const LOADER_DISPLAY: Record<FoldLoaderKind, string> = {
+    fabric: "Fabric",
+    quilt: "Quilt",
+    forge: "Forge",
+    neoforge: "NeoForge",
+  };
+
   let {
     runtime,
     settings,
@@ -56,7 +63,6 @@
   }: Props = $props();
 
   let view = $state<InstallView>("loading");
-  let installLeaping = $state(false);
   let catalog = $state<VersionCatalog | null>(null);
   let selectedVersion = $state<GameVersionSummary | null>(null);
   let fabricLoaders = $state<FabricLoaderSummary[]>([]);
@@ -70,6 +76,7 @@
   let task = $state<InstallTask | null>(null);
   let errorMessage = $state("");
   let loaderMessage = $state("");
+  let loaderMessageWarn = $state(false);
   let pageRoot: HTMLElement | undefined = $state();
   let loaderRequestSequence = 0;
   let taskPoll: ReturnType<typeof setInterval> | undefined;
@@ -143,6 +150,18 @@
     ),
   );
 
+  /** 当前展开的加载器版本清单：卡片网格下方整宽呈现。 */
+  const expandedLoaderMeta = $derived.by(() => {
+    if (!expandedLoader) return null;
+    const meta: Record<FoldLoaderKind, { versions: FabricLoaderSummary[]; label: string }> = {
+      forge: { versions: forgeVersions, label: t("install.loader.forgeField") },
+      neoforge: { versions: neoforgeVersions, label: t("install.loader.neoforgeField") },
+      fabric: { versions: fabricLoaders, label: t("install.loader.fabricField") },
+      quilt: { versions: quiltLoaders, label: t("install.loader.quiltField") },
+    };
+    return { kind: expandedLoader, ...meta[expandedLoader] };
+  });
+
   function toggleMajor(major: string): void {
     const next = new Set(expandedMajors);
     if (next.has(major)) {
@@ -201,10 +220,7 @@
         expandedLoader = loader.kind;
         void loadFabricApi(loader.kind);
       }
-      installLeaping = true;
-      setTimeout(() => {
-        view = "configure";
-      }, 700);
+      view = "configure";
     } catch (error) {
       errorMessage = error instanceof Error ? error.message : String(error);
       view = "configure";
@@ -262,6 +278,7 @@
   async function loadFabric(version: GameVersionSummary, selectRecommended: boolean): Promise<void> {
     const requestSequence = ++loaderRequestSequence;
     loaderMessage = t("install.loader.querying");
+    loaderMessageWarn = false;
     try {
       const compatibleLoaders = await runtime.getFabricLoaders(version.id);
       if (requestSequence !== loaderRequestSequence || selectedVersion?.id !== version.id) return;
@@ -271,11 +288,13 @@
         loader = { kind: "fabric", version: recommended.version };
       }
       loaderMessage = fabricLoaders.length === 0 ? t("install.loader.noneAvailable") : "";
+      loaderMessageWarn = fabricLoaders.length === 0;
       updateGeneratedName();
     } catch (error) {
       if (requestSequence !== loaderRequestSequence || selectedVersion?.id !== version.id) return;
       fabricLoaders = [];
       loaderMessage = t("install.loader.metadataUnavailable").replace("{error}", error instanceof Error ? error.message : String(error));
+      loaderMessageWarn = true;
       updateGeneratedName();
     }
   }
@@ -377,7 +396,7 @@
     return loader.kind === "vanilla" ? null : loader.version;
   }
 
-  /** 折叠卡头：选中该加载器（未选时）并展开其版本列表、收起其他卡。 */
+  /** 卡片主按钮：选中该加载器（未选时）并展开其版本列表、收起其他卡。 */
   function selectLoaderKind(kind: FoldLoaderKind): void {
     if (loader.kind !== kind) {
       if (kind === "forge") selectForge();
@@ -399,11 +418,28 @@
     else selectQuiltVersion(version);
   }
 
-  /** 折叠卡右侧清除：回到不安装加载器的状态。 */
+  /** 卡片角落清除：回到不安装加载器的状态。 */
   function clearLoaderSelection(): void {
     loader = { kind: "vanilla" };
     resetFabricApi();
     updateGeneratedName();
+  }
+
+  /** 卡片副标题：已选版本 / 推荐版本与兼容说明 / 不可用。 */
+  function loaderCardSub(kind: FoldLoaderKind, versions: FabricLoaderSummary[]): string {
+    if (versions.length === 0) return t("install.loader.unavailable");
+    if (loader.kind === kind) {
+      return `${currentLoaderVersion() ?? ""} · ${t("install.loader.selectedNote")}`;
+    }
+    const recommended = recommendedFabricLoader(versions);
+    return `${recommended?.version ?? ""} · ${t("install.loader.compatible").replace("{version}", selectedVersion?.id ?? "")}`;
+  }
+
+  function loaderAutoNote(): string {
+    if (loader.kind === "vanilla") return "";
+    return t("install.loader.autoNote")
+      .replace("{loader}", LOADER_DISPLAY[loader.kind])
+      .replace("{version}", loader.version);
   }
 
   async function loadFabricApi(kind: "fabric" | "quilt"): Promise<void> {
@@ -536,6 +572,12 @@
     return t("install.taskState.waiting");
   }
 
+  function taskProgressPercent(current: InstallTask): number | null {
+    const total = current.progress.totalBytes;
+    if (!total || total <= 0) return null;
+    return Math.min(100, (current.progress.completedBytes / total) * 100);
+  }
+
   function returnToConfiguration(): void {
     preview = null;
     view = "configure";
@@ -553,9 +595,11 @@
 <AppShell
   pageTitle={view === "confirm" || view === "queueing" ? t("install.pageTitle.confirm") : view === "queued" ? t("install.pageTitle.queued") : t("install.pageTitle.configure")}
   dataDirectory={settings.dataDirectory}
-  activeNavigation={view === "queued" ? "tasks" : "instances"}
+  activeNavigation="instances"
   connectionStatus={catalog?.source === "cache" ? t("install.connection.cache") : t("install.connection.online")}
   taskStatus={task ? t("install.taskStatus.active").replace("{state}", taskStateLabel(task)) : t("shell.status.noTasks")}
+  taskCount={task && !["completed", "failed", "cancelled"].includes(task.state) ? 1 : 0}
+  {onBack}
   {onNavigate}
   {runtime}
   {onMinimize}
@@ -564,438 +608,492 @@
 >
   <main class="content install-content" bind:this={pageRoot}>
     {#if view === "loading"}
-      <section class="install-loading" aria-live="polite">
-        <FishtankLoader leaping={installLeaping} message={t("install.loading.title")} />
-      </section>
+      <div class="install-center" aria-live="polite">
+        <Fish variant="tank" message={t("install.loading.title")} />
+      </div>
     {:else if view === "configure"}
-      <div class="install-scroll" data-scroll-region="main">
-        <header class="install-heading">
-          <div>
-            <h1>{t("home.empty.installFirst")}</h1>
-          </div>
-        </header>
+      <div class="install-col">
+        <h1 class="install-page-title">{t("home.empty.installFirst")}</h1>
 
-        <section class="install-section" aria-labelledby="modpack-import-heading">
-          <div class="section-number">包</div>
-          <div class="section-content">
-            <h2 id="modpack-import-heading">{t("modpack.heading")}</h2>
-            <p class="modpack-hint">{t("modpack.description")}</p>
-            {#if packError}
-              <div class="error-block" role="alert"><strong>{t("modpack.errorTitle")}</strong><span>{packError}</span></div>
-            {/if}
-            {#if packInstalling && packProgress}
-              <div class="modpack-progress" role="status">
-                <span>{packProgress.stage === "game" ? t("modpack.stageGame") : t("modpack.stageFiles")} {packProgress.current}/{packProgress.total} · {packProgress.item}</span>
-              </div>
-            {/if}
-            {#if packDone}
-              <div class="content-queued" role="status">
-                <div>
-                  <strong>{t("modpack.doneTitle")}</strong>
-                  <span>{t("modpack.doneBody").replace("{name}", packDone.packName).replace("{version}", packDone.packVersion).replace("{count}", String(packDone.installedFiles))}</span>
-                </div>
-              </div>
-            {:else if packPreview}
-              <div class="modpack-preview">
-                <div class="backup-title-line">
-                  <h3>{packPreview.preview.name}</h3>
-                  <span>{packPreview.preview.provider === "modrinth" ? "Modrinth" : "CurseForge"}</span>
-                </div>
-                <p>{t("modpack.previewLine")
-                  .replace("{version}", packPreview.preview.version)
-                  .replace("{game}", packPreview.preview.gameVersion)
-                  .replace("{loader}", packPreview.preview.loaderKind)
-                  .replace("{loaderVersion}", packPreview.preview.loaderVersion)
-                  .replace("{count}", String(packPreview.preview.fileCount))
-                  .replace("{size}", formatBytes(packPreview.preview.totalBytes))}</p>
-                <div class="local-content-actions">
-                  <button class="button primary compact" disabled={packInstalling} onclick={() => void confirmPackInstall()}>
-                    {packInstalling ? t("modpack.installing") : t("modpack.confirmInstall")}
-                  </button>
-                  <button class="button ghost compact" disabled={packInstalling} onclick={() => { packPreview = null; }}>{t("common.cancel")}</button>
-                </div>
-              </div>
-            {:else}
-              <button class="button ghost compact" onclick={() => void importPack()}>{t("modpack.import")}</button>
+        <section class="panel pad" aria-labelledby="modpack-import-heading">
+          <div class="pack-head">
+            <div>
+              <h2 class="panel-title" id="modpack-import-heading">{t("modpack.heading")}</h2>
+              <div class="panel-desc">{t("modpack.description")}</div>
+            </div>
+            {#if !packPreview && !packDone}
+              <button class="btn secondary small" onclick={() => void importPack()}>{t("modpack.import")}</button>
             {/if}
           </div>
+          {#if packError}
+            <div class="banner danger" role="alert"><strong>{t("modpack.errorTitle")}</strong><span>{packError}</span></div>
+          {/if}
+          {#if packInstalling && packProgress}
+            {@const packPercent = packProgress.total > 0 ? Math.min(100, (packProgress.current / packProgress.total) * 100) : null}
+            <div class="pack-progress" role="status">
+              <span class="dim">{packProgress.stage === "game" ? t("modpack.stageGame") : t("modpack.stageFiles")} {packProgress.current}/{packProgress.total} · {packProgress.item}</span>
+              <div class="progress" class:indet={packPercent === null}>{#if packPercent !== null}<i style="width:{packPercent}%"></i>{:else}<i></i>{/if}</div>
+            </div>
+          {/if}
+          {#if packDone}
+            <div class="banner info pack-done" role="status">
+              <strong>{t("modpack.doneTitle")}</strong>
+              <span>{t("modpack.doneBody").replace("{name}", packDone.packName).replace("{version}", packDone.packVersion).replace("{count}", String(packDone.installedFiles))}</span>
+            </div>
+          {:else if packPreview}
+            <div class="modpack-preview">
+              <div class="row">
+                <h3>{packPreview.preview.name}</h3>
+                <span class="tag neutral">{packPreview.preview.provider === "modrinth" ? "Modrinth" : "CurseForge"}</span>
+              </div>
+              <p class="muted">{t("modpack.previewLine")
+                .replace("{version}", packPreview.preview.version)
+                .replace("{game}", packPreview.preview.gameVersion)
+                .replace("{loader}", packPreview.preview.loaderKind)
+                .replace("{loaderVersion}", packPreview.preview.loaderVersion)
+                .replace("{count}", String(packPreview.preview.fileCount))
+                .replace("{size}", formatBytes(packPreview.preview.totalBytes))}</p>
+              <div class="row">
+                <button class="btn primary small" disabled={packInstalling} onclick={() => void confirmPackInstall()}>
+                  {packInstalling ? t("modpack.installing") : t("modpack.confirmInstall")}
+                </button>
+                <button class="btn ghost small" disabled={packInstalling} onclick={() => { packPreview = null; }}>{t("common.cancel")}</button>
+              </div>
+            </div>
+          {/if}
         </section>
 
         {#if catalog?.source === "cache"}
-          <div class="info-banner" role="status">
+          <div class="banner info" role="status">
             <Icon name="info" size={16} />
             <span>{t("install.cacheBanner")}</span>
           </div>
         {/if}
         {#if errorMessage}
-          <div class="error-block" role="alert">
+          <div class="banner danger" role="alert">
             <strong>{t("install.error.title")}</strong>
-            <span>{t("install.error.body")}</span>
-            <span>{errorMessage}</span>
-            <button class="button ghost compact" onclick={() => void loadCatalog()}>{t("install.error.retry")}</button>
+            <span>{t("install.error.body")} {errorMessage}</span>
+            <button class="btn ghost small b-act" onclick={() => void loadCatalog()}>{t("install.error.retry")}</button>
           </div>
         {/if}
 
         {#if selectedVersion}
-          <section class="install-section" aria-labelledby="game-version-heading">
-            <div class="section-number">1</div>
-            <div class="section-content">
-              <h2 id="game-version-heading">{t("install.version.heading")}</h2>
-              {#if selectedVersion.releaseType === "snapshot"}
-                <div class="hint-banner" role="status">
-                  <Icon name="info" size={14} />
-                  <span>{t("install.hint.snapshot")}</span>
+          <section class="panel pad" aria-labelledby="gi-version-heading">
+            <div class="step">
+              <span class="step-no" aria-hidden="true">1</span>
+              <div class="step-body">
+                <div>
+                  <h2 class="panel-title" id="gi-version-heading">{t("install.version.stepTitle")}</h2>
+                  <div class="panel-desc">{t("install.version.stepDesc")}</div>
                 </div>
-              {:else if selectedVersion.releaseType === "oldBeta" || selectedVersion.releaseType === "oldAlpha"}
-                <div class="hint-banner" role="status">
-                  <Icon name="info" size={14} />
-                  <span>{t("install.hint.oldVersion")}</span>
-                </div>
-              {/if}
-              {#if latestReleaseVersion}
-                <div class="latest-card" role="group" aria-label={t("install.version.latestHeading")}>
-                  <strong class="latest-card-title">{t("install.version.latestHeading")}</strong>
-                  <div class="install-choice-list">
+                {#if selectedVersion.releaseType === "snapshot"}
+                  <div class="banner warn" role="status">
+                    <Icon name="info" size={14} />
+                    <span>{t("install.hint.snapshot")}</span>
+                  </div>
+                {:else if selectedVersion.releaseType === "oldBeta" || selectedVersion.releaseType === "oldAlpha"}
+                  <div class="banner warn" role="status">
+                    <Icon name="info" size={14} />
+                    <span>{t("install.hint.oldVersion")}</span>
+                  </div>
+                {/if}
+                {#if latestReleaseVersion}
+                  <div class="ver-latest" role="group" aria-label={t("install.version.latestHeading")}>
                     <button
-                      class:selected={selectedVersion.id === latestReleaseVersion.id}
-                      class="install-choice-row"
+                      class="install-choice-row ver-row"
+                      class:sel={selectedVersion.id === latestReleaseVersion.id}
                       role="radio"
                       aria-checked={selectedVersion.id === latestReleaseVersion.id}
                       onclick={() => void selectVersion(latestReleaseVersion)}
                     >
-                      <span class="radio-mark"></span>
+                      <span class="pick-dot" aria-hidden="true"></span>
                       <span class="choice-copy">
-                        <strong>{latestReleaseVersion.id}<em>{t("install.version.latestReleaseTag")}</em></strong>
+                        <strong>Minecraft {latestReleaseVersion.id}<em>{t("install.version.latestReleaseTag")}</em>{#if latestReleaseVersion.recommended}<em>{t("install.version.recommended")}</em>{/if}</strong>
                         <small>{releaseDescription(latestReleaseVersion)}</small>
                       </span>
                     </button>
                     {#if showLatestSnapshot && latestSnapshotVersion}
                       <button
-                        class:selected={selectedVersion.id === latestSnapshotVersion.id}
-                        class="install-choice-row"
+                        class="install-choice-row ver-row"
+                        class:sel={selectedVersion.id === latestSnapshotVersion.id}
                         role="radio"
                         aria-checked={selectedVersion.id === latestSnapshotVersion.id}
                         onclick={() => void selectVersion(latestSnapshotVersion)}
                       >
-                        <span class="radio-mark"></span>
+                        <span class="pick-dot" aria-hidden="true"></span>
                         <span class="choice-copy">
-                          <strong>{latestSnapshotVersion.id}<em>{t("install.version.latestSnapshotTag")}</em></strong>
+                          <strong>Minecraft {latestSnapshotVersion.id}<em>{t("install.version.latestSnapshotTag")}</em></strong>
                           <small>{releaseDescription(latestSnapshotVersion)}</small>
                         </span>
                       </button>
                     {/if}
                   </div>
-                </div>
-              {/if}
-              <div class="version-groups" role="radiogroup" aria-label={t("install.version.heading")}>
-                {#each releaseGroups as group}
-                  <div class="version-group">
-                    <button
-                      class="version-group-head"
-                      aria-expanded={expandedMajors.has(group.major)}
-                      onclick={() => toggleMajor(group.major)}
-                    >
-                      <span class="group-chevron" class:open={expandedMajors.has(group.major)}></span>
-                      <strong>Minecraft {group.major}</strong>
-                      <small>{t("install.version.groupCount").replace("{count}", String(group.versions.length))}</small>
-                    </button>
-                    {#if expandedMajors.has(group.major)}
-                      <div class="install-choice-list">
-                        {#each group.versions as version}
-                          <button
-                            class:selected={selectedVersion.id === version.id}
-                            class="install-choice-row"
-                            role="radio"
-                            aria-checked={selectedVersion.id === version.id}
-                            data-autofocus={selectedVersion.id === version.id ? "true" : undefined}
-                            onclick={() => void selectVersion(version)}
-                          >
-                            <span class="radio-mark"></span>
-                            <span class="choice-copy">
-                              <strong>{version.id}{#if version.recommended}<em>{t("install.version.recommended")}</em>{/if}</strong>
-                              <small>{releaseDescription(version)}</small>
-                            </span>
-                          </button>
-                        {/each}
-                      </div>
-                    {/if}
-                  </div>
-                {/each}
-                {#if snapshotVersions.length > 0}
-                  <div class="version-group">
-                    <button
-                      class="version-group-head"
-                      aria-expanded={showSnapshots}
-                      onclick={() => { showSnapshots = !showSnapshots; }}
-                    >
-                      <span class="group-chevron" class:open={showSnapshots}></span>
-                      <strong>{t("install.version.groupSnapshots")}</strong>
-                      <small>{t("install.version.groupCount").replace("{count}", String(snapshotVersions.length))}</small>
-                    </button>
-                    {#if showSnapshots}
-                      <div class="install-choice-list">
-                        {#each snapshotVersions as version}
-                          <button
-                            class:selected={selectedVersion.id === version.id}
-                            class="install-choice-row"
-                            role="radio"
-                            aria-checked={selectedVersion.id === version.id}
-                            onclick={() => void selectVersion(version)}
-                          >
-                            <span class="radio-mark"></span>
-                            <span class="choice-copy">
-                              <strong>{version.id}</strong>
-                              <small>{releaseDescription(version)}</small>
-                            </span>
-                          </button>
-                        {/each}
-                      </div>
-                    {/if}
-                  </div>
                 {/if}
-                {#if oldVersions.length > 0}
-                  <div class="version-group">
-                    <button
-                      class="version-group-head"
-                      aria-expanded={showOldVersions}
-                      onclick={() => { showOldVersions = !showOldVersions; }}
-                    >
-                      <span class="group-chevron" class:open={showOldVersions}></span>
-                      <strong>{t("install.version.groupOld")}</strong>
-                      <small>{t("install.version.groupCount").replace("{count}", String(oldVersions.length))}</small>
-                    </button>
-                    {#if showOldVersions}
-                      <div class="install-choice-list">
-                        {#each oldVersions as version}
-                          <button
-                            class:selected={selectedVersion.id === version.id}
-                            class="install-choice-row"
-                            role="radio"
-                            aria-checked={selectedVersion.id === version.id}
-                            onclick={() => void selectVersion(version)}
-                          >
-                            <span class="radio-mark"></span>
-                            <span class="choice-copy">
-                              <strong>{version.id}</strong>
-                              <small>{releaseDescription(version)}</small>
-                            </span>
-                          </button>
-                        {/each}
-                      </div>
-                    {/if}
-                  </div>
-                {/if}
-              </div>
-            </div>
-          </section>
-
-          <section class="install-section" aria-labelledby="loader-heading">
-            <div class="section-number">2</div>
-            <div class="section-content">
-              <h2 id="loader-heading">{t("install.loader.heading")}</h2>
-              <div class="loader-list" role="radiogroup" aria-label={t("install.loader.groupAria")}>
-                <button class:selected={loader.kind === "vanilla"} class="loader-card" role="radio" aria-checked={loader.kind === "vanilla"} onclick={selectVanilla}>
-                  <span class="radio-mark"></span><strong>{t("install.loader.none")}</strong><small>{t("home.loader.vanilla")}</small>
-                </button>
-                {@render loaderFoldCard("forge", "Forge", forgeVersions, t("install.loader.forgeField"))}
-                {@render loaderFoldCard("neoforge", "NeoForge", neoforgeVersions, t("install.loader.neoforgeField"))}
-                {@render loaderFoldCard("fabric", "Fabric", fabricLoaders, t("install.loader.fabricField"))}
-                {@render loaderFoldCard("quilt", "Quilt", quiltLoaders, t("install.loader.quiltField"))}
-              </div>
-              {#if loader.kind === "fabric" || loader.kind === "quilt"}
-                <div class="fabric-api">
-                  {#if !fabricApiEnabled}
-                    <div class="hint-banner" class:danger={loader.kind === "fabric"} role="alert">
-                      <Icon name="info" size={14} />
-                      <span>{loader.kind === "fabric" ? t("install.fabricApi.warning") : t("install.fabricApi.quiltHint")}</span>
+                <div class="ver-groups" role="radiogroup" aria-label={t("install.version.heading")}>
+                  {#each releaseGroups as group}
+                    <div class="ver-group">
+                      <button
+                        class="ver-group-head"
+                        aria-expanded={expandedMajors.has(group.major)}
+                        onclick={() => toggleMajor(group.major)}
+                      >
+                        <span class="chev" class:open={expandedMajors.has(group.major)} aria-hidden="true"></span>
+                        <strong>Minecraft {group.major}</strong>
+                        <small>{t("install.version.groupCount").replace("{count}", String(group.versions.length))}</small>
+                      </button>
+                      {#if expandedMajors.has(group.major)}
+                        <div class="ver-rows">
+                          {#each group.versions as version}
+                            <button
+                              class="install-choice-row ver-row"
+                              class:sel={selectedVersion.id === version.id}
+                              role="radio"
+                              aria-checked={selectedVersion.id === version.id}
+                              onclick={() => void selectVersion(version)}
+                            >
+                              <span class="pick-dot" aria-hidden="true"></span>
+                              <span class="choice-copy">
+                                <strong>Minecraft {version.id}{#if version.recommended}<em>{t("install.version.recommended")}</em>{/if}</strong>
+                                <small>{releaseDescription(version)}</small>
+                              </span>
+                            </button>
+                          {/each}
+                        </div>
+                      {/if}
+                    </div>
+                  {/each}
+                  {#if snapshotVersions.length > 0}
+                    <div class="ver-group">
+                      <button
+                        class="ver-group-head"
+                        aria-expanded={showSnapshots}
+                        onclick={() => { showSnapshots = !showSnapshots; }}
+                      >
+                        <span class="chev" class:open={showSnapshots} aria-hidden="true"></span>
+                        <strong>{t("install.version.groupSnapshots")}</strong>
+                        <small>{t("install.version.groupCount").replace("{count}", String(snapshotVersions.length))}</small>
+                      </button>
+                      {#if showSnapshots}
+                        <div class="ver-rows">
+                          {#each snapshotVersions as version}
+                            <button
+                              class="install-choice-row ver-row"
+                              class:sel={selectedVersion.id === version.id}
+                              role="radio"
+                              aria-checked={selectedVersion.id === version.id}
+                              onclick={() => void selectVersion(version)}
+                            >
+                              <span class="pick-dot" aria-hidden="true"></span>
+                              <span class="choice-copy">
+                                <strong>Minecraft {version.id}</strong>
+                                <small>{releaseDescription(version)}</small>
+                              </span>
+                            </button>
+                          {/each}
+                        </div>
+                      {/if}
                     </div>
                   {/if}
-                  <div class="fabric-api-card">
-                    <div class="fabric-api-head">
-                      <strong>Fabric API</strong>
-                      <small>{fabricApiSummary()}</small>
-                      <label class="fabric-api-toggle">
-                        <input
-                          type="checkbox"
-                          checked={fabricApiEnabled}
-                          disabled={fabricApiLoading || fabricApiVersions.length === 0}
-                          onchange={(event) => { fabricApiEnabled = event.currentTarget.checked; }}
-                        />
-                        {t("install.fabricApi.enable")}
-                      </label>
+                  {#if oldVersions.length > 0}
+                    <div class="ver-group">
+                      <button
+                        class="ver-group-head"
+                        aria-expanded={showOldVersions}
+                        onclick={() => { showOldVersions = !showOldVersions; }}
+                      >
+                        <span class="chev" class:open={showOldVersions} aria-hidden="true"></span>
+                        <strong>{t("install.version.groupOld")}</strong>
+                        <small>{t("install.version.groupCount").replace("{count}", String(oldVersions.length))}</small>
+                      </button>
+                      {#if showOldVersions}
+                        <div class="ver-rows">
+                          {#each oldVersions as version}
+                            <button
+                              class="install-choice-row ver-row"
+                              class:sel={selectedVersion.id === version.id}
+                              role="radio"
+                              aria-checked={selectedVersion.id === version.id}
+                              onclick={() => void selectVersion(version)}
+                            >
+                              <span class="pick-dot" aria-hidden="true"></span>
+                              <span class="choice-copy">
+                                <strong>Minecraft {version.id}</strong>
+                                <small>{releaseDescription(version)}</small>
+                              </span>
+                            </button>
+                          {/each}
+                        </div>
+                      {/if}
                     </div>
-                    {#if fabricApiEnabled && fabricApiVersions.length > 0}
-                      <div class="loader-version-list" role="radiogroup" aria-label="Fabric API">
-                        {#each fabricApiVersions as candidate}
-                          <button
-                            class="install-choice-row loader-version-row"
-                            class:selected={fabricApiVersionId === candidate.id}
-                            role="radio"
-                            aria-checked={fabricApiVersionId === candidate.id}
-                            onclick={() => { fabricApiVersionId = candidate.id; }}
-                          >
-                            <span class="radio-mark"></span>
-                            <span class="choice-copy">
-                              <strong>{candidate.versionNumber}</strong>
-                              <small>{candidate.versionType}</small>
-                            </span>
-                          </button>
-                        {/each}
-                      </div>
-                    {:else if !fabricApiLoading && fabricApiVersions.length === 0}
-                      <p class="hint fabric-api-note">{t("install.fabricApi.none")}</p>
-                    {/if}
-                  </div>
+                  {/if}
                 </div>
-              {/if}
-              {#if loaderMessage}<p class="hint">{loaderMessage}</p>{/if}
+              </div>
             </div>
           </section>
 
-          {#snippet loaderFoldCard(kind: FoldLoaderKind, name: string, versions: FabricLoaderSummary[], fieldLabel: string)}
+          <section class="panel pad" aria-labelledby="gi-loader-heading">
+            <div class="step">
+              <span class="step-no" aria-hidden="true">2</span>
+              <div class="step-body">
+                <div>
+                  <h2 class="panel-title" id="gi-loader-heading">{t("install.loader.heading")}</h2>
+                  <div class="panel-desc">{t("install.loader.stepDesc").replace("{version}", selectedVersion.id)}</div>
+                </div>
+                <div class="loader-grid" role="radiogroup" aria-label={t("install.loader.groupAria")}>
+                  <div class="loader-card" class:sel={loader.kind === "vanilla"}>
+                    <button
+                      class="lc-main"
+                      role="radio"
+                      aria-checked={loader.kind === "vanilla"}
+                      onclick={selectVanilla}
+                    >
+                      <span class="lc-name">{t("install.loader.none")}</span>
+                      <span class="lc-sub">{t("install.loader.vanillaSub")}</span>
+                    </button>
+                  </div>
+                  {@render loaderCard("fabric", "Fabric", fabricLoaders, t("install.loader.fabricField"))}
+                  {@render loaderCard("forge", "Forge", forgeVersions, t("install.loader.forgeField"))}
+                  {@render loaderCard("neoforge", "NeoForge", neoforgeVersions, t("install.loader.neoforgeField"))}
+                  {@render loaderCard("quilt", "Quilt", quiltLoaders, t("install.loader.quiltField"))}
+                </div>
+                {#if expandedLoaderMeta && expandedLoaderMeta.versions.length > 0}
+                  <div class="ver-rows loader-versions" role="radiogroup" aria-label={expandedLoaderMeta.label}>
+                    {#each expandedLoaderMeta.versions as candidate}
+                      <button
+                        class="install-choice-row ver-row"
+                        class:sel={loader.kind === expandedLoaderMeta.kind && currentLoaderVersion() === candidate.version}
+                        role="radio"
+                        aria-checked={loader.kind === expandedLoaderMeta.kind && currentLoaderVersion() === candidate.version}
+                        onclick={() => selectLoaderVersion(expandedLoaderMeta!.kind, candidate.version)}
+                      >
+                        <span class="pick-dot" aria-hidden="true"></span>
+                        <span class="choice-copy">
+                          <strong>{candidate.version}{#if candidate.recommended}<em>{t("install.loader.recommendedTag")}</em>{/if}</strong>
+                        </span>
+                      </button>
+                    {/each}
+                  </div>
+                {/if}
+                {#if loader.kind === "fabric" || loader.kind === "quilt"}
+                  <div class="fapi">
+                    {#if !fabricApiEnabled}
+                      <div class="banner" class:warn={loader.kind === "fabric"} class:info={loader.kind === "quilt"} role="alert">
+                        <Icon name="info" size={14} />
+                        <span>{loader.kind === "fabric" ? t("install.fabricApi.warning") : t("install.fabricApi.quiltHint")}</span>
+                      </div>
+                    {/if}
+                    <div class="fapi-card">
+                      <div class="fapi-head">
+                        <strong>Fabric API</strong>
+                        <small class="dim">{fabricApiSummary()}</small>
+                        <label class="fapi-toggle">
+                          <input
+                            type="checkbox"
+                            checked={fabricApiEnabled}
+                            disabled={fabricApiLoading || fabricApiVersions.length === 0}
+                            onchange={(event) => { fabricApiEnabled = event.currentTarget.checked; }}
+                          />
+                          {t("install.fabricApi.enable")}
+                        </label>
+                      </div>
+                      {#if fabricApiEnabled && fabricApiVersions.length > 0}
+                        <div class="ver-rows fapi-versions" role="radiogroup" aria-label="Fabric API">
+                          {#each fabricApiVersions as candidate}
+                            <button
+                              class="install-choice-row ver-row"
+                              class:sel={fabricApiVersionId === candidate.id}
+                              role="radio"
+                              aria-checked={fabricApiVersionId === candidate.id}
+                              onclick={() => { fabricApiVersionId = candidate.id; }}
+                            >
+                              <span class="pick-dot" aria-hidden="true"></span>
+                              <span class="choice-copy">
+                                <strong>{candidate.versionNumber}</strong>
+                                <small>{candidate.versionType}</small>
+                              </span>
+                            </button>
+                          {/each}
+                        </div>
+                      {:else if !fabricApiLoading && fabricApiVersions.length === 0}
+                        <p class="dim fabric-api-note">{t("install.fabricApi.none")}</p>
+                      {/if}
+                    </div>
+                  </div>
+                {/if}
+                {#if loaderMessage}
+                  {#if loaderMessageWarn}
+                    <div class="banner warn" role="alert"><Icon name="info" size={14} /><span>{loaderMessage}</span></div>
+                  {:else}
+                    <p class="dim" role="status">{loaderMessage}</p>
+                  {/if}
+                {/if}
+                {#if loaderAutoNote()}
+                  <p class="dim">{loaderAutoNote()}</p>
+                {/if}
+              </div>
+            </div>
+          </section>
+
+          {#snippet loaderCard(kind: FoldLoaderKind, name: string, versions: FabricLoaderSummary[], fieldLabel: string)}
             {@const selected = loader.kind === kind}
             {@const available = versions.length > 0}
-            {@const recommended = recommendedFabricLoader(versions)}
-            <div class="loader-card loader-fold" class:selected class:unavailable={!available}>
-              <div class="loader-fold-head">
-                <button
-                  class="loader-fold-main"
-                  role="radio"
-                  aria-checked={selected}
-                  disabled={!available}
-                  onclick={() => selectLoaderKind(kind)}
-                >
-                  <span class="radio-mark"></span>
-                  <strong>{name}</strong>
-                  <small>{selected ? (currentLoaderVersion() ?? "") : available ? `${recommended?.version ?? ""}${t("install.loader.recommendedSuffix")}` : t("install.loader.unavailable")}</small>
-                </button>
+            <div class="loader-card" class:sel={selected} class:off={!available}>
+              <button
+                class="lc-main"
+                role="radio"
+                aria-checked={selected}
+                disabled={!available}
+                onclick={() => selectLoaderKind(kind)}
+              >
+                <span class="lc-name">{name}</span>
+                <span class="lc-sub">{loaderCardSub(kind, versions)}</span>
+              </button>
+              <span class="lc-acts">
                 {#if selected}
-                  <button class="loader-clear" aria-label={t("install.loader.clear")} title={t("install.loader.clear")} onclick={clearLoaderSelection}>×</button>
+                  <button class="lc-clear" aria-label={t("install.loader.clear")} title={t("install.loader.clear")} onclick={clearLoaderSelection}>×</button>
                 {/if}
                 <button
-                  class="loader-expand"
+                  class="lc-expand"
                   aria-label={fieldLabel}
                   aria-expanded={expandedLoader === kind}
                   disabled={!available}
                   onclick={() => toggleLoaderCard(kind)}
                 >
-                  <span class="group-chevron" class:open={expandedLoader === kind}></span>
+                  <span class="chev" class:open={expandedLoader === kind} aria-hidden="true"></span>
                 </button>
-              </div>
-              {#if expandedLoader === kind && available}
-                <div class="loader-version-list" role="radiogroup" aria-label={fieldLabel}>
-                  {#each versions as candidate}
-                    <button
-                      class="install-choice-row loader-version-row"
-                      class:selected={selected && currentLoaderVersion() === candidate.version}
-                      role="radio"
-                      aria-checked={selected && currentLoaderVersion() === candidate.version}
-                      onclick={() => selectLoaderVersion(kind, candidate.version)}
-                    >
-                      <span class="radio-mark"></span>
-                      <span class="choice-copy">
-                        <strong>{candidate.version}{#if candidate.recommended}<em>{t("install.loader.recommendedTag")}</em>{/if}</strong>
-                      </span>
-                    </button>
-                  {/each}
-                </div>
-              {/if}
+              </span>
             </div>
           {/snippet}
 
-          <section class="install-section" aria-labelledby="instance-name-heading">
-            <div class="section-number">3</div>
-            <div class="section-content">
-              <h2 id="instance-name-heading">{t("install.name.heading")}</h2>
-              <div class="install-form-card">
-                <label>
-                  {t("install.name.label")}
-                  <input
-                    value={instanceName}
-                    maxlength="120"
-                    oninput={(event) => {
-                      nameEdited = true;
-                      instanceName = event.currentTarget.value;
-                    }}
-                  />
-                  <small>{t("install.name.hint")}</small>
-                </label>
-                <div class="managed-location">
-                  <span>{t("install.name.locationLabel")}</span>
-                  <code>{settings.dataDirectory}\instances\&lt;{t("install.name.instanceId")}&gt;</code>
-                  <small>{t("install.name.locationHint")}</small>
+          <section class="panel pad" aria-labelledby="gi-name-heading">
+            <div class="step">
+              <span class="step-no" aria-hidden="true">3</span>
+              <div class="step-body">
+                <div>
+                  <h2 class="panel-title" id="gi-name-heading">{t("install.name.heading")}</h2>
+                  <div class="panel-desc">{t("install.name.stepDesc")}</div>
+                </div>
+                <div class="install-form-card">
+                  <div class="field">
+                    <label for="gi-instance-name">{t("install.name.label")}</label>
+                    <input
+                      id="gi-instance-name"
+                      class="input"
+                      value={instanceName}
+                      maxlength="120"
+                      oninput={(event) => {
+                        nameEdited = true;
+                        instanceName = event.currentTarget.value;
+                      }}
+                    />
+                    <span class="help">{t("install.name.hint")}</span>
+                  </div>
+                  <div class="field">
+                    <label for="gi-instance-location">{t("install.name.locationLabel")}</label>
+                    <input
+                      id="gi-instance-location"
+                      class="input mono"
+                      readonly
+                      value={`${settings.dataDirectory}\\instances\\<${t("install.name.instanceId")}>`}
+                    />
+                    <span class="help">{t("install.name.locationHint")}</span>
+                  </div>
                 </div>
               </div>
             </div>
           </section>
 
-          <footer class="install-actions">
-            <button class="button primary large" disabled={instanceName.trim() === ""} onclick={() => void createPreview()}>
-              {t("install.action.preview")} <Icon name="arrow-right" size={14} />
+          <details class="adv">
+            <summary>{t("install.adv.summary")}</summary>
+            <div class="adv-body col" style="gap:14px">
+              <div class="field">
+                <label for="gi-data-dir">{t("install.adv.dataDirLabel")}</label>
+                <input id="gi-data-dir" class="input mono" readonly value={settings.dataDirectory} />
+                <span class="help">{t("install.adv.dataDirHelp")}</span>
+              </div>
+              <div class="set-row" style="padding:10px 4px">
+                <div class="sr-main">
+                  <div class="sr-name">{t("install.adv.isolationName")}</div>
+                  <div class="sr-desc">{t("install.adv.isolationDesc")}</div>
+                </div>
+                <span class="tag accent">{t("install.confirm.isolationValue")}</span>
+              </div>
+            </div>
+          </details>
+
+          <div class="footer-bar">
+            <button class="btn primary large" disabled={instanceName.trim() === ""} onclick={() => void createPreview()}>
+              {t("install.action.preview")}
             </button>
-            <p>{t("install.action.previewHint")}</p>
-          </footer>
+            <button class="btn ghost" onclick={onBack}>{t("common.cancel")}</button>
+          </div>
+          <p class="dim">{t("install.action.previewHint")}</p>
         {/if}
       </div>
     {:else if view === "previewing"}
-      <section class="install-loading" aria-live="polite">
-        <div class="loading-line wide"></div>
-        <div class="loading-line"></div>
-        <strong>{t("install.previewing.title")}</strong>
-        <span>{t("install.previewing.description")}</span>
-      </section>
+      <div class="install-center" aria-live="polite">
+        <Fish variant="tank" message={t("install.previewing.title")} />
+        <span class="dim">{t("install.previewing.description")}</span>
+      </div>
     {:else if (view === "confirm" || view === "queueing") && preview}
-      <div class="install-scroll confirm-layout" data-scroll-region="main">
-        <header class="install-heading">
-          <button class="button ghost compact" disabled={view === "queueing"} onclick={returnToConfiguration}>{t("install.confirm.backEdit")}</button>
-          <div><h1>{t("install.confirm.heading")}</h1></div>
-        </header>
+      <div class="install-col">
+        <div class="confirm-head">
+          <button class="btn ghost small" disabled={view === "queueing"} onclick={returnToConfiguration}>{t("install.confirm.backEdit")}</button>
+          <h1 class="install-page-title">{t("install.confirm.heading")}</h1>
+        </div>
         {#if errorMessage}
-          <div class="error-block" role="alert"><strong>{t("install.confirm.errorTitle")}</strong><span>{errorMessage}</span></div>
+          <div class="banner danger" role="alert"><strong>{t("install.confirm.errorTitle")}</strong><span>{errorMessage}</span></div>
         {/if}
-        <dl class="install-summary">
-          <div><dt>{t("install.confirm.versionLabel")}</dt><dd>{preview.gameVersion}</dd><span>{t("install.confirm.versionNote")}</span></div>
-          <div><dt>{t("install.confirm.loaderLabel")}</dt><dd>{preview.loaderName}{preview.loaderVersion ? ` ${preview.loaderVersion}` : ""}</dd><span>{t("install.confirm.loaderNote")}</span></div>
-          <div><dt>Java</dt><dd>Azul Zulu {preview.javaVersion} · {preview.javaArchitecture}</dd><span>{t("install.confirm.javaNote")}</span></div>
-          <div><dt>{t("install.confirm.isolationLabel")}</dt><dd>{t("install.confirm.isolationValue")}</dd><span>{t("install.confirm.isolationNote")}</span></div>
-          <div><dt>{t("install.confirm.downloadLabel")}</dt><dd>{formatBytes(preview.estimatedDownloadBytes)}</dd><span>{t("install.confirm.downloadNote")}</span></div>
+        <dl class="install-summary panel">
+          <div><dt>{t("install.confirm.versionLabel")}</dt><dd>{preview.gameVersion}</dd><span class="dim">{t("install.confirm.versionNote")}</span></div>
+          <div><dt>{t("install.confirm.loaderLabel")}</dt><dd>{preview.loaderName}{preview.loaderVersion ? ` ${preview.loaderVersion}` : ""}</dd><span class="dim">{t("install.confirm.loaderNote")}</span></div>
+          <div><dt>Java</dt><dd>Azul Zulu {preview.javaVersion} · {preview.javaArchitecture}</dd><span class="dim">{t("install.confirm.javaNote")}</span></div>
+          <div><dt>{t("install.confirm.isolationLabel")}</dt><dd>{t("install.confirm.isolationValue")}</dd><span class="dim">{t("install.confirm.isolationNote")}</span></div>
+          <div><dt>{t("install.confirm.downloadLabel")}</dt><dd>{formatBytes(preview.estimatedDownloadBytes)}</dd><span class="dim">{t("install.confirm.downloadNote")}</span></div>
+          {#if fabricApiEnabled && (loader.kind === "fabric" || loader.kind === "quilt")}
+            <div><dt>Fabric API</dt><dd>{fabricApiSummary()}</dd><span class="dim">{t("install.confirm.fabricApiNote")}</span></div>
+          {/if}
         </dl>
-        <div class="stage-preview">
-          <h2>{t("install.confirm.stagesTitle")}</h2>
+        <div class="stage-preview panel pad">
+          <h2 class="panel-title">{t("install.confirm.stagesTitle")}</h2>
           <ol>
             {#each ["prepare", "downloadGameFiles", "verifyFiles", "installGameEnvironment", "applyLoader", "commitChanges", "createRollbackPoint"] as stage}
               <li>{installStageLabel(stage as import("../runtime").InstallStage)}</li>
             {/each}
           </ol>
         </div>
-        <footer class="install-actions confirm-actions">
-          <button class="button primary large" data-autofocus="true" disabled={view === "queueing"} onclick={() => void confirmInstall()}>
+        <div class="footer-bar">
+          <button class="btn primary large" data-autofocus="true" disabled={view === "queueing"} onclick={() => void confirmInstall()}>
             {view === "queueing" ? t("install.confirm.creating") : t("install.confirm.start")}
           </button>
-          <p>{t("install.confirm.stagingHint")}</p>
-        </footer>
+        </div>
+        <p class="dim">{t("install.confirm.stagingHint")}</p>
       </div>
     {:else if view === "queued" && task}
       <section class="queued-result" aria-live="polite">
         <span class="done-mark"><Icon name={task.state === "completed" ? "check" : "task"} size={18} /></span>
         <h1>{task.state === "completed" ? t("install.queued.titleCompleted") : task.state === "failed" ? t("install.queued.titleFailed") : task.state === "queued" ? t("install.queued.titleQueued") : t("install.queued.titleRunning")}</h1>
-        <p>{task.state === "completed" ? t("install.queued.bodyCompleted") : task.state === "failed" ? t("install.queued.bodyFailed") : t("install.queued.bodyDefault")}</p>
+        <p class="queued-lead">{task.state === "completed" ? t("install.queued.bodyCompleted") : task.state === "failed" ? t("install.queued.bodyFailed") : t("install.queued.bodyDefault")}</p>
         <div class="queued-task-card">
-          <div><strong>{task.plan.instanceName}</strong><span>{taskStateLabel(task)}</span></div>
+          <div class="q-card-head">
+            <strong>{task.plan.instanceName}</strong>
+            <span class="tag info">{taskStateLabel(task)}</span>
+          </div>
           <ol>
             {#each task.plan.stages as stage, index}
               <li class:current={task.currentStage === stage}><span>{index + 1}</span><b>{installStageLabel(stage)}</b></li>
             {/each}
           </ol>
           {#if task.state === "running" || task.state === "committing"}
-            <div class="queued-progress" aria-label={taskProgressAriaLabel(task.progress)}>
-              <div class="progress-track"><span style:width={task.progress.totalBytes && task.progress.totalBytes > 0 ? `${Math.min(100, task.progress.completedBytes / task.progress.totalBytes * 100)}%` : "24%"}></span></div>
-              <small>{task.progress.currentItem ?? t("tasks.progress.processing")}</small>
+            {@const percent = taskProgressPercent(task)}
+            <div class="q-progress" aria-label={taskProgressAriaLabel(task.progress)}>
+              <div class="progress" class:indet={percent === null}>{#if percent !== null}<i style="width:{percent}%"></i>{:else}<i></i>{/if}</div>
+              <small class="dim">{task.progress.currentItem ?? t("tasks.progress.processing")}</small>
             </div>
           {:else if task.state === "failed"}
-            <div class="error-block task-error" role="alert"><strong>{t("install.queued.failedTitle")}</strong><span>{task.progress.errorSummary ?? t("install.queued.failedHint")}</span></div>
+            <div class="banner danger task-error" role="alert"><strong>{t("install.queued.failedTitle")}</strong><span>{task.progress.errorSummary ?? t("install.queued.failedHint")}</span></div>
           {/if}
-          <small>{t("install.queued.staging")}<code>{task.stagingDirectory}</code></small>
+          <small class="dim q-staging">{t("install.queued.staging")}<code>{task.stagingDirectory}</code></small>
         </div>
         {#if fabricApiInstall !== "idle"}
           <div class="fabric-api-result">
@@ -1004,15 +1102,568 @@
             {:else if fabricApiInstall === "done"}
               <p class="fabric-api-status done" role="status">{t("install.fabricApi.done")}</p>
             {:else}
-              <div class="hint-banner" role="alert">
+              <div class="banner warn" role="alert">
                 <Icon name="info" size={14} />
                 <span>{t("install.fabricApi.failed").replace("{error}", fabricApiInstallError)}</span>
               </div>
             {/if}
           </div>
         {/if}
-        <button class="button primary" data-autofocus="true" onclick={onBack}>{t("settings.back")}</button>
+        <div class="row">
+          <button class="btn primary" data-autofocus="true" onclick={onBack}>{t("settings.back")}</button>
+          <button class="btn ghost" onclick={() => onNavigate("tasks")}>{t("install.queued.openTasks")}</button>
+        </div>
       </section>
     {/if}
   </main>
 </AppShell>
+
+<style>
+  .install-content {
+    padding: 24px 28px 40px;
+    overflow: hidden auto;
+  }
+  .install-center {
+    height: 100%;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 14px;
+  }
+  .install-col {
+    max-width: 760px;
+    margin: 0 auto;
+    display: flex;
+    flex-direction: column;
+    gap: 16px;
+  }
+  .install-page-title {
+    margin: 0;
+    font-size: 20px;
+    letter-spacing: -0.01em;
+  }
+  .confirm-head {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+  }
+
+  /* 步骤卡（mockup 04：序号圆点 + 面板） */
+  .step {
+    display: flex;
+    gap: 16px;
+  }
+  .step-no {
+    width: 26px;
+    height: 26px;
+    flex: none;
+    border-radius: 50%;
+    background: var(--accent-soft);
+    color: var(--accent);
+    display: grid;
+    place-items: center;
+    font-size: 12.5px;
+    font-weight: 700;
+  }
+  .step-body {
+    flex: 1;
+    min-width: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+  }
+  h2.panel-title {
+    margin: 0;
+  }
+
+  /* 版本选择：最新卡 + 分组折叠 */
+  .ver-latest {
+    border: 1px solid var(--accent);
+    border-radius: var(--r);
+    background: var(--accent-soft);
+    overflow: hidden;
+  }
+  .ver-groups {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+  }
+  .ver-group-head {
+    width: 100%;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 11px 14px;
+    border: 1px solid var(--glass-border);
+    border-radius: var(--r);
+    background: rgba(0, 0, 0, 0.15);
+    color: var(--text-1);
+    font: inherit;
+    text-align: left;
+    cursor: pointer;
+  }
+  .ver-group-head:hover {
+    background: var(--glass);
+  }
+  .ver-group-head small {
+    margin-left: auto;
+    color: var(--text-3);
+    font-size: 12px;
+  }
+  .chev {
+    width: 8px;
+    height: 8px;
+    flex: none;
+    border-right: 2px solid var(--text-3);
+    border-bottom: 2px solid var(--text-3);
+    transform: rotate(-45deg);
+    transition: transform 120ms ease;
+  }
+  .chev.open {
+    transform: rotate(45deg);
+  }
+  .ver-rows {
+    margin-top: 6px;
+    border: 1px solid var(--glass-border);
+    border-radius: var(--r);
+    overflow: hidden;
+  }
+  .ver-rows .install-choice-row {
+    border-radius: 0;
+  }
+  .install-choice-row {
+    width: 100%;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 16px 20px;
+    border: 0;
+    background: transparent;
+    color: var(--text-1);
+    font: inherit;
+    text-align: left;
+    cursor: pointer;
+  }
+  .install-choice-row:hover {
+    background: var(--glass);
+  }
+  .install-choice-row.sel {
+    background: var(--accent-soft);
+  }
+  .ver-latest .install-choice-row + .install-choice-row,
+  .ver-rows .install-choice-row + .install-choice-row {
+    border-top: 1px solid rgba(255, 255, 255, 0.05);
+  }
+  .pick-dot {
+    width: 16px;
+    height: 16px;
+    flex: none;
+    border-radius: 50%;
+    border: 1.5px solid var(--glass-highlight);
+    position: relative;
+  }
+  .pick-dot::after {
+    content: "";
+    position: absolute;
+    inset: 3px;
+    border-radius: 50%;
+  }
+  .install-choice-row.sel .pick-dot {
+    border-color: var(--accent);
+  }
+  .install-choice-row.sel .pick-dot::after {
+    background: var(--accent);
+  }
+  .choice-copy {
+    flex: 1;
+    min-width: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+  }
+  .choice-copy strong {
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 8px;
+    font-size: 13.5px;
+    font-weight: 600;
+  }
+  .choice-copy strong em {
+    font-style: normal;
+    font-size: 11px;
+    font-weight: 600;
+    color: var(--accent);
+    background: var(--accent-soft);
+    border-radius: 999px;
+    padding: 2px 8px;
+  }
+  .choice-copy small {
+    color: var(--text-2);
+    font-size: 12px;
+  }
+
+  /* 加载器卡片网格（mockup 04） */
+  .loader-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(118px, 1fr));
+    gap: 10px;
+  }
+  .loader-card {
+    position: relative;
+    display: block;
+    padding: 0;
+    border: 1px solid var(--glass-border);
+    border-radius: var(--r);
+    background: rgba(0, 0, 0, 0.15);
+    overflow: hidden;
+    color: var(--text-1);
+    font: inherit;
+    text-align: left;
+  }
+  .loader-card:hover {
+    background: var(--glass);
+  }
+  .loader-card.sel {
+    border-color: var(--accent);
+    background: var(--accent-soft);
+  }
+  .loader-card.off {
+    opacity: 0.55;
+  }
+  .lc-main {
+    width: 100%;
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    padding: 12px 34px 12px 14px;
+    border: 0;
+    background: transparent;
+    color: var(--text-1);
+    font: inherit;
+    text-align: left;
+    cursor: pointer;
+  }
+  .lc-main:disabled {
+    cursor: not-allowed;
+  }
+  .lc-name {
+    font-size: 13.5px;
+    font-weight: 600;
+  }
+  .lc-sub {
+    font-size: 11.5px;
+    color: var(--text-2);
+    overflow-wrap: break-word;
+  }
+  .loader-card.sel .lc-sub {
+    color: var(--accent);
+  }
+  .lc-acts {
+    position: absolute;
+    top: 8px;
+    right: 8px;
+    display: flex;
+    gap: 4px;
+  }
+  .lc-clear,
+  .lc-expand {
+    width: 22px;
+    height: 22px;
+    display: grid;
+    place-items: center;
+    border: 0;
+    border-radius: var(--r);
+    background: transparent;
+    color: var(--text-3);
+    cursor: pointer;
+    padding: 0;
+    font-size: 13px;
+  }
+  .lc-clear:hover,
+  .lc-expand:hover {
+    background: var(--glass-strong);
+    color: var(--text-1);
+  }
+  .lc-expand:disabled {
+    opacity: 0.45;
+    cursor: not-allowed;
+  }
+  .loader-versions {
+    max-height: 224px;
+    overflow-y: auto;
+  }
+
+  /* Fabric API 附带安装 */
+  .fapi {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+  }
+  .fapi-card {
+    border: 1px solid var(--glass-border);
+    border-radius: var(--r);
+    background: rgba(0, 0, 0, 0.15);
+    overflow: hidden;
+  }
+  .fapi-head {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 4px 10px;
+    padding: 12px 14px;
+  }
+  .fapi-head strong {
+    font-size: 13.5px;
+  }
+  .fapi-toggle {
+    margin-left: auto;
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    color: var(--text-2);
+    font-size: 12.5px;
+    cursor: pointer;
+  }
+  .fapi-versions {
+    margin-top: 0;
+    border: 0;
+    border-top: 1px solid var(--glass-border);
+    border-radius: 0;
+    max-height: 224px;
+    overflow-y: auto;
+  }
+  .fabric-api-note {
+    margin: 0;
+    padding: 0 14px 12px;
+  }
+
+  /* 名称与位置内卡（padding 为 e2e 可读内边距基线） */
+  .install-form-card {
+    display: flex;
+    flex-direction: column;
+    gap: 14px;
+    padding: 20px 24px;
+    border: 1px solid var(--glass-border);
+    border-radius: var(--r);
+    background: rgba(0, 0, 0, 0.15);
+  }
+  /* 抵消旧全局 .install-form-card input 规则,回到 moyu 输入框样式 */
+  .install-form-card .input {
+    width: 100%;
+    height: 36px;
+    padding: 0 12px;
+    border: 1px solid var(--glass-border);
+    border-radius: var(--r);
+    background: rgba(0, 0, 0, 0.22);
+    color: var(--text-1);
+  }
+
+  .footer-bar {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+  }
+
+  /* 整合包导入 */
+  .pack-head {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 12px;
+    margin-bottom: 10px;
+  }
+  .pack-head .panel-title {
+    margin-bottom: 4px;
+  }
+  .pack-progress {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    margin-top: 10px;
+  }
+  .pack-done {
+    margin-top: 10px;
+  }
+  .modpack-preview {
+    margin-top: 10px;
+    padding: 16px 20px;
+    border: 1px solid var(--glass-border);
+    border-radius: var(--r);
+    background: rgba(0, 0, 0, 0.15);
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+  }
+  .modpack-preview h3 {
+    margin: 0;
+    font-size: 14px;
+  }
+  .modpack-preview p {
+    margin: 0;
+    font-size: 12.5px;
+  }
+
+  /* 确认页摘要与阶段（padding 为 e2e 可读内边距基线） */
+  .install-summary {
+    margin: 0;
+    overflow: hidden;
+  }
+  .install-summary > div {
+    display: grid;
+    grid-template-columns: minmax(96px, auto) 1fr auto;
+    gap: 4px 14px;
+    align-items: baseline;
+    padding: 16px 20px;
+    border: 0;
+  }
+  .install-summary > div + div {
+    border-top: 1px solid rgba(255, 255, 255, 0.05);
+  }
+  .install-summary dt {
+    color: var(--text-2);
+    font-size: 12.5px;
+  }
+  .install-summary dd {
+    margin: 0;
+    font-size: 13.5px;
+    font-weight: 600;
+    overflow-wrap: anywhere;
+  }
+  .stage-preview {
+    margin-top: 0;
+  }
+  .stage-preview ol {
+    list-style: none;
+    margin: 12px 0 0;
+    padding: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+  }
+  .stage-preview li {
+    padding: 14px 16px;
+    border-radius: var(--r);
+    background: rgba(0, 0, 0, 0.15);
+    color: var(--text-2);
+    font-size: 13px;
+  }
+
+  /* 入队结果（padding 为 e2e 可读内边距基线） */
+  .queued-result {
+    height: 100%;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 10px;
+    padding: 24px;
+    overflow-y: auto;
+    text-align: center;
+  }
+  .queued-result h1 {
+    margin: 0;
+    font-size: 22px;
+    letter-spacing: -0.02em;
+  }
+  .queued-lead {
+    margin: 0;
+    color: var(--text-2);
+    max-width: 52ch;
+  }
+  .done-mark {
+    width: 34px;
+    height: 34px;
+    flex: none;
+    display: grid;
+    place-items: center;
+    border-radius: 50%;
+    color: var(--accent);
+    background: var(--accent-soft);
+  }
+  .queued-task-card {
+    width: min(760px, 100%);
+    margin: 10px 0;
+    padding: 20px 24px;
+    border: 1px solid var(--glass-border);
+    border-radius: var(--r);
+    background: var(--glass);
+    text-align: left;
+  }
+  .q-card-head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    margin-bottom: 0;
+  }
+  .queued-task-card ol {
+    list-style: none;
+    margin: 14px 0 0;
+    padding: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+  }
+  /* 显式覆盖旧全局 .queued-task-card li 的纵向居中布局 */
+  .queued-task-card ol li {
+    display: flex;
+    flex-direction: row;
+    align-items: center;
+    gap: 10px;
+    padding: 8px 12px;
+    border-radius: var(--r);
+    color: var(--text-2);
+    font-size: 13px;
+    text-align: left;
+  }
+  .queued-task-card ol li.current {
+    background: var(--accent-soft);
+    color: var(--accent);
+  }
+  .queued-task-card ol li span {
+    width: 20px;
+    height: 20px;
+    flex: none;
+    display: grid;
+    place-items: center;
+    border: 0;
+    border-radius: 50%;
+    background: var(--glass-strong);
+    color: inherit;
+    font-size: 11px;
+  }
+  .queued-task-card ol li b {
+    font-weight: 600;
+  }
+  .q-progress {
+    margin-top: 14px;
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+  }
+  .task-error {
+    margin-top: 14px;
+  }
+  .q-staging {
+    display: block;
+    margin-top: 14px;
+    overflow-wrap: anywhere;
+  }
+  .q-staging code {
+    font-family: var(--mono);
+    font-size: 11.5px;
+  }
+  .fabric-api-result {
+    max-width: 52ch;
+  }
+  .fabric-api-status {
+    margin: 0;
+    color: var(--text-2);
+    font-size: 12.5px;
+  }
+  .fabric-api-status.done {
+    color: var(--accent);
+  }
+</style>

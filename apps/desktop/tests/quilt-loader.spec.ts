@@ -54,8 +54,10 @@ test("M11-QUILT-001 新建实例页可选择 Quilt 并完成安装预览", async
   await page.getByRole("button", { name: "开始安装" }).click();
   await expect(page.getByRole("heading", { name: "安装任务已进入队列" })).toBeVisible();
 
-  await page.getByRole("button", { name: "返回首页" }).click();
-  await expect(page.getByRole("button", { name: /Quilt.*1 个任务/ })).toBeVisible();
+  // 入队后引导去任务中心,任务在中心可见。
+  await page.getByRole("button", { name: "前往任务中心" }).click();
+  await expect(page.getByRole("heading", { name: "任务中心" })).toBeVisible();
+  await expect(page.getByText("1.21.8 Quilt", { exact: false })).toBeVisible();
 });
 
 test("M11-QUILT-001 Quilt 选择在 960x600 与 200% 放大下不溢出", async ({ page }) => {
