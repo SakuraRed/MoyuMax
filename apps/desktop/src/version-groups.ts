@@ -177,8 +177,10 @@ function majorOf(gameVersion: string): string {
   return last > first ? gameVersion.slice(0, last) : gameVersion;
 }
 
-/** 两个大版本是否相邻递增(1.12→1.13,1.19→1.20,25→26;1.16→26 不相邻)。 */
+/** 两个大版本是否相邻递增(1.12→1.13,1.19→1.20,25→26;
+ * Mojang 换代特判:1.21 之后直接接年份版本 26,视为连续;1.16→26 不相邻)。 */
 function isNextMajor(current: string, next: string): boolean {
+  if (current === "1.21" && (next === "26" || next.startsWith("26."))) return true;
   const currentParts = current.split(".");
   const nextParts = next.split(".");
   if (currentParts.length !== nextParts.length) return false;

@@ -115,7 +115,15 @@ describe("formatGameVersionRange", () => {
   });
 
   it("不同主版本不相邻", () => {
-    expect(formatGameVersionRange(["1.21.1", "26.2"])).toBe("1.21.1,26.2");
+    expect(formatGameVersionRange(["1.16.5", "26.2"])).toBe("1.16.5,26.2");
+  });
+
+  it("1.21 与年份版本 26 直接相连", () => {
+    expect(formatGameVersionRange(["1.21.4", "26.2"])).toBe("1.21.4-26.2");
+    expect(formatGameVersionRange(["1.21.1", "26.1", "26.2"])).toBe("1.21.1-26.2");
+    expect(formatGameVersionRange(["1.12.2", "1.16.5", "1.21.1", "26.2"])).toBe(
+      "1.12.2,1.16.5,1.21.1-26.2",
+    );
   });
 
   it("单一大版本的多个精确版本并成区间", () => {
@@ -131,7 +139,7 @@ describe("formatGameVersionRange", () => {
   it("两段版本本身即大版本,与三段版本同组", () => {
     expect(formatGameVersionRange(["1.21", "1.21.1", "1.21.4"])).toBe("1.21-1.21.4");
     expect(formatGameVersionRange(["1.20.1", "1.20.6", "1.21", "1.21.1"])).toBe("1.20.1-1.21.1");
-    expect(formatGameVersionRange(["1.20.1", "1.21", "1.21.1", "26.2"])).toBe("1.20.1-1.21.1,26.2");
+    expect(formatGameVersionRange(["1.20.1", "1.21", "1.21.1", "26.2"])).toBe("1.20.1-26.2");
   });
 
   it("rc/pre 后缀版本归一,不作为独立版本", () => {
@@ -140,7 +148,7 @@ describe("formatGameVersionRange", () => {
     expect(isPrereleaseGameVersion("1.21.4-rc1")).toBe(true);
     expect(isPrereleaseGameVersion("1.21.4")).toBe(false);
     expect(formatGameVersionRange(["1.21.4-rc1", "1.21.3"])).toBe("1.21.3-1.21.4");
-    expect(formatGameVersionRange(["1.20.1", "1.21.4-rc1", "26.2"])).toBe("1.20.1-1.21.4,26.2");
+    expect(formatGameVersionRange(["1.20.1", "1.21.4-rc1", "26.2"])).toBe("1.20.1-26.2");
   });
 
   it("rc 游戏版本归入对应正式版本组", () => {
