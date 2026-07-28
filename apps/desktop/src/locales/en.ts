@@ -839,6 +839,8 @@ export const en: Record<string, string> = {
   "resources.versions.pickPlaceholder": "Pick a version",
   "resources.versions.releaseTag": "Release",
   "resources.versions.prereleaseTag": "Pre-release",
+  "resources.detail.channelFilterAria": "Release channel filter",
+  "resources.detail.channelAll": "All channels",
   "resources.catalog.packFiles": "{count} files · {size}",
   "resources.catalog.confirmInstall": "Confirm install",
   "resources.catalog.packDone": "\"{name}\" installed",

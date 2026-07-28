@@ -844,6 +844,8 @@ export const zhCN: Record<string, string> = {
   "resources.versions.pickPlaceholder": "选择版本",
   "resources.versions.releaseTag": "正式版",
   "resources.versions.prereleaseTag": "预览版",
+  "resources.detail.channelFilterAria": "发布类型筛选",
+  "resources.detail.channelAll": "全部类型",
   "resources.catalog.packFiles": "{count} 个文件 · {size}",
   "resources.catalog.confirmInstall": "确认安装",
   "resources.catalog.packDone": "「{name}」安装完成",

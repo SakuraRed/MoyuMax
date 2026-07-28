@@ -839,6 +839,8 @@ export const zhTW: Record<string, string> = {
   "resources.versions.pickPlaceholder": "選擇版本",
   "resources.versions.releaseTag": "正式版",
   "resources.versions.prereleaseTag": "預覽版",
+  "resources.detail.channelFilterAria": "發佈類型篩選",
+  "resources.detail.channelAll": "全部類型",
   "resources.catalog.packFiles": "{count} 個檔案 · {size}",
   "resources.catalog.confirmInstall": "確認安裝",
   "resources.catalog.packDone": "「{name}」安裝完成",

@@ -128,7 +128,7 @@ test("M32-DET-UI-003 详情内加载器筛选 chip 过滤文件", async ({ page 
 
   await page.getByRole("button", { name: "Forge", exact: true }).click();
   await expect(page.getByText("2.9.0+26.1", { exact: true })).toBeVisible();
-  await expect(page.getByText("预览版", { exact: true })).toBeVisible();
+  await expect(page.getByLabel("文件列表").getByText("预览版", { exact: true })).toBeVisible();
   await expect(page.getByText("3.1.0+26.2", { exact: true })).toHaveCount(0);
 });
 
@@ -208,6 +208,56 @@ test("M32-DET-UI-007 复制链接后按钮进入已复制状态", async ({ page 
   const copyButton = page.getByRole("button", { name: "复制链接" });
   await copyButton.click();
   await expect(page.getByRole("button", { name: "已复制", exact: true })).toBeVisible();
+});
+
+test("M32-DET-UI-008 rc 游戏版本归一与发布类型筛选", async ({ page }) => {
+  await page.evaluate(() => {
+    window.localStorage.setItem(
+      "moyumax.browser.modVersions",
+      JSON.stringify([
+        {
+          id: "VER010",
+          versionNumber: "4.0.0+26.2",
+          versionType: "release",
+          datePublished: "2026-06-21T10:00:00Z",
+          gameVersions: ["26.2"],
+          loaders: ["fabric"],
+          downloads: 50_000,
+        },
+        {
+          id: "VER011",
+          versionNumber: "4.1.0-rc1",
+          versionType: "beta",
+          datePublished: "2026-06-22T10:00:00Z",
+          gameVersions: ["26.3-rc1"],
+          loaders: ["fabric"],
+          downloads: 2_000,
+        },
+      ]),
+    );
+  });
+  await page.reload();
+  await page.getByRole("button", { name: "资源", exact: true }).first().click();
+  await openContinuityDetail(page);
+  await page.getByRole("button", { name: "全部版本", exact: true }).click();
+
+  // rc 游戏版本不独立成 chip,也不独立成组;文件归入归一后的正式版本组
+  const filterGroup = page.getByRole("group", { name: "游戏版本筛选" });
+  await expect(filterGroup.getByRole("button", { name: "26.3", exact: true })).toBeVisible();
+  await expect(filterGroup.getByText("26.3-rc1", { exact: true })).toHaveCount(0);
+  const rcGroup = page.getByRole("button", { name: /Minecraft 26\.3/ });
+  await expect(rcGroup).toBeVisible();
+  await expect(page.getByText("26.3-rc1 ·", { exact: false })).toHaveCount(0);
+  await rcGroup.click();
+  await expect(page.getByText("4.1.0-rc1", { exact: true })).toBeVisible();
+
+  // 发布类型筛选:预览版只看 rc/beta,正式版排除
+  await page.getByRole("button", { name: "预览版", exact: true }).click();
+  await expect(page.getByText("4.1.0-rc1", { exact: true })).toBeVisible();
+  await expect(page.getByText("4.0.0+26.2", { exact: true })).toHaveCount(0);
+  await page.getByRole("button", { name: "正式版", exact: true }).click();
+  await expect(page.getByText("4.1.0-rc1", { exact: true })).toHaveCount(0);
+  await expect(page.getByText("4.0.0+26.2", { exact: true })).toBeVisible();
 });
 
 test("M32-FAV-UI-001 结果卡收藏后出现在收藏子页并可取消", async ({ page }) => {

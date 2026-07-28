@@ -33,6 +33,20 @@ function isStandardGameVersion(value: string): boolean {
   return /^b?\d+\.\d+/.test(value);
 }
 
+/**
+ * 游戏版本归一化:带预发布后缀的版本号(1.21.4-rc1 / 1.21-pre2)归入对应正式版本,
+ * 不作为独立版本出现在分组、筛选与区间标签中。
+ */
+export function normalizeGameVersion(gameVersion: string): string {
+  const dash = gameVersion.indexOf("-");
+  return dash > 0 ? gameVersion.slice(0, dash) : gameVersion;
+}
+
+/** 版本号是否带预发布后缀(rc/pre/snapshot 等)。 */
+export function isPrereleaseGameVersion(gameVersion: string): boolean {
+  return gameVersion.includes("-");
+}
+
 export function compareGameVersionsDescending(left: string, right: string): number {
   const leftParts = left.split(".");
   const rightParts = right.split(".");
@@ -59,7 +73,9 @@ function byDateDescending(left: ModrinthVersionSummary, right: ModrinthVersionSu
 
 /** 版本声明中最高的一个 MC 版本(整合包强制唯一归属);无标准版本时返回 null。 */
 export function primaryGameVersion(version: ModrinthVersionSummary): string | null {
-  const standards = version.gameVersions.filter(isStandardGameVersion);
+  const standards = version.gameVersions
+    .filter(isStandardGameVersion)
+    .map(normalizeGameVersion);
   if (standards.length === 0) return null;
   return [...standards].sort(compareGameVersionsDescending)[0] ?? null;
 }
@@ -95,7 +111,11 @@ export function buildVersionGroups(
       push(primary ?? specialGroupKey(version), version);
       continue;
     }
-    const standards = version.gameVersions.filter(isStandardGameVersion);
+    const standards = [
+      ...new Set(
+        version.gameVersions.filter(isStandardGameVersion).map(normalizeGameVersion),
+      ),
+    ];
     if (standards.length === 0) {
       push(specialGroupKey(version), version);
       continue;
@@ -174,8 +194,13 @@ function isNextMajor(current: string, next: string): boolean {
  * [26.1,26.2] → "26.1-26.2";[26.2] → "26.2"。非标准版本(快照等)忽略。
  */
 export function formatGameVersionRange(versions: string[]): string {
-  const standards = versions
-    .filter((candidate) => /^b?\d+\.\d+/.test(candidate))
+  const standards = [
+    ...new Set(
+      versions
+        .filter((candidate) => isStandardGameVersion(candidate))
+        .map(normalizeGameVersion),
+    ),
+  ]
     .sort(compareGameVersionsDescending)
     .reverse();
   if (standards.length === 0) return versions[versions.length - 1] ?? "";

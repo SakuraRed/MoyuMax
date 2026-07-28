@@ -4,6 +4,8 @@ import type { ModrinthVersionSummary } from "./runtime";
 import {
   buildVersionGroups,
   formatGameVersionRange,
+  isPrereleaseGameVersion,
+  normalizeGameVersion,
   primaryGameVersion,
   versionGameTags,
   versionOptionLabel,
@@ -130,6 +132,23 @@ describe("formatGameVersionRange", () => {
     expect(formatGameVersionRange(["1.21", "1.21.1", "1.21.4"])).toBe("1.21-1.21.4");
     expect(formatGameVersionRange(["1.20.1", "1.20.6", "1.21", "1.21.1"])).toBe("1.20.1-1.21.1");
     expect(formatGameVersionRange(["1.20.1", "1.21", "1.21.1", "26.2"])).toBe("1.20.1-1.21.1,26.2");
+  });
+
+  it("rc/pre 后缀版本归一,不作为独立版本", () => {
+    expect(normalizeGameVersion("1.21.4-rc1")).toBe("1.21.4");
+    expect(normalizeGameVersion("1.21-pre2")).toBe("1.21");
+    expect(isPrereleaseGameVersion("1.21.4-rc1")).toBe(true);
+    expect(isPrereleaseGameVersion("1.21.4")).toBe(false);
+    expect(formatGameVersionRange(["1.21.4-rc1", "1.21.3"])).toBe("1.21.3-1.21.4");
+    expect(formatGameVersionRange(["1.20.1", "1.21.4-rc1", "26.2"])).toBe("1.20.1-1.21.4,26.2");
+  });
+
+  it("rc 游戏版本归入对应正式版本组", () => {
+    const groups = buildVersionGroups(
+      [version("a", "1.0", ["1.21.4-rc1"]), version("b", "2.0", ["1.21.3"])],
+      { kind: "mod" },
+    );
+    expect(groups.map((group) => group.key).sort()).toEqual(["1.21.3", "1.21.4"]);
   });
 });
 

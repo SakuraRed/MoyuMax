@@ -14,6 +14,7 @@
     buildVersionGroups,
     compareGameVersionsDescending,
     formatGameVersionRange,
+    normalizeGameVersion,
     SNAPSHOT_GROUP_KEY,
     UNKNOWN_GROUP_KEY,
     versionGameTags,
@@ -173,6 +174,7 @@
   let detailVersionsError = $state("");
   let detailGameFilter = $state("");
   let detailLoaderFilter = $state("");
+  let detailChannelFilter = $state<"all" | "release" | "prerelease">("all");
   let detailOpenOverrides = $state<Record<string, boolean>>({});
   let detailCopied = $state<"name" | "link" | "">("");
 
@@ -187,10 +189,14 @@
     return gameVersion === filter || gameVersion.startsWith(`${filter}.`);
   }
 
-  /** 不同游戏版本数 ≥9 时按大版本（1.21/1.20…）归并筛选 chip。 */
+  /** 不同游戏版本数 ≥9 时按大版本（1.21/1.20…）归并筛选 chip;rc/pre 后缀归一,不独立成项。 */
   const detailGameOptions = $derived.by(() => {
     const distinct = [
-      ...new Set(detailVersions.flatMap((version) => version.gameVersions)),
+      ...new Set(
+        detailVersions.flatMap((version) =>
+          version.gameVersions.map(normalizeGameVersion),
+        ),
+      ),
     ].sort(compareGameVersionsDescending);
     if (distinct.length < 9) return distinct;
     const merged = new Set<string>();
@@ -206,10 +212,17 @@
     const filtered = detailVersions.filter((version) => {
       const gameMatch =
         detailGameFilter === "" ||
-        version.gameVersions.some((candidate) => gameVersionMatchesFilter(candidate, detailGameFilter));
+        version.gameVersions.some((candidate) =>
+          gameVersionMatchesFilter(normalizeGameVersion(candidate), detailGameFilter),
+        );
       const loaderMatch =
         detailType !== "mod" || detailLoaderFilter === "" || version.loaders.includes(detailLoaderFilter);
-      return gameMatch && loaderMatch;
+      const channelMatch =
+        detailChannelFilter === "all" ||
+        (detailChannelFilter === "release"
+          ? version.versionType === "release"
+          : version.versionType !== "release");
+      return gameMatch && loaderMatch && channelMatch;
     });
     const instance = selectedInstance();
     // 对齐 PCL-CE:按 MC 精确版本分组(多加载器模组为 加载器×版本),
@@ -1381,6 +1394,11 @@
                     {/each}
                   </div>
                 {/if}
+                <div class="seg wrap" role="group" aria-label={t("resources.detail.channelFilterAria")} style="margin-top:8px">
+                  <button class:on={detailChannelFilter === "all"} aria-pressed={detailChannelFilter === "all"} onclick={() => { detailChannelFilter = "all"; }}>{t("resources.detail.channelAll")}</button>
+                  <button class:on={detailChannelFilter === "release"} aria-pressed={detailChannelFilter === "release"} onclick={() => { detailChannelFilter = "release"; }}>{t("resources.versions.releaseTag")}</button>
+                  <button class:on={detailChannelFilter === "prerelease"} aria-pressed={detailChannelFilter === "prerelease"} onclick={() => { detailChannelFilter = "prerelease"; }}>{t("resources.versions.prereleaseTag")}</button>
+                </div>
               </section>
 
               <section class="panel pad" aria-labelledby="detail-files-title">
