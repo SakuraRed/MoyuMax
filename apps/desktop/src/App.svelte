@@ -2,6 +2,7 @@
   import { onMount, tick } from "svelte";
 
   import AppShell from "./components/AppShell.svelte";
+  import AccountsCenter from "./components/AccountsCenter.svelte";
   import BackupCenter from "./components/BackupCenter.svelte";
   import CloseDialog from "./components/CloseDialog.svelte";
   import CrashCenter from "./components/CrashCenter.svelte";
@@ -35,7 +36,7 @@
   } from "./runtime";
   import { isRestorablePage, sanitizeShellState } from "./shell-state";
 
-  type Phase = "loading" | "onboarding" | "home" | "instances" | "install" | "resources" | "netplay" | "tasks" | "data" | "backups" | "crash" | "settings" | "instanceDetail" | "fatal";
+  type Phase = "loading" | "onboarding" | "home" | "instances" | "install" | "resources" | "netplay" | "tasks" | "data" | "backups" | "crash" | "accounts" | "settings" | "instanceDetail" | "fatal";
 
   const runtime = createRuntime();
   let phase = $state<Phase>("loading");
@@ -527,6 +528,19 @@
     {runtime}
     {settings}
     {instances}
+    onNavigate={navigate}
+    onMinimize={() => runtime.minimizeWindow()}
+    onToggleMaximize={() => runtime.toggleMaximizeWindow()}
+    onClose={() => runtime.closeWindow()}
+  />
+{:else if phase === "accounts" && settings}
+  <AccountsCenter
+    {runtime}
+    {settings}
+    {tasks}
+    {contentTasks}
+    {instances}
+    {notice}
     onNavigate={navigate}
     onMinimize={() => runtime.minimizeWindow()}
     onToggleMaximize={() => runtime.toggleMaximizeWindow()}

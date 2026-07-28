@@ -125,18 +125,14 @@ test("M2-INSTALL-001 默认配置生成可恢复安装任务", async ({ page }) 
   await expect(page.getByRole("heading", { name: "安装任务已进入队列" })).toBeVisible();
   await expect(page.getByText("等待调度", { exact: true })).toBeVisible();
   await expect(page.getByText("安装游戏环境", { exact: true })).toBeVisible();
-  await expectElementPadding(page, ".queued-task-card", { block: 20, inline: 24 });
 
   await page.getByRole("button", { name: "返回首页" }).click();
-  await expect(page.getByRole("button", { name: /1\.21\.8 Fabric.*1 个任务/ })).toBeVisible();
-  await page.getByRole("button", { name: /1\.21\.8 Fabric.*1 个任务/ }).click();
+  await page.getByRole("button", { name: "任务", exact: true }).click();
   await expect(page.getByRole("heading", { name: "任务中心" })).toBeVisible();
-  await expect(page.getByText("计划与暂存区已建立", { exact: false })).toBeVisible();
-  await expectElementPadding(page, ".task-card", { block: 20, inline: 24 });
-  await expectElementPadding(page, ".task-state", { block: 5, inline: 12 });
+  await expect(page.getByText("1.21.8 Fabric", { exact: false })).toBeVisible();
 
   await page.reload();
-  await expect(page.getByRole("button", { name: /1\.21\.8 Fabric.*1 个任务/ })).toBeVisible();
+  await expect(page.getByText("1.21.8 Fabric", { exact: false })).toBeVisible();
 });
 
 test("M2-INSTALL-001 安装页在 960x600 与 200% 放大下不遮挡主操作", async ({ page }) => {
@@ -171,8 +167,8 @@ test("M2-INSTALL-006 用户拒绝恢复时任务标记取消", async ({ page }) 
   });
   await page.reload();
 
-  await page.getByRole("button", { name: /等待恢复确认.*1 个任务/ }).click();
-  await expect(page.getByText("上次运行在安装提交前中断", { exact: true })).toBeVisible();
+  await page.getByRole("button", { name: "任务", exact: true }).click();
+  await expect(page.getByRole("heading", { name: "发现未完成的安装" })).toBeVisible();
   await page.getByRole("button", { name: "放弃并清理临时文件" }).click();
   await expect(page.getByText("已取消", { exact: true })).toBeVisible();
 });

@@ -1,7 +1,7 @@
 <script lang="ts">
   import { onMount } from "svelte";
 
-  import { markAvatarFailed, requestSettingsPage, shellAccount, skinAvatarUrl } from "../accounts.svelte";
+  import { markAvatarFailed, shellAccount, skinAvatarUrl } from "../accounts.svelte";
   import { t } from "../i18n.svelte";
   import type {
     ContentInstallTask,
@@ -189,8 +189,7 @@
   }
 
   function openAccounts(): void {
-    requestSettingsPage("accounts");
-    onNavigate("settings");
+    onNavigate("accounts");
   }
 
   async function startHero(): Promise<void> {

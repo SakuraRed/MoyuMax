@@ -1,7 +1,7 @@
 <script lang="ts">
   import type { Snippet } from "svelte";
 
-  import { markAvatarFailed, requestSettingsPage, shellAccount, skinAvatarUrl } from "../accounts.svelte";
+  import { markAvatarFailed, shellAccount, skinAvatarUrl } from "../accounts.svelte";
   import { netplayRoom, refreshNetplayRoom, setNetplayRoom } from "../netplay.svelte";
   import { t, uiBackground, uiBackgroundImageUrl, uiContrast, uiMotion, uiTheme } from "../i18n.svelte";
   import type { MoyuRuntime, NavigationKey } from "../runtime";
@@ -102,8 +102,7 @@
   });
 
   function openAccounts(): void {
-    requestSettingsPage("accounts");
-    onNavigate?.("settings");
+    onNavigate?.("accounts");
   }
 </script>
 
@@ -169,8 +168,9 @@
           {@const avatarUrl = account.avatarFailed ? "" : skinAvatarUrl(account.playerUuid, account.kind)}
           <button
             class="nav-account"
-            class:active={activeNavigation === "settings"}
+            class:active={activeNavigation === "accounts"}
             aria-label={t("shell.account.aria")}
+            aria-current={activeNavigation === "accounts" ? "page" : undefined}
             disabled={navigationDisabled}
             onclick={openAccounts}
           >
@@ -189,8 +189,9 @@
         {:else}
           <button
             class="nav-account"
-            class:active={activeNavigation === "settings"}
+            class:active={activeNavigation === "accounts"}
             aria-label={t("shell.account.aria")}
+            aria-current={activeNavigation === "accounts" ? "page" : undefined}
             disabled={navigationDisabled}
             onclick={openAccounts}
           >

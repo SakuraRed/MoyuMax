@@ -4473,27 +4473,6 @@ summary:focus-visible {
 }
 
 @media (max-width: 1050px) {
-  .navrail {
-    width: 72px;
-  }
-
-  .nav-item {
-    justify-content: center;
-  }
-
-  .nav-item span,
-  .account > span:last-child {
-    display: none;
-  }
-
-  .account {
-    justify-content: center;
-  }
-
-  .statusbar > span:nth-child(2) {
-    display: none;
-  }
-
   .resource-heading,
   .local-content-section > header,
   .content-result-card,

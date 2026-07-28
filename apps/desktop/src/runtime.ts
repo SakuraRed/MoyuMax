@@ -418,7 +418,7 @@ export interface WorldBackupSettings {
   keepCount: number;
 }
 
-export type NavigationKey = "home" | "instances" | "resources" | "netplay" | "tasks" | "data" | "settings";
+export type NavigationKey = "home" | "instances" | "resources" | "netplay" | "tasks" | "data" | "accounts" | "settings";
 
 export type AccountKind = "offline" | "authlib" | "microsoft";
 export type AccountSessionState = "valid" | "expired";
