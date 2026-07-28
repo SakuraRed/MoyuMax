@@ -79,10 +79,16 @@ fn mods_listing_scans_directory_and_merges_records() {
     fixture.write_mod("readme.txt", b"not-a-mod");
     fixture.record_content();
 
-    let entries = fixture.service.list_instance_mods(&fixture.instance_id).unwrap();
+    let entries = fixture
+        .service
+        .list_instance_mods(&fixture.instance_id)
+        .unwrap();
     assert_eq!(entries.len(), 3, "只统计 jar 与 jar.disabled:{entries:?}");
 
-    let jei = entries.iter().find(|entry| entry.file_name == "jei.jar").unwrap();
+    let jei = entries
+        .iter()
+        .find(|entry| entry.file_name == "jei.jar")
+        .unwrap();
     assert!(jei.enabled);
     assert!(jei.content.is_none(), "未收录文件不带元数据");
     assert_eq!(jei.size_bytes, 9);
@@ -121,7 +127,12 @@ fn toggle_renames_file_and_syncs_index_flag() {
             .join(".minecraft/mods/jei.jar.disabled")
             .is_file()
     );
-    assert!(!fixture.instance_root.join(".minecraft/mods/jei.jar").exists());
+    assert!(
+        !fixture
+            .instance_root
+            .join(".minecraft/mods/jei.jar")
+            .exists()
+    );
 
     let sodium = fixture
         .service
@@ -138,7 +149,12 @@ fn toggle_renames_file_and_syncs_index_flag() {
         .unwrap();
     assert_eq!(enabled.file_name, "jei.jar");
     assert!(enabled.enabled);
-    assert!(fixture.instance_root.join(".minecraft/mods/jei.jar").is_file());
+    assert!(
+        fixture
+            .instance_root
+            .join(".minecraft/mods/jei.jar")
+            .is_file()
+    );
 }
 
 #[test]

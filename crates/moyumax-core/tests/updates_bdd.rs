@@ -141,25 +141,27 @@ impl FixtureRelease {
         let server_thread = thread::spawn(move || {
             for stream in listener.incoming() {
                 let Ok(mut stream) = stream else { break };
-                let mut reader = BufReader::new(stream.try_clone().unwrap());
-                let mut line = String::new();
-                loop {
-                    line.clear();
-                    if reader.read_line(&mut line).unwrap_or(0) == 0 || line == "\r\n" {
-                        break;
+                let body = body.clone();
+                thread::spawn(move || {
+                    let mut reader = BufReader::new(stream.try_clone().unwrap());
+                    let mut line = String::new();
+                    loop {
+                        line.clear();
+                        if reader.read_line(&mut line).unwrap_or(0) == 0 || line == "\r\n" {
+                            break;
+                        }
                     }
-                }
-                let reason = if status == 200 { "OK" } else { "Error" };
-                write!(
-                    stream,
-                    "HTTP/1.1 {} {}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
-                    status,
-                    reason,
-                    body.len()
-                )
-                .unwrap();
-                stream.write_all(body.as_bytes()).unwrap();
-                stream.flush().unwrap();
+                    let reason = if status == 200 { "OK" } else { "Error" };
+                    let _ = write!(
+                        stream,
+                        "HTTP/1.1 {} {}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                        status,
+                        reason,
+                        body.len()
+                    );
+                    let _ = stream.write_all(body.as_bytes());
+                    let _ = stream.flush();
+                });
             }
         });
         Self {
@@ -171,6 +173,56 @@ impl FixtureRelease {
     fn url(&self) -> String {
         format!("http://{}/", self.address)
     }
+
+    fn redirect_to(location: &str) -> Self {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let address = listener.local_addr().unwrap();
+        let location = location.to_owned();
+        let server_thread = thread::spawn(move || {
+            for stream in listener.incoming() {
+                let Ok(mut stream) = stream else { break };
+                let mut reader = BufReader::new(stream.try_clone().unwrap());
+                let mut line = String::new();
+                loop {
+                    line.clear();
+                    if reader.read_line(&mut line).unwrap_or(0) == 0 || line == "\r\n" {
+                        break;
+                    }
+                }
+                write!(
+                    stream,
+                    "HTTP/1.1 302 Found\r\nLocation: {location}\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
+                )
+                .unwrap();
+                stream.flush().unwrap();
+            }
+        });
+        Self {
+            address,
+            _thread: server_thread,
+        }
+    }
+}
+
+#[tokio::test]
+async fn m25_upd_005_download_follows_bounded_https_redirects() {
+    let payload = b"redirected-installer".to_vec();
+    let digest = encode_hex(Sha256::digest(&payload));
+    let origin = FixtureRelease::new(200, &String::from_utf8_lossy(&payload));
+    let redirect = FixtureRelease::redirect_to(&origin.url());
+    let directory = TempDir::new().unwrap();
+    let client = UpdateClient::with_base_url("http://127.0.0.1:1/").unwrap();
+    let asset = moyumax_core::UpdateAsset {
+        name: "setup.exe".to_owned(),
+        url: redirect.url(),
+        size: payload.len() as u64,
+        sha256: Some(digest),
+    };
+    let path = client
+        .download_installer(&asset, directory.path())
+        .await
+        .expect("302 重定向必须被跟随");
+    assert_eq!(std::fs::read(&path).unwrap(), payload);
 }
 
 fn encode_hex(bytes: impl AsRef<[u8]>) -> String {

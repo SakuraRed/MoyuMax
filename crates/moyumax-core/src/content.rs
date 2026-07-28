@@ -1114,9 +1114,7 @@ impl AppService {
         if currently_enabled != enabled {
             let target = mods_dir.join(&final_name);
             if target.exists() {
-                return Err(CoreError::Content(format!(
-                    "目标文件已存在：{final_name}"
-                )));
+                return Err(CoreError::Content(format!("目标文件已存在：{final_name}")));
             }
             std::fs::rename(&current, &target)?;
         }

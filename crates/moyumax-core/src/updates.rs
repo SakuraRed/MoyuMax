@@ -115,44 +115,73 @@ impl UpdateClient {
         fs::create_dir_all(destination_directory)?;
         let target = destination_directory.join(&asset.name);
         let partial = destination_directory.join(format!(".{}.partial", asset.name));
-        let result = async {
-            let response = self
-                .client
-                .get(url)
-                .send()
-                .await
-                .map_err(|error| CoreError::Content(format!("下载安装包失败：{error}")))?;
-            if !response.status().is_success() {
-                return Err(CoreError::Content(format!(
-                    "下载安装包返回 HTTP {}",
-                    response.status().as_u16()
-                )));
+        let result =
+            async {
+                // GitHub 发行资产固定经 302 跳到 CDN;有界手动跟随,每一跳强制 https,
+                // 不交给全局重定向策略,避免被带到任意主机。
+                let mut url = url;
+                let mut response = None;
+                for _ in 0..5 {
+                    let attempt =
+                        self.client.get(url.clone()).send().await.map_err(|error| {
+                            CoreError::Content(format!("下载安装包失败：{error}"))
+                        })?;
+                    if attempt.status().is_redirection() {
+                        let location = attempt
+                            .headers()
+                            .get(reqwest::header::LOCATION)
+                            .and_then(|value| value.to_str().ok())
+                            .ok_or_else(|| {
+                                CoreError::Content("安装包重定向缺少 Location".to_owned())
+                            })?;
+                        let next = url.join(location).map_err(|error| {
+                            CoreError::Content(format!("安装包重定向地址无效：{error}"))
+                        })?;
+                        let localhost = matches!(next.host_str(), Some("127.0.0.1" | "localhost"));
+                        if next.scheme() != "https" && !(next.scheme() == "http" && localhost) {
+                            return Err(CoreError::Content(format!(
+                                "安装包重定向目标必须使用 https：{next}"
+                            )));
+                        }
+                        url = next;
+                        continue;
+                    }
+                    response = Some(attempt);
+                    break;
+                }
+                let response = response
+                    .ok_or_else(|| CoreError::Content("安装包重定向次数过多".to_owned()))?;
+                if !response.status().is_success() {
+                    return Err(CoreError::Content(format!(
+                        "下载安装包返回 HTTP {}",
+                        response.status().as_u16()
+                    )));
+                }
+                let bytes = response
+                    .bytes()
+                    .await
+                    .map_err(|error| CoreError::Content(format!("读取安装包失败：{error}")))?;
+                if bytes.len() as u64 != asset.size {
+                    return Err(CoreError::Content(format!(
+                        "安装包大小不一致：期望 {} 字节，实际 {} 字节",
+                        asset.size,
+                        bytes.len()
+                    )));
+                }
+                let digest = Sha256::digest(&bytes);
+                let actual = encode_hex(digest);
+                if let Some(expected) = &asset.sha256
+                    && !actual.eq_ignore_ascii_case(expected)
+                {
+                    return Err(CoreError::Content(format!(
+                        "安装包 SHA-256 校验失败：期望 {expected}，实际 {actual}"
+                    )));
+                }
+                fs::write(&partial, &bytes)?;
+                fs::rename(&partial, &target)?;
+                Ok(target)
             }
-            let bytes = response
-                .bytes()
-                .await
-                .map_err(|error| CoreError::Content(format!("读取安装包失败：{error}")))?;
-            if bytes.len() as u64 != asset.size {
-                return Err(CoreError::Content(format!(
-                    "安装包大小不一致：期望 {} 字节，实际 {} 字节",
-                    asset.size,
-                    bytes.len()
-                )));
-            }
-            let digest = Sha256::digest(&bytes);
-            let actual = encode_hex(digest);
-            if let Some(expected) = &asset.sha256
-                && !actual.eq_ignore_ascii_case(expected)
-            {
-                return Err(CoreError::Content(format!(
-                    "安装包 SHA-256 校验失败：期望 {expected}，实际 {actual}"
-                )));
-            }
-            fs::write(&partial, &bytes)?;
-            fs::rename(&partial, &target)?;
-            Ok(target)
-        }
-        .await;
+            .await;
         if result.is_err() {
             let _ = fs::remove_file(&partial);
         }

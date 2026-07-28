@@ -15,11 +15,10 @@ fn windows_preview_build_is_a_current_user_nsis_installer() {
         config["bundle"]["windows"]["nsis"]["installMode"],
         "currentUser"
     );
-    assert!(
-        config["version"]
-            .as_str()
-            .is_some_and(|version| version.contains("preview")),
-        "unsigned review builds must remain visibly marked as preview"
+    assert_eq!(
+        config["version"].as_str(),
+        Some("0.1.0"),
+        "首个正式发行版版本号(开发证书自签名,关于页保留未签名声明)"
     );
 
     let icons = config["bundle"]["icon"]
