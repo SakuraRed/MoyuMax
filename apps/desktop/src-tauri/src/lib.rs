@@ -2381,6 +2381,34 @@ fn list_recycle_bin_items(service: State<'_, AppService>) -> Result<Vec<RecycleB
         .map_err(|error| error.to_string())
 }
 
+/// 实例模组目录实测清单(mods/ 扫描与安装记录合并)。
+#[tauri::command]
+fn list_instance_mods(
+    service: State<'_, AppService>,
+    instance_id: String,
+) -> Result<Vec<moyumax_core::InstanceModEntry>, String> {
+    service
+        .list_instance_mods(&instance_id)
+        .map_err(|error| error.to_string())
+}
+
+/// 启停模组文件(jar ↔ jar.disabled 改名并同步索引)。
+#[tauri::command]
+async fn set_instance_mod_enabled(
+    service: State<'_, AppService>,
+    instance_id: String,
+    relative_path: String,
+    enabled: bool,
+) -> Result<moyumax_core::InstanceModEntry, String> {
+    let service = service.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        service.set_instance_mod_enabled(&instance_id, &relative_path, enabled)
+    })
+    .await
+    .map_err(|error| format!("启停模组中断：{error}"))?
+    .map_err(|error| error.to_string())
+}
+
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 struct StorageOverviewResponse {
@@ -3210,6 +3238,8 @@ pub fn run() {
             resolve_content_task_recovery,
             list_instances,
             list_recycle_bin_items,
+            list_instance_mods,
+            set_instance_mod_enabled,
             storage_overview,
             recycle_instance,
             restore_recycle_bin_item,

@@ -321,8 +321,7 @@ export interface ContentInstallTask {
   progress: TaskProgress;
 }
 
-export interface InstalledContent {
-  id: string;
+export interface InstalledContent {  id: string;
   instanceId: string;
   provider: "modrinth";
   projectId: string;
@@ -337,6 +336,15 @@ export interface InstalledContent {
   enabled: boolean;
   autoUpdateEnabled: boolean;
   installedAtUnixSeconds: number;
+}
+
+/** 实例模组目录实测条目(mods/ 扫描与安装记录合并;未收录文件 content 为 null)。 */
+export interface InstanceModEntry {
+  fileName: string;
+  relativePath: string;
+  sizeBytes: number;
+  enabled: boolean;
+  content: InstalledContent | null;
 }
 
 export interface ContentUpdateInfo {
@@ -802,6 +810,10 @@ export interface MoyuRuntime {
   confirmContentPreview(previewId: string): Promise<ContentInstallTask>;
   getContentInstallTasks(): Promise<ContentInstallTask[]>;
   getInstalledContent(instanceId: string): Promise<InstalledContent[]>;
+  /** 实例模组目录实测清单(mods/ 扫描与安装记录合并;未收录文件 content 为 null)。 */
+  getInstanceMods(instanceId: string): Promise<InstanceModEntry[]>;
+  /** 启停模组文件(jar ↔ jar.disabled 改名并同步索引)。 */
+  setInstanceModEnabled(instanceId: string, relativePath: string, enabled: boolean): Promise<InstanceModEntry>;
   checkContentUpdates(instanceId: string): Promise<ContentUpdateInfo[]>;
   planContentUpdate(
     instanceId: string,
@@ -1160,6 +1172,10 @@ function createTauriRuntime(): MoyuRuntime {
       invoke<ContentInstallTask[]>("get_content_install_tasks"),
     getInstalledContent: (instanceId) =>
       invoke<InstalledContent[]>("get_installed_content", { instanceId }),
+    getInstanceMods: (instanceId) =>
+      invoke<InstanceModEntry[]>("list_instance_mods", { instanceId }),
+    setInstanceModEnabled: (instanceId, relativePath, enabled) =>
+      invoke<InstanceModEntry>("set_instance_mod_enabled", { instanceId, relativePath, enabled }),
     checkContentUpdates: (instanceId) =>
       invoke<ContentUpdateInfo[]>("check_content_updates", { instanceId }),
     planContentUpdate: (instanceId, projectIds) =>
@@ -1832,6 +1848,81 @@ function createBrowserRuntime(): MoyuRuntime {
     },
     async getInstalledContent(instanceId) {
       return browserInstalledContent().filter((entry) => entry.instanceId === instanceId);
+    },
+    async getInstanceMods(instanceId) {
+      const records = browserInstalledContent().filter((entry) => entry.instanceId === instanceId);
+      const files = browserInstanceModFiles(instanceId);
+      return files
+        .filter((file) => {
+          const base = file.fileName.endsWith(".disabled")
+            ? file.fileName.slice(0, -".disabled".length)
+            : file.fileName;
+          return base.toLowerCase().endsWith(".jar");
+        })
+        .map((file) => {
+          const relativePath = `mods/${file.fileName}`;
+          const base = file.fileName.endsWith(".disabled")
+            ? file.fileName.slice(0, -".disabled".length)
+            : file.fileName;
+          const content =
+            records.find((record) => {
+              const stored = record.relativePath.startsWith(".minecraft/")
+                ? record.relativePath.slice(".minecraft/".length)
+                : record.relativePath;
+              return stored === relativePath || stored === `mods/${base}`;
+            }) ?? null;
+          return {
+            fileName: file.fileName,
+            relativePath,
+            sizeBytes: file.sizeBytes,
+            enabled: !file.fileName.endsWith(".disabled"),
+            content,
+          } satisfies InstanceModEntry;
+        })
+        .sort((left, right) =>
+          (left.content?.projectTitle ?? left.fileName)
+            .toLowerCase()
+            .localeCompare((right.content?.projectTitle ?? right.fileName).toLowerCase()),
+        );
+    },
+    async setInstanceModEnabled(instanceId, relativePath, enabled) {
+      if (!relativePath.startsWith("mods/") || relativePath.includes("..")) {
+        throw new Error("模组路径无效");
+      }
+      const key = `moyumax.browser.instanceMods.${instanceId}`;
+      const files = browserInstanceModFiles(instanceId);
+      const fileName = relativePath.slice("mods/".length);
+      const index = files.findIndex((file) => file.fileName === fileName);
+      if (index < 0) throw new Error("模组文件不存在");
+      const currentlyEnabled = !fileName.endsWith(".disabled");
+      const finalName = enabled
+        ? fileName.replace(/\.disabled$/, "")
+        : currentlyEnabled
+          ? `${fileName}.disabled`
+          : fileName;
+      files[index] = { ...files[index]!, fileName: finalName };
+      window.localStorage.setItem(key, JSON.stringify(files));
+      const finalRelative = `mods/${finalName}`;
+      const contents = browserInstalledContent();
+      const record = contents.find(
+        (entry) =>
+          entry.instanceId === instanceId &&
+          (entry.relativePath === relativePath || entry.relativePath === `.minecraft/${relativePath}`),
+      );
+      if (record) {
+        record.enabled = enabled;
+        record.relativePath = record.relativePath.startsWith(".minecraft/")
+          ? `.minecraft/${finalRelative}`
+          : finalRelative;
+        window.localStorage.setItem(BROWSER_INSTALLED_CONTENT_KEY, JSON.stringify(contents));
+      }
+      return {
+        fileName: finalName,
+        relativePath: finalRelative,
+        sizeBytes: files[index]!.sizeBytes,
+        enabled,
+        content: record ?? null,
+      } satisfies InstanceModEntry;
     },
     async checkContentUpdates(instanceId) {
       if (window.localStorage.getItem(BROWSER_MODRINTH_OFFLINE_KEY) === "true") {
@@ -3535,6 +3626,37 @@ function browserContentTasks(): ContentInstallTask[] {
 function browserInstalledContent(): InstalledContent[] {
   const serialized = window.localStorage.getItem(BROWSER_INSTALLED_CONTENT_KEY);
   return serialized ? (JSON.parse(serialized) as InstalledContent[]) : [];
+}
+
+interface BrowserInstanceModFile {
+  fileName: string;
+  sizeBytes: number;
+}
+
+/** 浏览器 mock 的实例 mods 目录:优先读显式种子,缺省时从安装记录推导(与真实扫描语义一致)。 */
+function browserInstanceModFiles(instanceId: string): BrowserInstanceModFile[] {
+  const key = `moyumax.browser.instanceMods.${instanceId}`;
+  const serialized = window.localStorage.getItem(key);
+  if (serialized) return JSON.parse(serialized) as BrowserInstanceModFile[];
+  return browserInstalledContent()
+    .filter((entry) => {
+      if (entry.instanceId !== instanceId) return false;
+      const stored = entry.relativePath.startsWith(".minecraft/")
+        ? entry.relativePath.slice(".minecraft/".length)
+        : entry.relativePath;
+      return stored.startsWith("mods/");
+    })
+    .map((entry) => {
+      const stored = entry.relativePath.startsWith(".minecraft/")
+        ? entry.relativePath.slice(".minecraft/".length)
+        : entry.relativePath;
+      return {
+        fileName: entry.enabled
+          ? stored.slice("mods/".length)
+          : `${stored.slice("mods/".length)}.disabled`,
+        sizeBytes: entry.size,
+      };
+    });
 }
 
 interface BrowserContentUpdate extends ContentUpdateInfo {

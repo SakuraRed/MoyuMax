@@ -11,7 +11,7 @@
     InstanceScreenshot,
     InstanceServerEntry,
     InstanceWorldInfo,
-    InstalledContent,
+    InstanceModEntry,
     InstalledModpack,
     ExportModpackReport,
     JavaEnvironment,
@@ -139,7 +139,7 @@
   let globalPreference = $state<GlobalLaunchPreference>({ mode: "auto" });
   let autoOptions = $state<LaunchOptions>({ minimumMemoryMib: 512, maximumMemoryMib: 4096 });
   let autoUpdate = $state(false);
-  let mods = $state<InstalledContent[]>([]);
+  let mods = $state<InstanceModEntry[]>([]);
   let contentUpdates = $state<ContentUpdateInfo[]>([]);
   let checkingUpdates = $state(false);
   let planningUpdateId = $state("");
@@ -294,7 +294,7 @@
           runtime.listJavaEnvironments(),
           runtime.getInstanceLaunchOptions(current.id),
           runtime.getInstanceContentAutoUpdate(current.id),
-          runtime.getInstalledContent(current.id),
+          runtime.getInstanceMods(current.id),
           runtime.listInstanceResources(current.id),
           runtime.listInstanceWorldDetails(current.id),
           runtime.listInstanceScreenshots(current.id),
@@ -891,14 +891,15 @@
     }
   }
 
-  async function updateOne(entry: InstalledContent): Promise<void> {
+  async function updateOne(entry: InstanceModEntry): Promise<void> {
     const current = instance;
-    if (!current || planningUpdateId) return;
-    planningUpdateId = entry.projectId;
+    const projectId = entry.content?.projectId;
+    if (!current || !projectId || planningUpdateId) return;
+    planningUpdateId = projectId;
     clearMessages();
     try {
-      await runtime.planContentUpdate(current.id, [entry.projectId]);
-      contentUpdates = contentUpdates.filter((update) => update.projectId !== entry.projectId);
+      await runtime.planContentUpdate(current.id, [projectId]);
+      contentUpdates = contentUpdates.filter((update) => update.projectId !== projectId);
       message = t("resources.updates.queuedTitle");
       await onStateChanged();
     } catch (error) {
@@ -908,14 +909,17 @@
     }
   }
 
-  async function toggleMod(entry: InstalledContent, enabled: boolean): Promise<void> {
+  async function toggleMod(entry: InstanceModEntry, enabled: boolean): Promise<void> {
     clearMessages();
+    if (!instance) return;
     try {
-      const updated = await runtime.setInstalledContentEnabled(entry.id, enabled);
-      mods = mods.map((candidate) => (candidate.id === updated.id ? updated : candidate));
+      const updated = await runtime.setInstanceModEnabled(instance.id, entry.relativePath, enabled);
+      mods = mods.map((candidate) =>
+        candidate.relativePath === entry.relativePath ? updated : candidate,
+      );
     } catch (error) {
       errorMessage = error instanceof Error ? error.message : String(error);
-      mods = instance ? await runtime.getInstalledContent(instance.id) : mods;
+      mods = await runtime.getInstanceMods(instance.id).catch(() => mods);
     }
   }
 
@@ -1427,11 +1431,18 @@
             </div>
           {:else}
             {#each mods as entry}
-              {@const update = updatesByProject.get(entry.projectId)}
+              {@const title = entry.content?.projectTitle ?? entry.fileName}
+              {@const update = entry.content ? updatesByProject.get(entry.content.projectId) : undefined}
               <div class="list-row">
                 <div class="lr-main">
-                  <div class="lr-name">{entry.projectTitle} <span class="dim" style="font-weight:400">{entry.versionNumber}</span></div>
-                  <div class="lr-sub">{t("instanceDetail.content.sourceLine").replace("{provider}", "Modrinth")} · {entry.fileName} · {formatBytes(entry.size)}</div>
+                  <div class="lr-name">{title} {#if entry.content}<span class="dim" style="font-weight:400">{entry.content.versionNumber}</span>{/if}</div>
+                  <div class="lr-sub">
+                    {#if entry.content}
+                      {t("instanceDetail.content.sourceLine").replace("{provider}", "Modrinth")} · {entry.fileName} · {formatBytes(entry.sizeBytes)}
+                    {:else}
+                      {t("instanceDetail.content.localLine")} · {entry.fileName} · {formatBytes(entry.sizeBytes)}
+                    {/if}
+                  </div>
                 </div>
                 {#if update}
                   <span class="tag warn">{t("instanceDetail.content.updateAvailable").replace("{version}", update.latestVersionNumber)}</span>
@@ -1447,7 +1458,7 @@
                   class:on={entry.enabled}
                   role="switch"
                   aria-checked={entry.enabled}
-                  aria-label={t("resources.files.toggleAria").replace("{name}", entry.projectTitle)}
+                  aria-label={t("resources.files.toggleAria").replace("{name}", title)}
                   onclick={() => void toggleMod(entry, !entry.enabled)}
                 ></button>
               </div>

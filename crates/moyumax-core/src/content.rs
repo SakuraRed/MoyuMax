@@ -300,6 +300,18 @@ pub struct InstalledContent {
     pub installed_at_unix_seconds: i64,
 }
 
+/// 实例模组目录实测条目:mods/ 下真实存在的 jar(含 .disabled 态),
+/// 与安装事务记录按相对路径合并;未收录文件 content 为 None。
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct InstanceModEntry {
+    pub file_name: String,
+    pub relative_path: String,
+    pub size_bytes: u64,
+    pub enabled: bool,
+    pub content: Option<InstalledContent>,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ContentUpdateInfo {
@@ -994,6 +1006,153 @@ impl AppService {
             return Err(CoreError::Content("实例不存在".to_owned()));
         }
         Ok(())
+    }
+
+    /// 实例模组目录实测清单:扫描实例 mods/ 下全部 jar(含 .disabled 后缀的禁用态),
+    /// 与 installed_content 表按相对路径合并;表内记录带出元数据,其余文件如实列出。
+    /// 加载器(Fabric/Forge/NeoForge/Quilt)都只加载 .jar,与 PCL/HMCL 的禁用机制一致。
+    pub fn list_instance_mods(&self, instance_id: &str) -> Result<Vec<InstanceModEntry>> {
+        let instance = self
+            .list_instances()?
+            .into_iter()
+            .find(|instance| instance.id == instance_id)
+            .ok_or_else(|| CoreError::Content("目标实例不存在".to_owned()))?;
+        let records = self.list_installed_content(instance_id)?;
+        let mods_dir = Path::new(&instance.root_directory)
+            .join(".minecraft")
+            .join("mods");
+        let mut entries = Vec::new();
+        if mods_dir.is_dir() {
+            for entry in std::fs::read_dir(&mods_dir)? {
+                let entry = entry?;
+                let metadata = entry.metadata()?;
+                if !metadata.is_file() {
+                    continue;
+                }
+                let name = entry.file_name().to_string_lossy().into_owned();
+                let base = name.strip_suffix(".disabled").unwrap_or(&name);
+                if !base.to_ascii_lowercase().ends_with(".jar") {
+                    continue;
+                }
+                let enabled = !name.ends_with(".disabled");
+                let relative_path = format!("mods/{name}");
+                let content = records
+                    .iter()
+                    .find(|record| {
+                        let stored = record
+                            .relative_path
+                            .strip_prefix(".minecraft/")
+                            .unwrap_or(&record.relative_path);
+                        stored == relative_path || stored == format!("mods/{base}")
+                    })
+                    .cloned();
+                entries.push(InstanceModEntry {
+                    file_name: name,
+                    relative_path,
+                    size_bytes: metadata.len(),
+                    enabled,
+                    content,
+                });
+            }
+        }
+        entries.sort_by(|left, right| {
+            let left_title = left
+                .content
+                .as_ref()
+                .map(|content| content.project_title.to_lowercase())
+                .unwrap_or_else(|| left.file_name.to_lowercase());
+            let right_title = right
+                .content
+                .as_ref()
+                .map(|content| content.project_title.to_lowercase())
+                .unwrap_or_else(|| right.file_name.to_lowercase());
+            left_title.cmp(&right_title)
+        });
+        Ok(entries)
+    }
+
+    /// 启停模组文件:jar ↔ jar.disabled 改名(游戏不加载非 .jar 后缀),
+    /// 同步 installed_content 索引标志;返回改名后的条目。
+    pub fn set_instance_mod_enabled(
+        &self,
+        instance_id: &str,
+        relative_path: &str,
+        enabled: bool,
+    ) -> Result<InstanceModEntry> {
+        if !relative_path.starts_with("mods/") || relative_path.contains("..") {
+            return Err(CoreError::Content("模组路径无效".to_owned()));
+        }
+        let instance = self
+            .list_instances()?
+            .into_iter()
+            .find(|instance| instance.id == instance_id)
+            .ok_or_else(|| CoreError::Content("目标实例不存在".to_owned()))?;
+        let mods_dir = Path::new(&instance.root_directory)
+            .join(".minecraft")
+            .join("mods");
+        let current = Path::new(&instance.root_directory)
+            .join(".minecraft")
+            .join(relative_path);
+        if !current.is_file() {
+            return Err(CoreError::Content("模组文件不存在".to_owned()));
+        }
+        let file_name = current
+            .file_name()
+            .map(|name| name.to_string_lossy().into_owned())
+            .ok_or_else(|| CoreError::Content("模组路径无效".to_owned()))?;
+        let currently_enabled = !file_name.ends_with(".disabled");
+        let final_name = if enabled {
+            file_name
+                .strip_suffix(".disabled")
+                .unwrap_or(&file_name)
+                .to_owned()
+        } else if currently_enabled {
+            format!("{file_name}.disabled")
+        } else {
+            file_name.clone()
+        };
+        if currently_enabled != enabled {
+            let target = mods_dir.join(&final_name);
+            if target.exists() {
+                return Err(CoreError::Content(format!(
+                    "目标文件已存在：{final_name}"
+                )));
+            }
+            std::fs::rename(&current, &target)?;
+        }
+        let final_relative = format!("mods/{final_name}");
+        // 同步索引标志与相对路径(有记录时);索引以 .minecraft/ 前缀存储,匹配时兼容两种写法,
+        // 回写保持索引原格式,保持更新检查与内容列表一致。
+        self.connection()?.execute(
+            "UPDATE installed_content SET enabled = ?3, relative_path = ?4 WHERE instance_id = ?1 AND (relative_path = ?2 OR relative_path = ?5)",
+            params![
+                instance_id,
+                relative_path,
+                enabled,
+                format!(".minecraft/{final_relative}"),
+                format!(".minecraft/{relative_path}")
+            ],
+        )?;
+        let size_bytes = std::fs::metadata(mods_dir.join(&final_name))
+            .map(|metadata| metadata.len())
+            .unwrap_or(0);
+        let content = self
+            .list_installed_content(instance_id)?
+            .into_iter()
+            .find(|record| {
+                record
+                    .relative_path
+                    .strip_prefix(".minecraft/")
+                    .unwrap_or(&record.relative_path)
+                    == final_relative
+            });
+        Ok(InstanceModEntry {
+            file_name: final_name,
+            relative_path: final_relative,
+            size_bytes,
+            enabled,
+            content,
+        })
     }
 
     /// 启用或停用实例已安装内容（Mod 等）；只更新索引标记，不改动已安装文件。

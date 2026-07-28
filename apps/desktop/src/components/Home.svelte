@@ -67,6 +67,7 @@
   let heroPackKey = "";
   let defaultAccountName = $state("");
   let homeRoot: HTMLElement | undefined = $state();
+  let galleryOpen = $state(false);
   // 首页实例切换:本地记忆选中实例;未选或失效时回退最近运行/首个。
   let selectedHeroId = $state(
     (typeof localStorage !== "undefined" && localStorage.getItem("moyumax.home.heroId")) || "",
@@ -81,15 +82,13 @@
     );
     return withSession ?? instances[0] ?? null;
   });
-  const heroIndex = $derived(hero ? instances.findIndex((instance) => instance.id === hero.id) : -1);
 
-  function switchHero(delta: number): void {
-    if (instances.length < 2 || !hero) return;
-    const next = (heroIndex + delta + instances.length) % instances.length;
-    selectedHeroId = instances[next]?.id ?? "";
+  function switchHero(instanceId: string): void {
+    selectedHeroId = instanceId;
     if (typeof localStorage !== "undefined") {
       localStorage.setItem("moyumax.home.heroId", selectedHeroId);
     }
+    galleryOpen = false;
   }
 
   // hero 统计:累计游玩时长(结束会话求和 + 运行中会话计到现在)、最后启动、启动次数。
@@ -397,11 +396,9 @@
           </div>
         </div>
         {#if instances.length > 1}
-          <div class="hero-switch">
-            <button class="hero-switch-btn" aria-label={t("home.hero.switchPrev")} onclick={() => switchHero(-1)}>‹</button>
-            <span class="dim">{t("home.hero.position").replace("{current}", String(heroIndex + 1)).replace("{total}", String(instances.length))}</span>
-            <button class="hero-switch-btn" aria-label={t("home.hero.switchNext")} onclick={() => switchHero(1)}>›</button>
-          </div>
+          <button class="hero-gallery-btn" onclick={() => { galleryOpen = true; }}>
+            {t("home.hero.openGallery")}
+          </button>
         {/if}
       </section>
       {#if heroInstallingPack}
@@ -492,6 +489,43 @@
     </main>
   {/if}
 
+  {#if galleryOpen}
+    <div class="modal-mask">
+      <div
+        class="modal hero-gallery-modal"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="hero-gallery-title"
+        tabindex="-1"
+        onkeydown={(event) => { if (event.key === "Escape") galleryOpen = false; }}
+      >
+        <h3 id="hero-gallery-title">{t("home.gallery.title")}</h3>
+        <div class="m-body">
+          <div class="hero-gallery-grid">
+            {#each instances as candidate}
+              {@const current = candidate.id === hero?.id}
+              <button
+                class="hero-gallery-card"
+                class:current
+                aria-current={current ? "true" : undefined}
+                onclick={() => switchHero(candidate.id)}
+              >
+                <span class="cube" aria-hidden="true">{candidate.name.slice(0, 1)}</span>
+                <span class="lr-main">
+                  <span class="lr-name">{candidate.name}</span>
+                  <span class="lr-sub">{candidate.gameVersion} · {loaderLabel(candidate)}</span>
+                </span>
+                {#if current}<span class="tag accent">{t("home.gallery.current")}</span>{/if}
+              </button>
+            {/each}
+          </div>
+        </div>
+        <div class="m-acts">
+          <button class="btn secondary" data-dialog-autofocus onclick={() => { galleryOpen = false; }}>{t("common.cancel")}</button>
+        </div>
+      </div>
+    </div>
+  {/if}
 </AppShell>
 
 <style>
@@ -558,29 +592,57 @@
   .hero-stat-sep {
     color: var(--text-3);
   }
-  .hero-switch {
+  .hero-gallery-btn {
     position: absolute;
     top: 14px;
     right: 14px;
-    display: flex;
-    align-items: center;
-    gap: 8px;
-  }
-  .hero-switch-btn {
-    width: 28px;
     height: 28px;
-    display: grid;
-    place-items: center;
+    padding: 0 12px;
     border: 1px solid var(--glass-border);
     border-radius: var(--r);
     background: rgba(0, 0, 0, 0.18);
     color: var(--text-2);
+    font-family: var(--font);
+    font-size: 12px;
     cursor: pointer;
-    font-size: 14px;
   }
-  .hero-switch-btn:hover {
+  .hero-gallery-btn:hover {
     background: var(--glass-strong);
     color: var(--text-1);
+  }
+  .hero-gallery-modal {
+    width: 640px;
+  }
+  .hero-gallery-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(min(260px, 100%), 1fr));
+    gap: 10px;
+    max-height: 420px;
+    overflow: hidden auto;
+  }
+  .hero-gallery-card {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: 12px 14px;
+    border: 1px solid var(--glass-border);
+    border-radius: var(--r);
+    background: rgba(0, 0, 0, 0.15);
+    color: var(--text-1);
+    font-family: var(--font);
+    text-align: left;
+    cursor: pointer;
+  }
+  .hero-gallery-card:hover {
+    background: var(--glass);
+  }
+  .hero-gallery-card.current {
+    border-color: var(--accent);
+    background: var(--accent-soft);
+  }
+  .hero-gallery-card .lr-main {
+    min-width: 0;
+    flex: 1;
   }
   .launch-row {
     display: flex;
