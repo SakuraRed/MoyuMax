@@ -76,8 +76,8 @@ test("M37-DATA-001 存储空间展示实例占用与磁盘余量", async ({ page
   await page.getByRole("button", { name: "数据" }).click();
   const storage = page.getByLabel("存储空间");
   await expect(storage).toBeVisible();
-  await expect(storage.getByText("已用，共 96.0 GiB", { exact: false })).toBeVisible();
-  await expect(storage.getByText("剩余 58.0 GiB", { exact: false })).toBeVisible();
+  await expect(storage.getByText("MoyuMax 占用", { exact: true })).toBeVisible();
+  await expect(storage.getByText("磁盘剩余 58.0 GiB · 共 96.0 GiB", { exact: false })).toBeVisible();
   const legend = storage.locator(".legend");
   await expect(legend).toContainText("实例");
   await expect(legend).toContainText("64.0 MiB");

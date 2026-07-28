@@ -443,9 +443,9 @@
         </div>
         <div class="row" style="align-items:baseline;gap:10px;margin:8px 0 12px">
           <span style="font-size:26px;font-weight:700">{formatBytes(knownUsedBytes)}</span>
-          <span class="muted">{#if storageOverview?.diskTotalBytes}{t("data.storage.diskTotal").replace("{total}", formatBytes(storageOverview.diskTotalBytes))}{:else}{t("data.storage.used")}{/if}</span>
-          {#if storageOverview?.diskFreeBytes}
-            <span class="dim" style="margin-left:auto">{t("data.storage.diskFree").replace("{free}", formatBytes(storageOverview.diskFreeBytes))}</span>
+          <span class="muted">{t("data.storage.used")}</span>
+          {#if storageOverview?.diskFreeBytes && storageOverview.diskTotalBytes}
+            <span class="dim" style="margin-left:auto">{t("data.storage.diskLine").replace("{free}", formatBytes(storageOverview.diskFreeBytes)).replace("{total}", formatBytes(storageOverview.diskTotalBytes))}</span>
           {/if}
         </div>
         {#if storageSegments.length > 0}

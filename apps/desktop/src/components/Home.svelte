@@ -67,15 +67,60 @@
   let heroPackKey = "";
   let defaultAccountName = $state("");
   let homeRoot: HTMLElement | undefined = $state();
+  // 首页实例切换:本地记忆选中实例;未选或失效时回退最近运行/首个。
+  let selectedHeroId = $state(
+    (typeof localStorage !== "undefined" && localStorage.getItem("moyumax.home.heroId")) || "",
+  );
 
-  // 主卡片实例:最近运行过的实例,否则列表首个。
   const hero = $derived.by(() => {
     if (instances.length === 0) return null;
+    const selected = instances.find((instance) => instance.id === selectedHeroId);
+    if (selected) return selected;
     const withSession = instances.find((instance) =>
       launchSessions.some((session) => session.instanceId === instance.id),
     );
     return withSession ?? instances[0] ?? null;
   });
+  const heroIndex = $derived(hero ? instances.findIndex((instance) => instance.id === hero.id) : -1);
+
+  function switchHero(delta: number): void {
+    if (instances.length < 2 || !hero) return;
+    const next = (heroIndex + delta + instances.length) % instances.length;
+    selectedHeroId = instances[next]?.id ?? "";
+    if (typeof localStorage !== "undefined") {
+      localStorage.setItem("moyumax.home.heroId", selectedHeroId);
+    }
+  }
+
+  // hero 统计:累计游玩时长(结束会话求和 + 运行中会话计到现在)、最后启动、启动次数。
+  const heroStats = $derived.by(() => {
+    if (!hero) return null;
+    const now = Date.now() / 1000;
+    const sessions = launchSessions.filter((session) => session.instanceId === hero.id);
+    let totalSeconds = 0;
+    let lastLaunch = 0;
+    for (const session of sessions) {
+      const end = session.endedAtUnixSeconds ?? (["starting", "running"].includes(session.state) ? now : null);
+      if (end) totalSeconds += Math.max(0, end - session.startedAtUnixSeconds);
+      lastLaunch = Math.max(lastLaunch, session.startedAtUnixSeconds);
+    }
+    return { totalSeconds, lastLaunch, count: sessions.length };
+  });
+
+  function playTimeLabel(totalSeconds: number): string {
+    const hours = Math.floor(totalSeconds / 3600);
+    const minutes = Math.floor((totalSeconds % 3600) / 60);
+    if (hours > 0) return t("home.session.durationHm").replace("{h}", String(hours)).replace("{m}", String(minutes));
+    if (minutes > 0) return t("home.session.durationM").replace("{m}", String(minutes));
+    return t("home.hero.lessThanMinute");
+  }
+
+  function relativeLabel(unixSeconds: number): string {
+    const delta = Math.max(0, Date.now() / 1000 - unixSeconds);
+    if (delta < 3600) return t("home.hero.agoMinutes").replace("{n}", String(Math.max(1, Math.floor(delta / 60))));
+    if (delta < 86400) return t("home.hero.agoHours").replace("{n}", String(Math.floor(delta / 3600)));
+    return t("home.hero.agoDays").replace("{n}", String(Math.floor(delta / 86400)));
+  }
 
   onMount(async () => {
     homeRoot?.querySelector<HTMLElement>("[data-autofocus]")?.focus();
@@ -284,52 +329,13 @@
     </main>
   {:else}
     <main class="content" bind:this={homeRoot}>
-      <div class="home-grid">
-        <div class="col" style="gap:16px">
-          <section class="panel hero-card">
-            <div class="cube large" aria-hidden="true">
-              {#if heroIcon}<img src={heroIcon} alt="" />{:else}{hero.name.slice(0, 1)}{/if}
-            </div>
-            <div class="hero-meta" style="flex:1">
-              <h1>{hero.name}</h1>
-              <div class="ver">
-                Minecraft {hero.gameVersion} · {loaderLabel(hero)}{#if heroPack} · {heroPack.packName} {heroPack.packVersion}{/if}
-              </div>
-              <div class="launch-row">
-                {#if heroSession}
-                  <button class="btn danger-soft large" disabled={changingInstance} onclick={() => void stopHero()}>
-                    {changingInstance ? t("home.launch.stopping") : t("home.hero.stop")}
-                  </button>
-                  <button class="btn secondary" onclick={() => onManageInstance(hero!, "logs")}>{t("home.launch.logs")}</button>
-                {:else}
-                  <button
-                    class="btn primary large"
-                    data-autofocus="true"
-                    disabled={changingInstance || hero.state !== "ready" || heroInstallingPack}
-                    onclick={() => void startHero()}
-                  >{changingInstance ? t("home.launch.starting") : t("home.hero.launch")}</button>
-                  <button class="acct-chip" title={t("home.hero.accountChipTitle")} onclick={openAccounts}>
-                    {#if shellAccount().loaded && shellAccount().kind !== null}
-                      {@const account = shellAccount()}
-                      {@const avatarUrl = account.avatarFailed ? "" : skinAvatarUrl(account.playerUuid, account.kind)}
-                      <span class="avatar">
-                        {#if avatarUrl}<img src={avatarUrl} alt="" onerror={() => markAvatarFailed()} />{:else}{account.name.slice(0, 1) || "?"}{/if}
-                      </span>
-                      <div>
-                        <div style="font-size:12.5px;font-weight:600">{account.name}</div>
-                        <div style="font-size:11px;color:var(--text-3)">{t("home.hero.accountChipHint")}</div>
-                      </div>
-                    {:else}
-                      <span class="avatar">?</span>
-                      <div>
-                        <div style="font-size:12.5px;font-weight:600">{defaultAccountName || t("home.instance.localAccount")}</div>
-                        <div style="font-size:11px;color:var(--text-3)">{t("home.hero.accountChipHint")}</div>
-                      </div>
-                    {/if}
-                  </button>
-                {/if}
-              </div>
-            </div>
+      <section class="panel hero-card">
+        <div class="cube hero-cube" aria-hidden="true">
+          {#if heroIcon}<img src={heroIcon} alt="" />{:else}{hero.name.slice(0, 1)}{/if}
+        </div>
+        <div class="hero-meta">
+          <div class="row" style="gap:10px">
+            <h1>{hero.name}</h1>
             {#if heroInstallingPack}
               <span class="tag info"><span class="cdot"></span>{t("modpack.stateInstalling")}</span>
             {:else if heroSession}
@@ -339,31 +345,70 @@
             {:else}
               <span class="tag neutral"><span class="cdot"></span>{hero.state}</span>
             {/if}
-          </section>
-          {#if heroInstallingPack}
-            <div class="banner info" role="status"><span>{t("modpack.installingHint")}</span></div>
-          {/if}
-
-          {#if issues.length > 0}
-            <section class="panel pad">
-              <div class="row spread">
-                <div class="panel-title">{t("home.issues.title")}</div>
-                <span class="dim">{t("home.issues.count").replace("{count}", String(issues.length))}</span>
-              </div>
-              {#each issues as issue}
-                <div class="issue-row">
-                  <span class="tag danger" style="flex:none;margin-top:2px">{t("home.issues.crashTag")}</span>
-                  <div class="lr-main">
-                    <div class="lr-name">{t("home.issues.crashName").replace("{name}", issue.instanceName)}</div>
-                    <div class="lr-sub">{issue.report.summary || t("home.issues.crashHint")}</div>
+          </div>
+          <div class="ver">
+            Minecraft {hero.gameVersion} · {loaderLabel(hero)}{#if heroPack} · {heroPack.packName} {heroPack.packVersion}{/if}
+          </div>
+          <div class="hero-stats">
+            {#if heroStats && heroStats.count > 0}
+              <span>{t("home.hero.playTime").replace("{time}", playTimeLabel(heroStats.totalSeconds))}</span>
+              <span class="hero-stat-sep" aria-hidden="true">·</span>
+              <span>{t("home.hero.lastLaunch").replace("{time}", relativeLabel(heroStats.lastLaunch))}</span>
+              <span class="hero-stat-sep" aria-hidden="true">·</span>
+              <span>{t("home.hero.launchCount").replace("{count}", String(heroStats.count))}</span>
+            {:else}
+              <span>{t("home.hero.noSessions")}</span>
+            {/if}
+          </div>
+          <div class="launch-row">
+            {#if heroSession}
+              <button class="btn danger-soft large" disabled={changingInstance} onclick={() => void stopHero()}>
+                {changingInstance ? t("home.launch.stopping") : t("home.hero.stop")}
+              </button>
+              <button class="btn secondary" onclick={() => onManageInstance(hero!, "logs")}>{t("home.launch.logs")}</button>
+            {:else}
+              <button
+                class="btn primary large"
+                data-autofocus="true"
+                disabled={changingInstance || hero.state !== "ready" || heroInstallingPack}
+                onclick={() => void startHero()}
+              >{changingInstance ? t("home.launch.starting") : t("home.hero.launch")}</button>
+              <button class="acct-chip" title={t("home.hero.accountChipTitle")} onclick={openAccounts}>
+                {#if shellAccount().loaded && shellAccount().kind !== null}
+                  {@const account = shellAccount()}
+                  {@const avatarUrl = account.avatarFailed ? "" : skinAvatarUrl(account.playerUuid, account.kind)}
+                  <span class="avatar">
+                    {#if avatarUrl}<img src={avatarUrl} alt="" onerror={() => markAvatarFailed()} />{:else}{account.name.slice(0, 1) || "?"}{/if}
+                  </span>
+                  <div>
+                    <div style="font-size:12.5px;font-weight:600">{account.name}</div>
+                    <div style="font-size:11px;color:var(--text-3)">{t("home.hero.accountChipHint")}</div>
                   </div>
-                  <button class="btn small secondary" onclick={() => onOpenCrash(issue.report)}>{t("home.issues.viewDiagnostics")}</button>
-                </div>
-              {/each}
-            </section>
-          {/if}
+                {:else}
+                  <span class="avatar">?</span>
+                  <div>
+                    <div style="font-size:12.5px;font-weight:600">{defaultAccountName || t("home.instance.localAccount")}</div>
+                    <div style="font-size:11px;color:var(--text-3)">{t("home.hero.accountChipHint")}</div>
+                  </div>
+                {/if}
+              </button>
+              <button class="btn ghost" onclick={() => onManageInstance(hero!)}>{t("home.launch.manage")}</button>
+            {/if}
+          </div>
         </div>
+        {#if instances.length > 1}
+          <div class="hero-switch">
+            <button class="hero-switch-btn" aria-label={t("home.hero.switchPrev")} onclick={() => switchHero(-1)}>‹</button>
+            <span class="dim">{t("home.hero.position").replace("{current}", String(heroIndex + 1)).replace("{total}", String(instances.length))}</span>
+            <button class="hero-switch-btn" aria-label={t("home.hero.switchNext")} onclick={() => switchHero(1)}>›</button>
+          </div>
+        {/if}
+      </section>
+      {#if heroInstallingPack}
+        <div class="banner info" role="status" style="margin-top:16px"><span>{t("modpack.installingHint")}</span></div>
+      {/if}
 
+      <div class="home-grid" style="margin-top:16px">
         <div class="col" style="gap:16px">
           <section class="panel pad">
             <div class="row spread">
@@ -395,6 +440,27 @@
             {/each}
           </section>
 
+          {#if issues.length > 0}
+            <section class="panel pad">
+              <div class="row spread">
+                <div class="panel-title">{t("home.issues.title")}</div>
+                <span class="dim">{t("home.issues.count").replace("{count}", String(issues.length))}</span>
+              </div>
+              {#each issues as issue}
+                <div class="issue-row">
+                  <span class="tag danger" style="flex:none;margin-top:2px">{t("home.issues.crashTag")}</span>
+                  <div class="lr-main">
+                    <div class="lr-name">{t("home.issues.crashName").replace("{name}", issue.instanceName)}</div>
+                    <div class="lr-sub">{issue.report.summary || t("home.issues.crashHint")}</div>
+                  </div>
+                  <button class="btn small secondary" onclick={() => onOpenCrash(issue.report)}>{t("home.issues.viewDiagnostics")}</button>
+                </div>
+              {/each}
+            </section>
+          {/if}
+        </div>
+
+        <div class="col" style="gap:16px">
           {#if lastSession}
             <section class="panel pad">
               <div class="panel-title">{t("home.session.title")}</div>
@@ -448,18 +514,73 @@
     }
   }
   .hero-card {
-    padding: 26px 28px;
+    position: relative;
+    padding: 32px 36px;
     display: flex;
-    gap: 22px;
+    gap: 26px;
     align-items: center;
+    min-height: 208px;
+    flex-wrap: wrap;
+  }
+  .hero-cube {
+    width: 96px;
+    height: 96px;
+    font-size: 34px;
+    flex: none;
+  }
+  .hero-meta {
+    flex: 1 1 220px;
+    min-width: 0;
   }
   .hero-meta h1 {
-    font-size: 22px;
+    font-size: 26px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
   }
   .hero-meta .ver {
     color: var(--text-2);
     font-size: 13px;
     margin-top: 2px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .hero-stats {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin-top: 8px;
+    color: var(--text-3);
+    font-size: 12.5px;
+    flex-wrap: wrap;
+  }
+  .hero-stat-sep {
+    color: var(--text-3);
+  }
+  .hero-switch {
+    position: absolute;
+    top: 14px;
+    right: 14px;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+  .hero-switch-btn {
+    width: 28px;
+    height: 28px;
+    display: grid;
+    place-items: center;
+    border: 1px solid var(--glass-border);
+    border-radius: var(--r);
+    background: rgba(0, 0, 0, 0.18);
+    color: var(--text-2);
+    cursor: pointer;
+    font-size: 14px;
+  }
+  .hero-switch-btn:hover {
+    background: var(--glass-strong);
+    color: var(--text-1);
   }
   .launch-row {
     display: flex;

@@ -47,7 +47,7 @@ test("UI-LAUNCH-001 首页可以启动和停止本地实例", async ({ page }) =
       left: Number.parseFloat(style.paddingLeft),
     };
   });
-  expect(heroPadding).toEqual({ top: 26, right: 28, bottom: 26, left: 28 });
+  expect(heroPadding).toEqual({ top: 32, right: 36, bottom: 32, left: 36 });
   await expect(page.locator(".hero-card .tag.ok")).toContainText("可启动");
 
   const startButton = page.getByRole("button", { name: "启动游戏" });
