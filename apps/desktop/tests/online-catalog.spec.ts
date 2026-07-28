@@ -129,6 +129,38 @@ test("M31-CAT-UI-005 自由下载选择版本、文件名与路径", async ({ pa
   await expect(page.getByText("continuity-custom.jar", { exact: false })).toBeVisible();
 });
 
+test("M36-CAT-UI-001 版本选择按游戏版本分组并标注推荐", async ({ page }) => {
+  await page.getByRole("searchbox", { name: "搜索在线资源" }).fill("continuity");
+  await page.getByRole("button", { name: "搜索", exact: true }).click();
+  await page.getByRole("button", { name: "下载", exact: true }).first().click();
+
+  const versionSelect = page.getByRole("dialog").getByRole("combobox", { name: "下载版本" });
+  const groupLabels = await versionSelect.locator("optgroup").evaluateAll((groups) =>
+    groups.map((group) => group.label),
+  );
+  // 与实例(26.2)匹配的组置顶并标推荐,其余版本组全量保留
+  expect(groupLabels[0]).toContain("26.2");
+  expect(groupLabels[0]).toContain("推荐");
+  expect(groupLabels).toContain("26.1");
+});
+
+test("M36-CAT-UI-002 选择自定义目录立即拉起目录选择器", async ({ page }) => {
+  await page.evaluate(() => {
+    window.localStorage.setItem("moyumax.browser.pickedDirectory", "D:\\Mods\\custom");
+  });
+  await page.getByRole("searchbox", { name: "搜索在线资源" }).fill("continuity");
+  await page.getByRole("button", { name: "搜索", exact: true }).click();
+  await page.getByRole("button", { name: "下载", exact: true }).first().click();
+
+  const dialog = page.getByRole("dialog");
+  await dialog.getByRole("radio", { name: "自定义目录" }).check();
+  await expect(dialog.getByText("D:\\Mods\\custom", { exact: true })).toBeVisible();
+
+  await dialog.getByRole("textbox", { name: "保存文件名" }).fill("continuity-path.jar");
+  await dialog.getByRole("button", { name: "下载", exact: true }).click();
+  await expect(page.getByText("continuity-path.jar", { exact: false })).toBeVisible();
+});
+
 test("UI-CAT-001 在线目录在 960x600 和 200% 放大下不溢出", async ({ page }) => {
   await page.setViewportSize({ width: 960, height: 600 });
   await page.getByRole("searchbox", { name: "搜索在线资源" }).fill("continuity");

@@ -1,0 +1,150 @@
+/**
+ * 在线资源版本分组(对齐 PCL-CE 的资源详情逻辑):
+ * - 按 MC 精确版本分组(1.21.1 / 1.20.1),组内按发布日期降序,组按 MC 版本降序。
+ * - 模组项目涉及多个加载器时,按「加载器 × 精确版本」复合分组(Fabric 1.21.1)。
+ * - 整合包版本强制只归属其声明中最高的一个 MC 版本。
+ * - 快照(24w14a)与无法识别的版本归入特殊组沉底。
+ * - 与目标实例精确匹配的组置顶并标记推荐。
+ */
+
+import type { ModrinthVersionSummary } from "./runtime";
+
+export type VersionGroupKind = "mod" | "modpack" | "shader" | "resourcepack";
+
+export interface VersionGroupTarget {
+  gameVersion: string;
+  loaderKind: string;
+}
+
+export interface VersionGroup {
+  key: string;
+  label: string;
+  recommended: boolean;
+  versions: ModrinthVersionSummary[];
+}
+
+export const SNAPSHOT_GROUP_KEY = "__snapshot__";
+export const UNKNOWN_GROUP_KEY = "__unknown__";
+
+const SNAPSHOT_PATTERN = /^\d{2}w\d{2}[a-z]$/;
+
+/** 标准 MC 版本:1.21.1 / 1.20 / b1.7.3(含小数字段)。 */
+function isStandardGameVersion(value: string): boolean {
+  return /^b?\d+\.\d+/.test(value);
+}
+
+export function compareGameVersionsDescending(left: string, right: string): number {
+  const leftParts = left.split(".");
+  const rightParts = right.split(".");
+  const length = Math.max(leftParts.length, rightParts.length);
+  for (let index = 0; index < length; index += 1) {
+    const a = leftParts[index] ?? "";
+    const b = rightParts[index] ?? "";
+    const aNumber = Number(a);
+    const bNumber = Number(b);
+    if (a === b) continue;
+    if (!Number.isNaN(aNumber) && !Number.isNaN(bNumber) && aNumber !== bNumber) {
+      return bNumber - aNumber;
+    }
+    if (!Number.isNaN(aNumber)) return -1;
+    if (!Number.isNaN(bNumber)) return 1;
+    return b.localeCompare(a);
+  }
+  return 0;
+}
+
+function byDateDescending(left: ModrinthVersionSummary, right: ModrinthVersionSummary): number {
+  return right.datePublished.localeCompare(left.datePublished);
+}
+
+/** 版本声明中最高的一个 MC 版本(整合包强制唯一归属);无标准版本时返回 null。 */
+export function primaryGameVersion(version: ModrinthVersionSummary): string | null {
+  const standards = version.gameVersions.filter(isStandardGameVersion);
+  if (standards.length === 0) return null;
+  return [...standards].sort(compareGameVersionsDescending)[0] ?? null;
+}
+
+function specialGroupKey(version: ModrinthVersionSummary): string {
+  return version.gameVersions.some((candidate) => SNAPSHOT_PATTERN.test(candidate))
+    ? SNAPSHOT_GROUP_KEY
+    : UNKNOWN_GROUP_KEY;
+}
+
+export function buildVersionGroups(
+  versions: ModrinthVersionSummary[],
+  options: { kind: VersionGroupKind; target?: VersionGroupTarget | null; collapseLoaders?: boolean },
+): VersionGroup[] {
+  const { kind, target = null, collapseLoaders = false } = options;
+  const buckets = new Map<string, ModrinthVersionSummary[]>();
+  const push = (key: string, version: ModrinthVersionSummary): void => {
+    const bucket = buckets.get(key) ?? [];
+    bucket.push(version);
+    buckets.set(key, bucket);
+  };
+
+  // 模组且项目跨多个加载器时,分组键加加载器前缀(加载器 × 精确版本);
+  // 已按单个加载器过滤时回到纯版本分组,避免冗余前缀。
+  const allLoaders = [
+    ...new Set(versions.flatMap((version) => version.loaders)),
+  ].sort();
+  const compoundLoader = kind === "mod" && allLoaders.length > 1 && !collapseLoaders;
+
+  for (const version of versions) {
+    if (kind === "modpack") {
+      const primary = primaryGameVersion(version);
+      push(primary ?? specialGroupKey(version), version);
+      continue;
+    }
+    const standards = version.gameVersions.filter(isStandardGameVersion);
+    if (standards.length === 0) {
+      push(specialGroupKey(version), version);
+      continue;
+    }
+    const loaders = compoundLoader ? version.loaders : [""];
+    for (const gameVersion of standards) {
+      for (const loader of loaders) {
+        push(compoundLoader ? `${loader} ${gameVersion}` : gameVersion, version);
+      }
+    }
+  }
+
+  const isRecommended = (key: string): boolean => {
+    if (!target || kind === "modpack") return false;
+    if (compoundLoader) {
+      return key === `${target.loaderKind} ${target.gameVersion}`;
+    }
+    return key === target.gameVersion;
+  };
+
+  return [...buckets.entries()]
+    .sort((a, b) => {
+      const aSpecial = a[0] === SNAPSHOT_GROUP_KEY || a[0] === UNKNOWN_GROUP_KEY;
+      const bSpecial = b[0] === SNAPSHOT_GROUP_KEY || b[0] === UNKNOWN_GROUP_KEY;
+      if (aSpecial !== bSpecial) return aSpecial ? 1 : -1;
+      if (aSpecial) return a[0] === UNKNOWN_GROUP_KEY ? 1 : -1;
+      const aVersion = compoundLoader ? a[0].split(" ").pop() ?? a[0] : a[0];
+      const bVersion = compoundLoader ? b[0].split(" ").pop() ?? b[0] : b[0];
+      const byVersion = compareGameVersionsDescending(aVersion, bVersion);
+      if (byVersion !== 0) return byVersion;
+      return a[0].localeCompare(b[0]);
+    })
+    .map(([key, groupVersions]) => ({
+      key,
+      label: key,
+      recommended: isRecommended(key),
+      versions: [...groupVersions].sort(byDateDescending),
+    }))
+    .sort((a, b) => Number(b.recommended) - Number(a.recommended));
+}
+
+/** 版本选择器 option 文本:版本号 + 非 release 类型标注。 */
+export function versionOptionLabel(version: ModrinthVersionSummary): string {
+  return version.versionType !== "release"
+    ? `${version.versionNumber} (${version.versionType})`
+    : version.versionNumber;
+}
+
+/** 文件行的完整游戏版本标签(涵盖该版本支持的全部 MC 版本,顿号分隔)。 */
+export function versionGameTags(version: ModrinthVersionSummary): string {
+  return [...version.gameVersions].sort(compareGameVersionsDescending).join("、");
+}

@@ -10,6 +10,14 @@
     type FavoriteProjectInput,
   } from "../favorites.svelte";
   import { mcmodEntryFor, mcmodSearchUrl } from "../mcmod-zh";
+  import {
+    buildVersionGroups,
+    compareGameVersionsDescending,
+    SNAPSHOT_GROUP_KEY,
+    UNKNOWN_GROUP_KEY,
+    versionGameTags,
+    versionOptionLabel,
+  } from "../version-groups";
   import type {
     ContentInstallPreview,
     ContentUpdateInfo,
@@ -157,7 +165,6 @@
   let downloadDialog = $state<HTMLElement | null>(null);
 
   // ---- 资源详情副视图：简介卡 + 版本筛选 + 按 MC 版本分组的文件列表 ----
-  const UNKNOWN_GROUP_KEY = "unknown";
   let detailProject = $state<ModrinthProjectSummary | null>(null);
   let detailType = $state<ModrinthProjectType>("mod");
   let detailVersions = $state<ModrinthVersionSummary[]>([]);
@@ -172,26 +179,6 @@
     key: string;
     isSelected: boolean;
     versions: ModrinthVersionSummary[];
-  }
-
-  function compareGameVersionsDescending(left: string, right: string): number {
-    const leftParts = left.split(".");
-    const rightParts = right.split(".");
-    const length = Math.max(leftParts.length, rightParts.length);
-    for (let index = 0; index < length; index += 1) {
-      const a = leftParts[index] ?? "";
-      const b = rightParts[index] ?? "";
-      const aNumber = Number(a);
-      const bNumber = Number(b);
-      if (a === b) continue;
-      if (!Number.isNaN(aNumber) && !Number.isNaN(bNumber) && aNumber !== bNumber) {
-        return bNumber - aNumber;
-      }
-      if (!Number.isNaN(aNumber)) return -1;
-      if (!Number.isNaN(bNumber)) return 1;
-      return b.localeCompare(a);
-    }
-    return 0;
   }
 
   /** 筛选 chip 命中规则：归并后的大版本 chip 以前缀匹配（1.21 覆盖 1.21.1）。 */
@@ -223,28 +210,59 @@
         detailType !== "mod" || detailLoaderFilter === "" || version.loaders.includes(detailLoaderFilter);
       return gameMatch && loaderMatch;
     });
-    const buckets = new Map<string, ModrinthVersionSummary[]>();
-    for (const version of filtered) {
-      const targets = version.gameVersions.length > 0 ? version.gameVersions : [UNKNOWN_GROUP_KEY];
-      for (const target of targets) {
-        if (detailGameFilter !== "" && !gameVersionMatchesFilter(target, detailGameFilter)) continue;
-        const bucket = buckets.get(target) ?? [];
-        bucket.push(version);
-        buckets.set(target, bucket);
-      }
-    }
-    const selectedGameVersion = detailType === "modpack" ? "" : (selectedInstance()?.gameVersion ?? "");
-    return [...buckets.entries()]
-      .sort((a, b) => {
-        if (a[0] === UNKNOWN_GROUP_KEY) return 1;
-        if (b[0] === UNKNOWN_GROUP_KEY) return -1;
-        return compareGameVersionsDescending(a[0], b[0]);
-      })
-      .map(([key, versions]) => ({
-        key,
-        isSelected: key === selectedGameVersion,
-        versions: [...versions].sort((a, b) => b.datePublished.localeCompare(a.datePublished)),
-      }));
+    const instance = selectedInstance();
+    // 对齐 PCL-CE:按 MC 精确版本分组(多加载器模组为 加载器×版本),
+    // 整合包版本只归最高 MC 版本,匹配实例的组置顶为「所选版本」。
+    return buildVersionGroups(filtered, {
+      kind: detailType,
+      target:
+        instance && detailType !== "modpack"
+          ? { gameVersion: instance.gameVersion, loaderKind: instance.loaderKind }
+          : null,
+      collapseLoaders: detailLoaderFilter !== "",
+    }).map((group) => ({
+      key: group.key,
+      isSelected: group.recommended,
+      versions: group.versions,
+    }));
+  });
+
+  /** 分组标题:快照与其他组用本地化名称,其余为版本/加载器×版本键。 */
+  function groupLabel(key: string): string {
+    if (key === SNAPSHOT_GROUP_KEY) return t("resources.versions.snapshotGroup");
+    if (key === UNKNOWN_GROUP_KEY) return t("resources.versions.otherGroup");
+    return key;
+  }
+
+  function optgroupLabel(group: { key: string; recommended: boolean }): string {
+    return group.recommended
+      ? `${groupLabel(group.key)} · ${t("resources.versions.recommended")}`
+      : groupLabel(group.key);
+  }
+
+  // 四个版本选择点的分组(与实例匹配的组置顶推荐;整合包不做实例推荐)。
+  const previewGroups = $derived.by(() => {
+    const instance = selectedInstance();
+    return buildVersionGroups(previewVersions, {
+      kind: "mod",
+      target: instance ? { gameVersion: instance.gameVersion, loaderKind: instance.loaderKind } : null,
+    });
+  });
+  const packGroups = $derived(buildVersionGroups(packVersions, { kind: "modpack" }));
+  const resourceGroups = $derived.by(() => {
+    const instance = selectedInstance();
+    const installType = catalogView === "detail" ? detailType : catalogType;
+    return buildVersionGroups(resourceVersions, {
+      kind: installType,
+      target: instance ? { gameVersion: instance.gameVersion, loaderKind: instance.loaderKind } : null,
+    });
+  });
+  const downloadGroups = $derived.by(() => {
+    const instance = selectedInstance();
+    return buildVersionGroups(downloadVersions, {
+      kind: catalogType,
+      target: instance ? { gameVersion: instance.gameVersion, loaderKind: instance.loaderKind } : null,
+    });
   });
 
   /** 折叠卡规则：单组默认展开；带目标实例时「所选版本」组自动展开。 */
@@ -735,17 +753,10 @@
     previewVersionId = "";
     previewVersions = [];
     try {
-      const instance = selectedInstance();
-      const versionFilter = instance
-        ? runtime.listModrinthVersions(
-            project.projectId,
-            instance.gameVersion || undefined,
-            instance.loaderKind !== "vanilla" ? instance.loaderKind : undefined,
-          ).catch(() => [] as ModrinthVersionSummary[])
-        : Promise.resolve([] as ModrinthVersionSummary[]);
+      // 版本列表全量拉取,按 MC 版本分组展示(与实例匹配的组置顶推荐),不再按实例过滤。
       const [previewResult, versions] = await Promise.all([
         runtime.previewModrinthInstall(selectedInstanceId, project.projectId, []),
-        versionFilter,
+        runtime.listModrinthVersions(project.projectId).catch(() => [] as ModrinthVersionSummary[]),
       ]);
       preview = previewResult;
       previewVersions = versions;
@@ -916,17 +927,19 @@
     catalogError = "";
     resourceInstallDone = "";
     try {
-      const versions = await runtime.listModrinthVersions(
-        project.projectId,
-        instance.gameVersion || undefined,
-      );
+      // 全量版本,按 MC 版本分组,与实例匹配的组置顶推荐。
+      const versions = await runtime.listModrinthVersions(project.projectId);
       if (versions.length === 0) {
         catalogError = t("resources.download.noVersions");
         resourceInstallTarget = null;
         return;
       }
       resourceVersions = versions;
-      resourceVersionId = versions[0]?.id ?? "";
+      const groups = buildVersionGroups(versions, {
+        kind: installType,
+        target: { gameVersion: instance.gameVersion, loaderKind: instance.loaderKind },
+      });
+      resourceVersionId = groups[0]?.versions[0]?.id ?? versions[0]?.id ?? "";
       await tick();
       focusDialog(resourceDialog);
     } catch (error) {
@@ -983,18 +996,19 @@
     const instance = selectedInstance();
     downloadDest = instance ? "instance" : "custom";
     try {
-      const versions = await runtime.listModrinthVersions(
-        project.projectId,
-        catalogType === "modpack" ? undefined : filterVersion || undefined,
-        catalogType === "mod" ? filterLoader || undefined : undefined,
-      );
+      // 全量版本,按 MC 版本分组展示,与实例匹配的组置顶推荐。
+      const versions = await runtime.listModrinthVersions(project.projectId);
       if (versions.length === 0) {
         catalogError = t("resources.download.noVersions");
         downloadTarget = null;
         return;
       }
       downloadVersions = versions;
-      selectDownloadVersion(versions[0]?.id ?? "");
+      const groups = buildVersionGroups(versions, {
+        kind: catalogType,
+        target: instance ? { gameVersion: instance.gameVersion, loaderKind: instance.loaderKind } : null,
+      });
+      selectDownloadVersion(groups[0]?.versions[0]?.id ?? versions[0]?.id ?? "");
       await tick();
       focusDialog(downloadDialog);
     } catch (error) {
@@ -1026,7 +1040,17 @@
     if (selected) downloadCustomDir = selected;
   }
 
+  /** 选择自定义目录:每次都立即拉起系统目录选择器(对齐 PCL 的另存为),进程内记忆上次所选。 */
+  async function selectCustomDest(): Promise<void> {
+    downloadDest = "custom";
+    if (!downloadCustomDir) await pickDownloadDir();
+  }
+
   async function confirmDownload(): Promise<void> {
+    if (downloadDest === "custom" && !downloadCustomDir) {
+      await pickDownloadDir();
+      if (!downloadCustomDir) return;
+    }
     const targetDir = downloadTargetDir();
     if (!downloadVersionId || !targetDir || !downloadFileName.trim()) return;
     downloading = true;
@@ -1423,7 +1447,7 @@
                       <div class="dv-group">
                         <button class="dv-group-head" aria-expanded={open} onclick={() => toggleDetailGroup(group, detailGroups.length)}>
                           <span class="dv-chevron">{open ? "▾" : "▸"}</span>
-                          <strong>{group.key === UNKNOWN_GROUP_KEY ? t("resources.detail.unknownGroup") : `Minecraft ${group.key}`}</strong>
+                          <strong>{group.key === SNAPSHOT_GROUP_KEY || group.key === UNKNOWN_GROUP_KEY ? groupLabel(group.key) : `Minecraft ${group.key}`}</strong>
                           {#if group.isSelected}
                             <span class="tag accent">{t("resources.detail.selectedGroup")}</span>
                           {/if}
@@ -1434,8 +1458,9 @@
                             {#each group.versions as version}
                               <article class="detail-file-row">
                                 <div class="dv-file-main">
-                                  <strong>{version.versionNumber}{version.versionType !== "release" ? ` (${version.versionType})` : ""}</strong>
+                                  <strong>{versionOptionLabel(version)}</strong>
                                   <small>{formatDate(version.datePublished)} · {t("resources.catalog.downloads").replace("{count}", formatDownloads(version.downloads))}</small>
+                                  <small class="dv-tags">{versionGameTags(version)}{#if detailType === "mod" && version.loaders.length > 0} · {version.loaders.map(loaderName).join("、")}{/if}</small>
                                 </div>
                                 <button
                                   class="btn small secondary"
@@ -1716,8 +1741,12 @@
               <span class="field-label">{t("resources.download.versionLabel")}</span>
               <select class="input" value={previewVersionId} disabled={Boolean(previewingProject)} onchange={(event) => void selectPreviewVersion((event.currentTarget as HTMLSelectElement).value)} aria-label={t("resources.download.versionAria")}>
                 <option value="">{t("resources.versions.auto")}</option>
-                {#each previewVersions as version}
-                  <option value={version.id}>{version.versionNumber}{version.versionType !== "release" ? ` (${version.versionType})` : ""}</option>
+                {#each previewGroups as group}
+                  <optgroup label={optgroupLabel(group)}>
+                    {#each group.versions as version}
+                      <option value={version.id}>{versionOptionLabel(version)}</option>
+                    {/each}
+                  </optgroup>
                 {/each}
               </select>
             </label>
@@ -1796,8 +1825,12 @@
               <span class="field-label">{t("resources.download.versionLabel")}</span>
               <select class="input" value={packVersionId} disabled={Boolean(packPreviewing) || packInstalling} onchange={(event) => void selectPackVersion((event.currentTarget as HTMLSelectElement).value)} aria-label={t("resources.download.versionAria")}>
                 <option value="">{t("resources.versions.auto")}</option>
-                {#each packVersions as version}
-                  <option value={version.id}>{version.versionNumber}{version.versionType !== "release" ? ` (${version.versionType})` : ""}</option>
+                {#each packGroups as group}
+                  <optgroup label={optgroupLabel(group)}>
+                    {#each group.versions as version}
+                      <option value={version.id}>{versionOptionLabel(version)}</option>
+                    {/each}
+                  </optgroup>
                 {/each}
               </select>
             </label>
@@ -1845,8 +1878,12 @@
             <label class="field">
               <span class="field-label">{t("resources.download.versionLabel")}</span>
               <select class="input" value={resourceVersionId} disabled={Boolean(resourceInstalling)} onchange={(event) => { resourceVersionId = (event.currentTarget as HTMLSelectElement).value; }} aria-label={t("resources.download.versionAria")}>
-                {#each resourceVersions as version}
-                  <option value={version.id}>{version.versionNumber}{version.versionType !== "release" ? ` (${version.versionType})` : ""}</option>
+                {#each resourceGroups as group}
+                  <optgroup label={optgroupLabel(group)}>
+                    {#each group.versions as version}
+                      <option value={version.id}>{versionOptionLabel(version)}</option>
+                    {/each}
+                  </optgroup>
                 {/each}
               </select>
             </label>
@@ -1890,8 +1927,12 @@
               <label class="field">
                 <span class="field-label">{t("resources.download.versionLabel")}</span>
                 <select class="input" value={downloadVersionId} onchange={(event) => selectDownloadVersion((event.currentTarget as HTMLSelectElement).value)} aria-label={t("resources.download.versionAria")}>
-                  {#each downloadVersions as version}
-                    <option value={version.id}>{version.versionNumber}{version.versionType !== "release" ? ` (${version.versionType})` : ""}</option>
+                  {#each downloadGroups as group}
+                    <optgroup label={optgroupLabel(group)}>
+                      {#each group.versions as version}
+                        <option value={version.id}>{versionOptionLabel(version)}</option>
+                      {/each}
+                    </optgroup>
                   {/each}
                 </select>
               </label>
@@ -1907,7 +1948,7 @@
                   </label>
                 {/if}
                 <label class="download-dest-option">
-                  <input type="radio" name="download-dest" checked={downloadDest === "custom"} onchange={() => { downloadDest = "custom"; }} />
+                  <input type="radio" name="download-dest" checked={downloadDest === "custom"} onchange={() => void selectCustomDest()} />
                   <span>{t("resources.download.destCustom")}</span>
                 </label>
                 {#if downloadDest === "custom"}
@@ -1925,7 +1966,7 @@
         </div>
         <div class="m-acts">
           <button class="btn secondary" data-dialog-autofocus disabled={downloading} onclick={() => { downloadTarget = null; }}>{t("common.cancel")}</button>
-          <button class="btn primary" disabled={downloading || downloadLoadingVersions || !downloadVersionId || !downloadFileName.trim() || (downloadDest === "custom" && !downloadCustomDir)} onclick={() => void confirmDownload()}>{downloading ? t("resources.download.running") : t("resources.download.confirm")}</button>
+          <button class="btn primary" disabled={downloading || downloadLoadingVersions || !downloadVersionId || !downloadFileName.trim()} onclick={() => void confirmDownload()}>{downloading ? t("resources.download.running") : t("resources.download.confirm")}</button>
         </div>
       </div>
     </div>
@@ -2193,6 +2234,11 @@
     color: var(--text-3);
     font-size: 11.5px;
     font-variant-numeric: tabular-nums;
+  }
+  .dv-file-main .dv-tags {
+    color: var(--text-2);
+    white-space: normal;
+    overflow-wrap: anywhere;
   }
 
   /* ---- 安装确认 modal（mockup 05 窗口 3） ---- */
