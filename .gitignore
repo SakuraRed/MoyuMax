@@ -52,3 +52,6 @@ desktop.ini
 
 # 安装器运行日志（本地产物）
 *.jar.log
+
+# 本地运行产物与验证截图
+output/
