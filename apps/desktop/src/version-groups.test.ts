@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import type { ModrinthVersionSummary } from "./runtime";
 import {
   buildVersionGroups,
+  formatGameVersionRange,
   primaryGameVersion,
   versionGameTags,
   versionOptionLabel,
@@ -101,6 +102,28 @@ describe("buildVersionGroups", () => {
       target: { gameVersion: "1.21.1", loaderKind: "neoforge" },
     });
     expect(groups[0]?.recommended).toBe(false);
+  });
+});
+
+describe("formatGameVersionRange", () => {
+  it("连续大版本合并区间,断档另起段", () => {
+    expect(
+      formatGameVersionRange(["1.12.2", "1.13.2", "1.14.4", "1.15.2", "1.16.5", "26.2"]),
+    ).toBe("1.12.2-1.16.5,26.2");
+  });
+
+  it("不同主版本不相邻", () => {
+    expect(formatGameVersionRange(["1.21.1", "26.2"])).toBe("1.21.1,26.2");
+  });
+
+  it("单一大版本的多个精确版本并成区间", () => {
+    expect(formatGameVersionRange(["26.1", "26.2"])).toBe("26.1-26.2");
+    expect(formatGameVersionRange(["1.20.1", "1.20.4", "1.21.1"])).toBe("1.20.1-1.21.1");
+  });
+
+  it("单个版本原样,快照忽略", () => {
+    expect(formatGameVersionRange(["26.2"])).toBe("26.2");
+    expect(formatGameVersionRange(["24w14a", "26.2"])).toBe("26.2");
   });
 });
 

@@ -835,6 +835,8 @@ export const zhTW: Record<string, string> = {
   "resources.versions.recommended": "推薦",
   "resources.versions.snapshotGroup": "快照版",
   "resources.versions.otherGroup": "其他",
+  "resources.versions.groupCount": "{count} 個版本",
+  "resources.versions.pickPlaceholder": "選擇版本",
   "resources.catalog.packFiles": "{count} 個檔案 · {size}",
   "resources.catalog.confirmInstall": "確認安裝",
   "resources.catalog.packDone": "「{name}」安裝完成",

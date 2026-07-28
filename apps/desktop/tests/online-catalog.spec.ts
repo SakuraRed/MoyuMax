@@ -96,11 +96,13 @@ test("M35-CAT-UI-001 资源包安装可挑选版本", async ({ page }) => {
   await page.getByRole("button", { name: "安装", exact: true }).click();
 
   const dialog = page.getByRole("dialog");
-  const versionSelect = dialog.getByRole("combobox", { name: "下载版本" });
-  await expect(versionSelect).toBeVisible();
-  const options = await versionSelect.locator("option").allTextContents();
-  expect(options.length).toBeGreaterThan(1);
-  await versionSelect.selectOption({ index: 1 });
+  const versionPicker = dialog.getByRole("button", { name: "下载版本" });
+  await expect(versionPicker).toBeVisible();
+  await versionPicker.click();
+  const panel = dialog.getByRole("listbox", { name: "下载版本" });
+  // 一级先看到游戏版本组,点进组后再选具体版本
+  await panel.getByRole("option", { name: /26\.1/ }).click();
+  await panel.getByRole("option", { name: /3\.0\.1/ }).click();
   await dialog.getByRole("button", { name: "确认安装" }).click();
   await expect(page.getByText("已安装到", { exact: false })).toBeVisible();
 });
@@ -118,7 +120,7 @@ test("M31-CAT-UI-005 自由下载选择版本、文件名与路径", async ({ pa
 
   const dialog = page.getByRole("dialog");
   await expect(dialog.getByRole("heading", { name: "下载 Continuity" })).toBeVisible();
-  await expect(dialog.getByRole("combobox", { name: "下载版本" })).toBeVisible();
+  await expect(dialog.getByRole("button", { name: "下载版本" })).toBeVisible();
   await expect(dialog.getByRole("textbox", { name: "保存文件名" })).toHaveValue("continuity-3.0.2+26.2.jar");
 
   await dialog.getByRole("textbox", { name: "保存文件名" }).fill("continuity-custom.jar");
@@ -134,14 +136,17 @@ test("M36-CAT-UI-001 版本选择按游戏版本分组并标注推荐", async ({
   await page.getByRole("button", { name: "搜索", exact: true }).click();
   await page.getByRole("button", { name: "下载", exact: true }).first().click();
 
-  const versionSelect = page.getByRole("dialog").getByRole("combobox", { name: "下载版本" });
-  const groupLabels = await versionSelect.locator("optgroup").evaluateAll((groups) =>
-    groups.map((group) => (group as HTMLOptGroupElement).label),
-  );
-  // 与实例(26.2)匹配的组置顶并标推荐,其余版本组全量保留
-  expect(groupLabels[0]).toContain("26.2");
-  expect(groupLabels[0]).toContain("推荐");
-  expect(groupLabels).toContain("26.1");
+  const dialog = page.getByRole("dialog");
+  await dialog.getByRole("button", { name: "下载版本" }).click();
+  const panel = dialog.getByRole("listbox", { name: "下载版本" });
+  const rows = panel.getByRole("option");
+  await expect(rows.first()).toContainText("26.2");
+  await expect(rows.first()).toContainText("推荐");
+  await expect(panel.getByRole("option", { name: /26\.1/ })).toBeVisible();
+
+  // 默认折叠:点开游戏版本组后才能看到具体版本
+  await rows.first().click();
+  await expect(panel.getByRole("option", { name: /3\.0\.2/ })).toBeVisible();
 });
 
 test("M36-CAT-UI-002 选择自定义目录立即拉起目录选择器", async ({ page }) => {

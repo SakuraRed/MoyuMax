@@ -378,11 +378,35 @@
     tasksPaused = paused;
   }
 
+  // 静默轮询的去重守卫:快照未变时不替换 state 引用,避免每秒全页重渲染
+  // (弹层/选择器交互期间被反复重建是"悬浮窗卡死后恢复"的根因)。
+  function sameSnapshot(left: unknown, right: unknown): boolean {
+    if (left === right) return true;
+    try {
+      return JSON.stringify(left) === JSON.stringify(right);
+    } catch {
+      return false;
+    }
+  }
+
   async function refreshHomeStateSilently(): Promise<void> {
     if (homeRefreshRunning) return;
     homeRefreshRunning = true;
     try {
-      await refreshHomeState();
+      const [nextTasks, nextContentTasks, nextInstances, nextSessions, nextCrashReports, paused] = await Promise.all([
+        runtime.getInstallTasks(),
+        runtime.getContentInstallTasks(),
+        runtime.listInstances(),
+        runtime.listLaunchSessions(),
+        runtime.listCrashReports(),
+        runtime.getTasksPaused(),
+      ]);
+      if (!sameSnapshot(tasks, nextTasks)) tasks = nextTasks;
+      if (!sameSnapshot(contentTasks, nextContentTasks)) contentTasks = nextContentTasks;
+      if (!sameSnapshot(instances, nextInstances)) instances = nextInstances;
+      if (!sameSnapshot(launchSessions, nextSessions)) launchSessions = nextSessions;
+      if (!sameSnapshot(crashReports, nextCrashReports)) crashReports = nextCrashReports;
+      if (tasksPaused !== paused) tasksPaused = paused;
     } catch {
       // 本地实例列表保持最后一次成功快照，显式操作失败时由首页显示原因。
     } finally {
@@ -392,11 +416,14 @@
 
   async function refreshTasksSilently(): Promise<void> {
     try {
-      [tasks, contentTasks, tasksPaused] = await Promise.all([
+      const [nextTasks, nextContentTasks, paused] = await Promise.all([
         runtime.getInstallTasks(),
         runtime.getContentInstallTasks(),
         runtime.getTasksPaused(),
       ]);
+      if (!sameSnapshot(tasks, nextTasks)) tasks = nextTasks;
+      if (!sameSnapshot(contentTasks, nextContentTasks)) contentTasks = nextContentTasks;
+      if (tasksPaused !== paused) tasksPaused = paused;
     } catch {
       // 可交互页面保持可用，显式进入任务中心时再显示读取错误。
     }

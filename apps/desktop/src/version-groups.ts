@@ -148,3 +148,69 @@ export function versionOptionLabel(version: ModrinthVersionSummary): string {
 export function versionGameTags(version: ModrinthVersionSummary): string {
   return [...version.gameVersions].sort(compareGameVersionsDescending).join("、");
 }
+
+/** 大版本:忽略最后一个 `.` 后的数字(1.20.1→1.20,26.2→26)。 */
+function majorOf(gameVersion: string): string {
+  const index = gameVersion.lastIndexOf(".");
+  return index > 0 ? gameVersion.slice(0, index) : gameVersion;
+}
+
+/** 两个大版本是否相邻递增(1.12→1.13,1.19→1.20,25→26;1.16→26 不相邻)。 */
+function isNextMajor(current: string, next: string): boolean {
+  const currentParts = current.split(".");
+  const nextParts = next.split(".");
+  if (currentParts.length !== nextParts.length) return false;
+  for (let index = 0; index < currentParts.length - 1; index += 1) {
+    if (currentParts[index] !== nextParts[index]) return false;
+  }
+  return Number(nextParts[nextParts.length - 1]) === Number(currentParts[currentParts.length - 1]) + 1;
+}
+
+/**
+ * 资源版本范围标签:连续大版本合并为区间,断档另起段。
+ * 例:[1.12.2,1.13.2,1.14.4,1.16.5,26.2] → "1.12.2-1.16.5,26.2";
+ * [26.1,26.2] → "26.1-26.2";[26.2] → "26.2"。非标准版本(快照等)忽略。
+ */
+export function formatGameVersionRange(versions: string[]): string {
+  const standards = versions
+    .filter((candidate) => /^b?\d+\.\d+/.test(candidate))
+    .sort(compareGameVersionsDescending)
+    .reverse();
+  if (standards.length === 0) return versions[versions.length - 1] ?? "";
+
+  interface MajorRun {
+    major: string;
+    min: string;
+    max: string;
+  }
+  const majors: MajorRun[] = [];
+  for (const gameVersion of standards) {
+    const major = majorOf(gameVersion);
+    const last = majors[majors.length - 1];
+    if (last && last.major === major) {
+      last.max = gameVersion;
+    } else {
+      majors.push({ major, min: gameVersion, max: gameVersion });
+    }
+  }
+
+  const runs: { first: MajorRun; last: MajorRun }[] = [];
+  for (const entry of majors) {
+    const last = runs[runs.length - 1];
+    if (last && isNextMajor(last.last.major, entry.major)) {
+      last.last = entry;
+    } else {
+      runs.push({ first: entry, last: entry });
+    }
+  }
+
+  return runs
+    .map((run) =>
+      run.first === run.last
+        ? run.first.min === run.first.max
+          ? run.first.min
+          : `${run.first.min}-${run.first.max}`
+        : `${run.first.min}-${run.last.max}`,
+    )
+    .join(",");
+}

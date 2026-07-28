@@ -96,6 +96,7 @@
   });
 
   const flatItems = $derived(groups.flatMap((group) => group.items));
+  const itemIndexes = $derived(new Map(flatItems.map((item, index) => [item, index] as const)));
 
   function go(target: NavigationKey): void {
     onNavigate(target);
@@ -156,7 +157,7 @@
       {#each groups as group}
         <div class="search-group">{t(group.titleKey)}</div>
         {#each group.items as item}
-          {@const index = flatItems.indexOf(item)}
+          {@const index = itemIndexes.get(item) ?? 0}
           <button class="search-item" class:active={index === activeIndex} onclick={item.run}>
             <span class="si-label">{item.label}</span>
             {#if item.sub}<span class="si-sub">{item.sub}</span>{/if}

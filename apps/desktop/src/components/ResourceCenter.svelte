@@ -13,6 +13,7 @@
   import {
     buildVersionGroups,
     compareGameVersionsDescending,
+    formatGameVersionRange,
     SNAPSHOT_GROUP_KEY,
     UNKNOWN_GROUP_KEY,
     versionGameTags,
@@ -36,6 +37,7 @@
   } from "../runtime";
   import AppShell from "./AppShell.svelte";
   import Icon from "./Icon.svelte";
+  import VersionPicker from "./VersionPicker.svelte";
 
   interface Props {
     runtime: MoyuRuntime;
@@ -233,37 +235,6 @@
     if (key === UNKNOWN_GROUP_KEY) return t("resources.versions.otherGroup");
     return key;
   }
-
-  function optgroupLabel(group: { key: string; recommended: boolean }): string {
-    return group.recommended
-      ? `${groupLabel(group.key)} · ${t("resources.versions.recommended")}`
-      : groupLabel(group.key);
-  }
-
-  // 四个版本选择点的分组(与实例匹配的组置顶推荐;整合包不做实例推荐)。
-  const previewGroups = $derived.by(() => {
-    const instance = selectedInstance();
-    return buildVersionGroups(previewVersions, {
-      kind: "mod",
-      target: instance ? { gameVersion: instance.gameVersion, loaderKind: instance.loaderKind } : null,
-    });
-  });
-  const packGroups = $derived(buildVersionGroups(packVersions, { kind: "modpack" }));
-  const resourceGroups = $derived.by(() => {
-    const instance = selectedInstance();
-    const installType = catalogView === "detail" ? detailType : catalogType;
-    return buildVersionGroups(resourceVersions, {
-      kind: installType,
-      target: instance ? { gameVersion: instance.gameVersion, loaderKind: instance.loaderKind } : null,
-    });
-  });
-  const downloadGroups = $derived.by(() => {
-    const instance = selectedInstance();
-    return buildVersionGroups(downloadVersions, {
-      kind: catalogType,
-      target: instance ? { gameVersion: instance.gameVersion, loaderKind: instance.loaderKind } : null,
-    });
-  });
 
   /** 折叠卡规则：单组默认展开；带目标实例时「所选版本」组自动展开。 */
   function detailGroupOpen(group: DetailVersionGroup, groupCount: number): boolean {
@@ -716,10 +687,6 @@
 
   function formatDate(value: string | null): string {
     return value ? value.slice(0, 10) : "";
-  }
-
-  function latestVersion(versions: string[]): string {
-    return versions.length > 0 ? versions[versions.length - 1] ?? "" : "";
   }
 
   function focusDialog(dialog: HTMLElement | null): void {
@@ -1278,8 +1245,8 @@
                 <div class="row">
                   <span class="rr-name">{project.title}</span>
                   {#if project.author}<span class="dim">{t("resources.catalog.byAuthor").replace("{author}", project.author)}</span>{/if}
-                  {#if latestVersion(project.versions)}
-                    <span class="tag neutral">{latestVersion(project.versions)}</span>
+                  {#if project.versions.length > 0}
+                    <span class="tag neutral version-range-badge" title={project.versions.join("、")}>{formatGameVersionRange(project.versions)}</span>
                   {/if}
                 </div>
                 <div class="rr-desc">{project.description}</div>
@@ -1737,19 +1704,19 @@
         <h3 id="preview-dialog-title">{t("resources.preview.confirmTitle").replace("{name}", preview.plan.instanceName)}</h3>
         <div class="m-body">
           {#if previewVersions.length > 0}
-            <label class="field" style="margin-bottom:12px">
+            <div class="field" style="margin-bottom:12px">
               <span class="field-label">{t("resources.download.versionLabel")}</span>
-              <select class="input" value={previewVersionId} disabled={Boolean(previewingProject)} onchange={(event) => void selectPreviewVersion((event.currentTarget as HTMLSelectElement).value)} aria-label={t("resources.download.versionAria")}>
-                <option value="">{t("resources.versions.auto")}</option>
-                {#each previewGroups as group}
-                  <optgroup label={optgroupLabel(group)}>
-                    {#each group.versions as version}
-                      <option value={version.id}>{versionOptionLabel(version)}</option>
-                    {/each}
-                  </optgroup>
-                {/each}
-              </select>
-            </label>
+              <VersionPicker
+                versions={previewVersions}
+                kind="mod"
+                target={selectedInstance() ? { gameVersion: selectedInstance()!.gameVersion, loaderKind: selectedInstance()!.loaderKind } : null}
+                value={previewVersionId}
+                showAuto
+                disabled={Boolean(previewingProject)}
+                ariaLabel={t("resources.download.versionAria")}
+                onSelect={(versionId) => void selectPreviewVersion(versionId)}
+              />
+            </div>
           {/if}
           {#each preview.plan.entries as entry}
             {@const isRoot = entry.projectId === preview.plan.rootProjectId}
@@ -1821,19 +1788,18 @@
         <h3 id="pack-dialog-title">{t("resources.catalog.packPreviewTitle")}</h3>
         <div class="m-body">
           {#if packVersions.length > 0}
-            <label class="field" style="margin-bottom:12px">
+            <div class="field" style="margin-bottom:12px">
               <span class="field-label">{t("resources.download.versionLabel")}</span>
-              <select class="input" value={packVersionId} disabled={Boolean(packPreviewing) || packInstalling} onchange={(event) => void selectPackVersion((event.currentTarget as HTMLSelectElement).value)} aria-label={t("resources.download.versionAria")}>
-                <option value="">{t("resources.versions.auto")}</option>
-                {#each packGroups as group}
-                  <optgroup label={optgroupLabel(group)}>
-                    {#each group.versions as version}
-                      <option value={version.id}>{versionOptionLabel(version)}</option>
-                    {/each}
-                  </optgroup>
-                {/each}
-              </select>
-            </label>
+              <VersionPicker
+                versions={packVersions}
+                kind="modpack"
+                value={packVersionId}
+                showAuto
+                disabled={Boolean(packPreviewing) || packInstalling}
+                ariaLabel={t("resources.download.versionAria")}
+                onSelect={(versionId) => void selectPackVersion(versionId)}
+              />
+            </div>
           {/if}
           <div class="install-line">
             <span class="tag accent" style="flex:none">{t("resources.catalog.type.modpack")}</span>
@@ -1875,18 +1841,18 @@
               <div class="skel" style="height:34px;width:100%"></div>
             </div>
           {:else}
-            <label class="field">
+            <div class="field">
               <span class="field-label">{t("resources.download.versionLabel")}</span>
-              <select class="input" value={resourceVersionId} disabled={Boolean(resourceInstalling)} onchange={(event) => { resourceVersionId = (event.currentTarget as HTMLSelectElement).value; }} aria-label={t("resources.download.versionAria")}>
-                {#each resourceGroups as group}
-                  <optgroup label={optgroupLabel(group)}>
-                    {#each group.versions as version}
-                      <option value={version.id}>{versionOptionLabel(version)}</option>
-                    {/each}
-                  </optgroup>
-                {/each}
-              </select>
-            </label>
+              <VersionPicker
+                versions={resourceVersions}
+                kind={catalogView === "detail" ? detailType : catalogType}
+                target={selectedInstance() ? { gameVersion: selectedInstance()!.gameVersion, loaderKind: selectedInstance()!.loaderKind } : null}
+                value={resourceVersionId}
+                disabled={Boolean(resourceInstalling)}
+                ariaLabel={t("resources.download.versionAria")}
+                onSelect={(versionId) => { resourceVersionId = versionId; }}
+              />
+            </div>
             {#if selectedInstance()}
               <p class="dim" style="margin-top:12px">{t("resources.catalog.resourceTarget").replace("{name}", selectedInstance()!.name)}</p>
             {/if}
@@ -1924,18 +1890,17 @@
             </div>
           {:else}
             <div class="download-form">
-              <label class="field">
+              <div class="field">
                 <span class="field-label">{t("resources.download.versionLabel")}</span>
-                <select class="input" value={downloadVersionId} onchange={(event) => selectDownloadVersion((event.currentTarget as HTMLSelectElement).value)} aria-label={t("resources.download.versionAria")}>
-                  {#each downloadGroups as group}
-                    <optgroup label={optgroupLabel(group)}>
-                      {#each group.versions as version}
-                        <option value={version.id}>{versionOptionLabel(version)}</option>
-                      {/each}
-                    </optgroup>
-                  {/each}
-                </select>
-              </label>
+                <VersionPicker
+                  versions={downloadVersions}
+                  kind={catalogType}
+                  target={selectedInstance() ? { gameVersion: selectedInstance()!.gameVersion, loaderKind: selectedInstance()!.loaderKind } : null}
+                  value={downloadVersionId}
+                  ariaLabel={t("resources.download.versionAria")}
+                  onSelect={selectDownloadVersion}
+                />
+              </div>
               <label class="field">
                 <span class="field-label">{t("resources.download.fileNameLabel")}</span>
                 <input class="input" bind:value={downloadFileName} type="text" aria-label={t("resources.download.fileNameAria")} />
@@ -2051,6 +2016,11 @@
   .rr-name {
     font-size: 13.5px;
     font-weight: 600;
+  }
+  .version-range-badge {
+    max-width: 180px;
+    overflow: hidden;
+    text-overflow: ellipsis;
   }
   .rr-desc {
     font-size: 12px;

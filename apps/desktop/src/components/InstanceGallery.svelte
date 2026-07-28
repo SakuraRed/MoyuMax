@@ -63,6 +63,9 @@
   let modpacks = $state<Record<string, InstalledModpack>>({});
   let packIcons = $state<Record<string, string>>({});
   let installingPacks = $state<Record<string, boolean>>({});
+  // 图标缓存与签名守卫:包身份未变时不重取大体积 data URL,快照未变时不替换 state。
+  const iconCache = new Map<string, { packKey: string; icon: string }>();
+  let modpacksSignature = "";
 
   // ---- 工具行与筛选 ----
   let query = $state("");
@@ -97,8 +100,8 @@
 
   async function loadModpacks(list: ManagedInstance[]): Promise<void> {
     const next: Record<string, InstalledModpack> = {};
-    const iconsNext: Record<string, string> = {};
     const installingNext: Record<string, boolean> = {};
+    const signatureParts: string[] = [];
     for (const instance of list) {
       const [pack, installing] = await Promise.all([
         runtime.getInstanceModpack(instance.id).catch(() => null),
@@ -106,10 +109,24 @@
       ]);
       if (pack) {
         next[instance.id] = pack;
-        const icon = await runtime.getModpackIconDataUrl(instance.id).catch(() => null);
-        if (icon) iconsNext[instance.id] = icon;
+        const packKey = `${pack.packName}@${pack.packVersion}`;
+        if (iconCache.get(instance.id)?.packKey !== packKey) {
+          const icon = await runtime.getModpackIconDataUrl(instance.id).catch(() => null);
+          iconCache.set(instance.id, { packKey, icon: icon ?? "" });
+        }
+      } else {
+        iconCache.delete(instance.id);
       }
       if (installing) installingNext[instance.id] = true;
+      signatureParts.push(`${instance.id}:${next[instance.id] ? "p" : ""}:${installing ? 1 : 0}`);
+    }
+    const signature = signatureParts.join(",");
+    if (signature === modpacksSignature) return;
+    modpacksSignature = signature;
+    const iconsNext: Record<string, string> = {};
+    for (const instance of list) {
+      const cached = iconCache.get(instance.id);
+      if (next[instance.id] && cached?.icon) iconsNext[instance.id] = cached.icon;
     }
     modpacks = next;
     packIcons = iconsNext;

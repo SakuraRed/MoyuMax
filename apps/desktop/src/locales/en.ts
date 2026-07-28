@@ -835,6 +835,8 @@ export const en: Record<string, string> = {
   "resources.versions.recommended": "Recommended",
   "resources.versions.snapshotGroup": "Snapshots",
   "resources.versions.otherGroup": "Other",
+  "resources.versions.groupCount": "{count} versions",
+  "resources.versions.pickPlaceholder": "Pick a version",
   "resources.catalog.packFiles": "{count} files · {size}",
   "resources.catalog.confirmInstall": "Confirm install",
   "resources.catalog.packDone": "\"{name}\" installed",

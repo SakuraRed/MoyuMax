@@ -840,6 +840,8 @@ export const zhCN: Record<string, string> = {
   "resources.versions.recommended": "推荐",
   "resources.versions.snapshotGroup": "快照版",
   "resources.versions.otherGroup": "其他",
+  "resources.versions.groupCount": "{count} 个版本",
+  "resources.versions.pickPlaceholder": "选择版本",
   "resources.catalog.packFiles": "{count} 个文件 · {size}",
   "resources.catalog.confirmInstall": "确认安装",
   "resources.catalog.packDone": "「{name}」安装完成",

@@ -64,6 +64,7 @@
   let heroPack = $state<InstalledModpack | null>(null);
   let heroIcon = $state("");
   let heroInstallingPack = $state(false);
+  let heroPackKey = "";
   let defaultAccountName = $state("");
   let homeRoot: HTMLElement | undefined = $state();
 
@@ -105,12 +106,17 @@
       heroPack = null;
       heroIcon = "";
       heroInstallingPack = false;
+      heroPackKey = "";
       return;
     }
     const [pack, installing] = await Promise.all([
       runtime.getInstanceModpack(instanceId).catch(() => null),
       runtime.isModpackInstalling(instanceId).catch(() => false),
     ]);
+    // 图标是大体积 data URL,包身份未变时跳过重取,避免轮询期主线程反复编码。
+    const key = `${instanceId}|${pack?.packName ?? ""}|${pack?.packVersion ?? ""}|${installing}`;
+    if (key === heroPackKey) return;
+    heroPackKey = key;
     heroPack = pack;
     heroInstallingPack = installing;
     heroIcon = pack ? ((await runtime.getModpackIconDataUrl(instanceId).catch(() => null)) ?? "") : "";
