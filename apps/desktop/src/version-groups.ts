@@ -149,10 +149,12 @@ export function versionGameTags(version: ModrinthVersionSummary): string {
   return [...version.gameVersions].sort(compareGameVersionsDescending).join("、");
 }
 
-/** 大版本:忽略最后一个 `.` 后的数字(1.20.1→1.20,26.2→26)。 */
+/** 大版本:仅对含两段以上的精确版本忽略最后一个 `.` 后的数字(1.20.1→1.20);
+ * 两段版本本身即大版本(1.21→1.21),不能再砍。 */
 function majorOf(gameVersion: string): string {
-  const index = gameVersion.lastIndexOf(".");
-  return index > 0 ? gameVersion.slice(0, index) : gameVersion;
+  const first = gameVersion.indexOf(".");
+  const last = gameVersion.lastIndexOf(".");
+  return last > first ? gameVersion.slice(0, last) : gameVersion;
 }
 
 /** 两个大版本是否相邻递增(1.12→1.13,1.19→1.20,25→26;1.16→26 不相邻)。 */

@@ -17,7 +17,6 @@
     SNAPSHOT_GROUP_KEY,
     UNKNOWN_GROUP_KEY,
     versionGameTags,
-    versionOptionLabel,
   } from "../version-groups";
   import type {
     ContentInstallPreview,
@@ -1425,7 +1424,14 @@
                             {#each group.versions as version}
                               <article class="detail-file-row">
                                 <div class="dv-file-main">
-                                  <strong>{versionOptionLabel(version)}</strong>
+                                  <div class="dv-title-row">
+                                    <strong>{version.versionNumber}</strong>
+                                    {#if version.versionType !== "release"}
+                                      <span class="tag warn">{t("resources.versions.prereleaseTag")}</span>
+                                    {:else}
+                                      <span class="tag neutral">{t("resources.versions.releaseTag")}</span>
+                                    {/if}
+                                  </div>
                                   <small>{formatDate(version.datePublished)} · {t("resources.catalog.downloads").replace("{count}", formatDownloads(version.downloads))}</small>
                                   <small class="dv-tags">{versionGameTags(version)}{#if detailType === "mod" && version.loaders.length > 0} · {version.loaders.map(loaderName).join("、")}{/if}</small>
                                 </div>
@@ -2198,6 +2204,12 @@
   .dv-file-main strong,
   .dv-file-main small {
     display: block;
+  }
+  .dv-title-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    flex-wrap: wrap;
   }
   .dv-file-main small {
     margin-top: 2px;

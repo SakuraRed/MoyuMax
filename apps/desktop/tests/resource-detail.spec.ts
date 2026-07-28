@@ -127,7 +127,8 @@ test("M32-DET-UI-003 详情内加载器筛选 chip 过滤文件", async ({ page 
   await expect(page.getByText("2.9.0+26.1", { exact: true })).toHaveCount(0);
 
   await page.getByRole("button", { name: "Forge", exact: true }).click();
-  await expect(page.getByText("2.9.0+26.1 (beta)", { exact: true })).toBeVisible();
+  await expect(page.getByText("2.9.0+26.1", { exact: true })).toBeVisible();
+  await expect(page.getByText("预览版", { exact: true })).toBeVisible();
   await expect(page.getByText("3.1.0+26.2", { exact: true })).toHaveCount(0);
 });
 

@@ -837,6 +837,8 @@ export const en: Record<string, string> = {
   "resources.versions.otherGroup": "Other",
   "resources.versions.groupCount": "{count} versions",
   "resources.versions.pickPlaceholder": "Pick a version",
+  "resources.versions.releaseTag": "Release",
+  "resources.versions.prereleaseTag": "Pre-release",
   "resources.catalog.packFiles": "{count} files · {size}",
   "resources.catalog.confirmInstall": "Confirm install",
   "resources.catalog.packDone": "\"{name}\" installed",

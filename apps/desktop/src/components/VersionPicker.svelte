@@ -153,7 +153,12 @@
             aria-selected={version.id === value}
             onclick={() => choose(version.id)}
           >
-            <span class="vp-name">{versionOptionLabel(version)}</span>
+            <span class="vp-name">{version.versionNumber}</span>
+            {#if version.versionType !== "release"}
+              <span class="tag warn">{t("resources.versions.prereleaseTag")}</span>
+            {:else}
+              <span class="tag neutral">{t("resources.versions.releaseTag")}</span>
+            {/if}
             <span class="vp-meta">{version.datePublished.slice(0, 10)}</span>
           </button>
         {/each}

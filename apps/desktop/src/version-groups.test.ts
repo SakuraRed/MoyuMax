@@ -125,6 +125,12 @@ describe("formatGameVersionRange", () => {
     expect(formatGameVersionRange(["26.2"])).toBe("26.2");
     expect(formatGameVersionRange(["24w14a", "26.2"])).toBe("26.2");
   });
+
+  it("两段版本本身即大版本,与三段版本同组", () => {
+    expect(formatGameVersionRange(["1.21", "1.21.1", "1.21.4"])).toBe("1.21-1.21.4");
+    expect(formatGameVersionRange(["1.20.1", "1.20.6", "1.21", "1.21.1"])).toBe("1.20.1-1.21.1");
+    expect(formatGameVersionRange(["1.20.1", "1.21", "1.21.1", "26.2"])).toBe("1.20.1-1.21.1,26.2");
+  });
 });
 
 describe("versionOptionLabel / versionGameTags", () => {
