@@ -7,6 +7,7 @@
   import type { MoyuRuntime, NavigationKey } from "../runtime";
   import Fish from "./Fish.svelte";
   import Icon from "./Icon.svelte";
+  import ToastStack from "./ToastStack.svelte";
 
   interface Props {
     pageTitle: string;
@@ -216,6 +217,8 @@
 
     {@render children()}
   </div>
+
+  <ToastStack />
 
   {#if netplayRoom() && activeNavigation !== "netplay"}
     <div class="netplay-float" role="status" aria-label={t("netplay.float.aria")}>

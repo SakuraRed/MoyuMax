@@ -589,12 +589,31 @@
     onToggleMaximize={() => runtime.toggleMaximizeWindow()}
     onClose={() => runtime.closeWindow()}
   >
-    <main class="content fatal-state" role="alert">
-      <div class="error-block">
-        <strong>MoyuMax 无法读取本地状态</strong>
-        <span>游戏实例和数据没有被修改。</span>
-        <span>请确认当前用户能够访问应用数据目录，然后重新启动。</span>
-        <details><summary>技术详情</summary><code>{fatalMessage}</code></details>
+    <main class="content" style="display:flex" role="alert">
+      <div class="err-stage">
+        <section class="panel err-panel">
+          <div class="row" style="gap:12px">
+            <span class="tag danger" style="flex:none"><span class="cdot"></span>启动失败</span>
+            <div class="panel-title" style="margin:0">MoyuMax 无法读取本地状态</div>
+          </div>
+          <div class="err-steps">
+            <div class="err-step">
+              <span class="err-num">2</span>
+              <div class="panel-desc">数据影响：游戏实例和数据没有被修改。请确认当前用户能够访问应用数据目录，然后重新启动。</div>
+            </div>
+            <div class="err-step">
+              <span class="err-num">3</span>
+              <div class="row"><button class="btn primary" onclick={() => location.reload()}>重新启动</button></div>
+            </div>
+            <div class="err-step">
+              <span class="err-num">5</span>
+              <details class="adv" style="flex:1">
+                <summary>技术详情</summary>
+                <div class="adv-body"><div class="mono dim">{fatalMessage}</div></div>
+              </details>
+            </div>
+          </div>
+        </section>
       </div>
     </main>
   </AppShell>

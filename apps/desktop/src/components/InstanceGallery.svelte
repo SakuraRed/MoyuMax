@@ -16,6 +16,7 @@
   } from "../runtime";
   import AppShell from "./AppShell.svelte";
   import Fish from "./Fish.svelte";
+  import { pushToast } from "../toast.svelte";
 
   interface Props {
     runtime: MoyuRuntime;
@@ -82,6 +83,16 @@
 
   $effect(() => {
     void loadModpacks(instances);
+  });
+
+  $effect(() => {
+    if (actionError) pushToast({ tone: "danger", title: actionError });
+  });
+  $effect(() => {
+    if (actionMessage) pushToast({ tone: "ok", title: actionMessage });
+  });
+  $effect(() => {
+    if (notice) pushToast({ tone: "info", title: notice });
   });
 
   async function loadModpacks(list: ManagedInstance[]): Promise<void> {
@@ -505,13 +516,6 @@
       <button class="btn small ghost" disabled={batchBusy} onclick={() => { selected = []; }}>{t("gallery.batch.clear")}</button>
     </div>
   {/if}
-
-  {#if actionError}
-    <div class="toast" role="alert" style="position:absolute;right:20px;bottom:20px;z-index:35"><span>{actionError}</span></div>
-  {:else if notice || actionMessage}
-    <div class="toast" role="status" style="position:absolute;right:20px;bottom:20px;z-index:35"><span>{actionMessage || notice}</span></div>
-  {/if}
-  <div class="sr-live" aria-live="polite">{actionMessage || actionError || notice}</div>
 
   {#if deleteConfirmOpen}
     <div class="modal-mask">

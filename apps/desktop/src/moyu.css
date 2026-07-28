@@ -64,6 +64,7 @@
 .window {
   background: var(--bg-grad);
   color: var(--text-1);
+  position: relative;
 }
 
 /* ============ 标题栏:返回+标题 / 全局工具+窗口控制 ============ */
@@ -397,6 +398,18 @@
   animation: shimmer 1.4s linear infinite;
 }
 @keyframes shimmer { to { background-position: -200% 0; } }
+
+/* ============ 错误面板(五段结构) ============ */
+.err-stage { flex: 1; display: grid; place-items: center; }
+.err-panel { width: 560px; max-width: calc(100% - 48px); padding: 26px 28px; }
+.err-steps { display: flex; flex-direction: column; gap: 14px; margin-top: 16px; }
+.err-step { display: flex; gap: 12px; align-items: flex-start; }
+.err-num {
+  flex: none; width: 22px; height: 22px; border-radius: 50%;
+  background: var(--glass-strong); color: var(--text-2);
+  display: grid; place-items: center; font-size: 11.5px; font-weight: 700;
+  margin-top: 1px;
+}
 
 /* ============ Toast / Banner / Modal ============ */
 .toast {
