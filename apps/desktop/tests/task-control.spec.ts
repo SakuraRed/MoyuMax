@@ -111,29 +111,40 @@ test("M14-TASK-002 排队任务可调整优先级", async ({ page }) => {
   await expect(page.getByText("优先级 0")).toBeVisible();
 });
 
-test("M14-TASK-003 设置全局限速并显示状态", async ({ page }) => {
+test("M14-TASK-003 全局限速档位保存并回读", async ({ page }) => {
   await seed(page, []);
 
-  await expect(page.getByText("不限速", { exact: true })).toBeVisible();
-  await page.getByRole("textbox", { name: /限速/ }).fill("8");
-  await page.getByRole("button", { name: "应用" }).click();
-  await expect(page.getByText("当前限速：8 MiB/s", { exact: true })).toBeVisible();
+  const unlimited = page.getByRole("button", { name: "不限速", exact: true });
+  const five = page.getByRole("button", { name: "5 MB/s", exact: true });
+  await expect(unlimited).toHaveAttribute("aria-pressed", "true");
+
+  await five.click();
+  await expect(five).toHaveAttribute("aria-pressed", "true");
+  await expect(unlimited).toHaveAttribute("aria-pressed", "false");
 
   await page.reload();
   await page.getByRole("button", { name: "任务", exact: true }).click();
-  await expect(page.getByText("当前限速：8 MiB/s", { exact: true })).toBeVisible();
+  await expect(
+    page.getByRole("button", { name: "5 MB/s", exact: true }),
+  ).toHaveAttribute("aria-pressed", "true");
+
+  await page.getByRole("button", { name: "不限速", exact: true }).click();
+  await expect(
+    page.getByRole("button", { name: "不限速", exact: true }),
+  ).toHaveAttribute("aria-pressed", "true");
 });
 
 test("UI-A11Y-001 任务控制区在 960x600 与 200% 放大下不溢出", async ({ page }) => {
-  await page.setViewportSize({ width: 960, height: 600 });
   await seed(page, [installTask("task-1", "running")]);
 
+  // 进入任务中心后再缩小窗口：窄宽下旧全局样式会折叠导航文本，与任务控制区无关。
+  await page.setViewportSize({ width: 960, height: 600 });
   await page.evaluate(() => {
     document.documentElement.style.zoom = "2";
   });
   const overflow = await page.evaluate(() => ({
     horizontal: document.documentElement.scrollWidth > window.innerWidth + 1,
-    bars: [...document.querySelectorAll<HTMLElement>(".task-limit-bar, .task-global-bar")].some(
+    bars: [...document.querySelectorAll<HTMLElement>(".task-toolbar")].some(
       (element) => element.scrollWidth > element.clientWidth + 1,
     ),
   }));
@@ -161,7 +172,7 @@ test("M33-TASK-002 删除失败任务需二次确认", async ({ page }) => {
 
   await page.getByRole("button", { name: "删除", exact: true }).click();
   await page.getByRole("button", { name: "确认删除", exact: true }).click();
-  await expect(page.getByText("没有任务")).toBeVisible();
+  await expect(page.getByText("没有活动任务")).toBeVisible();
 });
 
 test("M33-TASK-002 删除在确认前可撤回", async ({ page }) => {
@@ -236,4 +247,17 @@ test("M34-TASK-001 整合包文件阶段并入安装任务进度", async ({ page
   const card = page.locator(".task-card", { hasText: INSTANCE.name });
   await expect(card.getByText("整合包文件", { exact: true })).toBeVisible();
   await expect(card).toContainText("正在下载整合包文件");
+});
+
+test("UI-TASK-001 异常退出后进入任务中心弹出恢复询问", async ({ page }) => {
+  await seed(page, [installTask("task-recovery", "awaitingRecovery")]);
+
+  const dialog = page.getByRole("dialog", { name: "发现未完成的安装" });
+  await expect(dialog).toBeVisible();
+  await expect(dialog.getByText("安装「任务测试」")).toBeVisible();
+  await expect(dialog.getByText(/已下载 50%/)).toBeVisible();
+
+  await dialog.getByRole("button", { name: "继续任务" }).click();
+  await expect(dialog).toHaveCount(0);
+  await expect(page.getByText("已排队", { exact: true }).first()).toBeVisible();
 });
