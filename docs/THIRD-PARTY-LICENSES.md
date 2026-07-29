@@ -222,8 +222,8 @@ MoyuMax 客户端许可证为 GPL-3.0-only;下表列出全部直接及传递依�
 | cargo | miniz_oxide | 0.8.9 | MIT OR Zlib OR Apache-2.0 |
 | cargo | mio | 1.2.2 | MIT |
 | cargo | moxcms | 0.8.1 | BSD-3-Clause OR Apache-2.0 |
-| cargo | moyumax-core | 0.1.0 | GPL-3.0-only |
-| cargo | moyumax-desktop | 0.1.0 | GPL-3.0-only |
+| cargo | moyumax-core | 0.2.0 | GPL-3.0-only |
+| cargo | moyumax-desktop | 0.2.0 | GPL-3.0-only |
 | cargo | muda | 0.19.3 | Apache-2.0 OR MIT |
 | cargo | ndk | 0.9.0 | MIT OR Apache-2.0 |
 | cargo | ndk-sys | 0.6.0+11769913 | MIT OR Apache-2.0 |

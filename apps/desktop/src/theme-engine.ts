@@ -4,7 +4,7 @@
  * 全部规则限定在 .window.tp-<id> 作用域内,整体替换、可整体回落。
  */
 
-export const APP_VERSION = "0.1.0";
+export const APP_VERSION = "0.2.0";
 
 export interface ThemeVersionRange {
   min?: string | null;

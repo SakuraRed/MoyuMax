@@ -17,8 +17,8 @@ fn windows_preview_build_is_a_current_user_nsis_installer() {
     );
     assert_eq!(
         config["version"].as_str(),
-        Some("0.1.0"),
-        "首个正式发行版版本号(开发证书自签名,关于页保留未签名声明)"
+        Some(env!("CARGO_PKG_VERSION")),
+        "安装包版本必须与工作区版本一致(开发证书自签名,关于页保留未签名声明)"
     );
 
     let icons = config["bundle"]["icon"]
