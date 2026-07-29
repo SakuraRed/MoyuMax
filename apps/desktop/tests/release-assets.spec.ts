@@ -38,7 +38,7 @@ test("M26-ABOUT-001 关于区展示版本、许可与未签名声明", async ({ 
   await page.getByRole("button", { name: "关于" }).click();
   await expect(page.getByRole("heading", { name: "关于 MoyuMax" })).toBeVisible();
   const aboutSection = page.getByLabel("关于 MoyuMax");
-  await expect(aboutSection.getByText("0.2.0", { exact: true })).toBeVisible();
+  await expect(aboutSection.getByText("0.2.1", { exact: true })).toBeVisible();
   await expect(page.getByText("GPL-3.0-only", { exact: true })).toBeVisible();
   await expect(page.getByText("github.com/SakuraRed/MoyuMax", { exact: true })).toBeVisible();
   await expect(page.getByText("docs/SBOM.json", { exact: false })).toBeVisible();

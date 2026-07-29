@@ -1511,7 +1511,7 @@
                 <div class="sr-main">
                   <div class="sr-name">{t("settings.update.currentVersion")}</div>
                 </div>
-                <strong>0.2.0</strong>
+                <strong>0.2.1</strong>
               </div>
               <div class="set-row" class:hl={highlightId === "updateCheck"} data-setting-id="updateCheck">
                 <div class="sr-main">
@@ -1628,7 +1628,7 @@
               <p class="panel-desc" style="margin:0 0 6px">{t("settings.about.description")}</p>
               <div class="set-row" class:hl={highlightId === "version"} data-setting-id="version">
                 <div class="sr-main"><div class="sr-name">{t("settings.about.version")}</div></div>
-                <span class="mono">0.2.0</span>
+                <span class="mono">0.2.1</span>
               </div>
               <div class="set-row" class:hl={highlightId === "dataDirectory"} data-setting-id="dataDirectory">
                 <div class="sr-main"><div class="sr-name">{t("settings.general.dataDirectory")}</div></div>
