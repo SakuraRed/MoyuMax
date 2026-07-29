@@ -3,15 +3,19 @@
 //! 通过 GitHub Releases API 检查最新发布；下载安装包时按发布资产摘要校验
 //! SHA-256 与大小，校验失败删除文件。下载与安装全程手动触发，不做任何
 //! 自动下载、自动安装或后台定期检查。
+//! 大文件走断点续传：断流或停滞后带 Range 从已接收位置继续，有界次数内
+//! 收敛；来源忽略 Range 返回完整响应时丢弃半成品整体重下。
 
 use std::{
     cmp::Ordering,
     fs,
+    io::{BufRead, Write},
     path::{Path, PathBuf},
     time::Duration,
 };
 
-use reqwest::{Client, Url};
+use futures_util::StreamExt;
+use reqwest::{Client, StatusCode, Url};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
@@ -22,6 +26,12 @@ const GITHUB_RELEASES_LATEST: &str =
 const SETTING_UPDATE_CHECKS: &str = "update_checks_enabled";
 const MAX_INSTALLER_BYTES: u64 = 512 * 1024 * 1024;
 const MIN_VERSION_MARKER: &str = "moyumax-min-app-version:";
+/// 检查更新的整体时限（下载不限总时长，只看单段停滞）。
+const CHECK_TIMEOUT: Duration = Duration::from_secs(20);
+/// 下载单段（连接/响应头/分块）的停滞上限，超时即换续传尝试。
+const DOWNLOAD_STALL_TIMEOUT: Duration = Duration::from_secs(30);
+/// 下载总尝试次数上限（首次 + 续传重试）。
+const MAX_DOWNLOAD_ATTEMPTS: u32 = 6;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -67,7 +77,6 @@ impl UpdateClient {
         );
         let client = crate::http_client_builder()
             .connect_timeout(Duration::from_secs(10))
-            .timeout(Duration::from_secs(20))
             .user_agent(user_agent)
             .redirect(reqwest::redirect::Policy::none())
             .build()?;
@@ -76,19 +85,27 @@ impl UpdateClient {
 
     /// 检查最新发布；有新版本时返回其信息，已是最新返回 None。
     pub async fn check_latest(&self, current_version: &str) -> Result<Option<ReleaseInfo>> {
-        let response = self
-            .client
-            .get(self.base_url.clone())
-            .send()
+        let request = async {
+            let response = self
+                .client
+                .get(self.base_url.clone())
+                .send()
+                .await
+                .map_err(|error| CoreError::Content(format!("无法检查更新：{error}")))?;
+            if !response.status().is_success() {
+                return Err(CoreError::Content(format!(
+                    "更新检查返回 HTTP {}",
+                    response.status().as_u16()
+                )));
+            }
+            response
+                .json::<GitHubRelease>()
+                .await
+                .map_err(CoreError::from)
+        };
+        let release: GitHubRelease = tokio::time::timeout(CHECK_TIMEOUT, request)
             .await
-            .map_err(|error| CoreError::Content(format!("无法检查更新：{error}")))?;
-        if !response.status().is_success() {
-            return Err(CoreError::Content(format!(
-                "更新检查返回 HTTP {}",
-                response.status().as_u16()
-            )));
-        }
-        let release: GitHubRelease = response.json().await?;
+            .map_err(|_| CoreError::Content("检查更新超时，请稍后重试".to_owned()))??;
         let info = release.into_release_info();
         if compare_versions(current_version, &info.tag) == Ordering::Less {
             Ok(Some(info))
@@ -97,7 +114,8 @@ impl UpdateClient {
         }
     }
 
-    /// 下载安装包到受管目录并经 SHA-256 与大小校验；失败删除文件。
+    /// 下载安装包到受管目录：断流带 Range 续传、有界重试，完成后经
+    /// SHA-256 与大小校验；失败删除半成品。
     pub async fn download_installer(
         &self,
         asset: &UpdateAsset,
@@ -115,77 +133,117 @@ impl UpdateClient {
         fs::create_dir_all(destination_directory)?;
         let target = destination_directory.join(&asset.name);
         let partial = destination_directory.join(format!(".{}.partial", asset.name));
-        let result =
-            async {
-                // GitHub 发行资产固定经 302 跳到 CDN;有界手动跟随,每一跳强制 https,
-                // 不交给全局重定向策略,避免被带到任意主机。
-                let mut url = url;
-                let mut response = None;
-                for _ in 0..5 {
-                    let attempt =
-                        self.client.get(url.clone()).send().await.map_err(|error| {
-                            CoreError::Content(format!("下载安装包失败：{error}"))
-                        })?;
-                    if attempt.status().is_redirection() {
-                        let location = attempt
-                            .headers()
-                            .get(reqwest::header::LOCATION)
-                            .and_then(|value| value.to_str().ok())
-                            .ok_or_else(|| {
-                                CoreError::Content("安装包重定向缺少 Location".to_owned())
-                            })?;
-                        let next = url.join(location).map_err(|error| {
-                            CoreError::Content(format!("安装包重定向地址无效：{error}"))
-                        })?;
-                        let localhost = matches!(next.host_str(), Some("127.0.0.1" | "localhost"));
-                        if next.scheme() != "https" && !(next.scheme() == "http" && localhost) {
-                            return Err(CoreError::Content(format!(
-                                "安装包重定向目标必须使用 https：{next}"
-                            )));
-                        }
-                        url = next;
-                        continue;
-                    }
-                    response = Some(attempt);
-                    break;
-                }
-                let response = response
-                    .ok_or_else(|| CoreError::Content("安装包重定向次数过多".to_owned()))?;
-                if !response.status().is_success() {
-                    return Err(CoreError::Content(format!(
-                        "下载安装包返回 HTTP {}",
-                        response.status().as_u16()
-                    )));
-                }
-                let bytes = response
-                    .bytes()
-                    .await
-                    .map_err(|error| CoreError::Content(format!("读取安装包失败：{error}")))?;
-                if bytes.len() as u64 != asset.size {
-                    return Err(CoreError::Content(format!(
-                        "安装包大小不一致：期望 {} 字节，实际 {} 字节",
-                        asset.size,
-                        bytes.len()
-                    )));
-                }
-                let digest = Sha256::digest(&bytes);
-                let actual = encode_hex(digest);
-                if let Some(expected) = &asset.sha256
-                    && !actual.eq_ignore_ascii_case(expected)
-                {
-                    return Err(CoreError::Content(format!(
-                        "安装包 SHA-256 校验失败：期望 {expected}，实际 {actual}"
-                    )));
-                }
-                fs::write(&partial, &bytes)?;
-                fs::rename(&partial, &target)?;
-                Ok(target)
-            }
-            .await;
+        let result = async {
+            self.download_body(asset, &url, &partial).await?;
+            verify_installer(asset, &partial)?;
+            fs::rename(&partial, &target)?;
+            Ok(target)
+        }
+        .await;
         if result.is_err() {
             let _ = fs::remove_file(&partial);
         }
         result
+    }
+
+    /// 断点续传主体：断流/停滞后带 Range 从已接收位置继续，有界次数内收敛。
+    async fn download_body(&self, asset: &UpdateAsset, url: &Url, partial: &Path) -> Result<()> {
+        let mut attempt = 0_u32;
+        let mut last_error = CoreError::Content("安装包下载未开始".to_owned());
+        loop {
+            let have = fs::metadata(partial).map(|meta| meta.len()).unwrap_or(0);
+            if have == asset.size {
+                return Ok(());
+            }
+            if have > asset.size {
+                // 来源发送量超出声明：分片已被污染，删除后整体重下。
+                let _ = fs::remove_file(partial);
+            }
+            attempt += 1;
+            if attempt > MAX_DOWNLOAD_ATTEMPTS {
+                return Err(CoreError::Content(format!(
+                    "{last_error}（已重试 {} 次）",
+                    MAX_DOWNLOAD_ATTEMPTS - 1
+                )));
+            }
+            match self.download_attempt(url, partial, have).await {
+                Ok(()) => {}
+                Err(error) => last_error = error,
+            }
+        }
+    }
+
+    /// 单次下载尝试：有界跟随 302（每跳强制 https），`resume_from > 0` 时带
+    /// Range；来源回 200 表示忽略 Range，丢弃半成品整体重写。
+    async fn download_attempt(&self, url: &Url, partial: &Path, resume_from: u64) -> Result<()> {
+        let mut url = url.clone();
+        let mut response = None;
+        for _ in 0..5 {
+            let mut request = self.client.get(url.clone());
+            if resume_from > 0 {
+                request = request.header(reqwest::header::RANGE, format!("bytes={resume_from}-"));
+            }
+            let attempt = tokio::time::timeout(DOWNLOAD_STALL_TIMEOUT, request.send())
+                .await
+                .map_err(|_| CoreError::Content("下载安装包连接停滞".to_owned()))?
+                .map_err(|error| CoreError::Content(format!("下载安装包失败：{error}")))?;
+            if attempt.status().is_redirection() {
+                let location = attempt
+                    .headers()
+                    .get(reqwest::header::LOCATION)
+                    .and_then(|value| value.to_str().ok())
+                    .ok_or_else(|| CoreError::Content("安装包重定向缺少 Location".to_owned()))?;
+                let next = url.join(location).map_err(|error| {
+                    CoreError::Content(format!("安装包重定向地址无效：{error}"))
+                })?;
+                let localhost = matches!(next.host_str(), Some("127.0.0.1" | "localhost"));
+                if next.scheme() != "https" && !(next.scheme() == "http" && localhost) {
+                    return Err(CoreError::Content(format!(
+                        "安装包重定向目标必须使用 https：{next}"
+                    )));
+                }
+                url = next;
+                continue;
+            }
+            response = Some(attempt);
+            break;
+        }
+        let response =
+            response.ok_or_else(|| CoreError::Content("安装包重定向次数过多".to_owned()))?;
+        let status = response.status();
+        let append = if status == StatusCode::OK {
+            false
+        } else if status == StatusCode::PARTIAL_CONTENT && resume_from > 0 {
+            validate_content_range_start(response.headers(), resume_from)?;
+            true
+        } else if status == StatusCode::RANGE_NOT_SATISFIABLE && resume_from > 0 {
+            // 分片被来源判定无效：删除半成品，交由外层整体重下。
+            let _ = fs::remove_file(partial);
+            return Err(CoreError::Content(
+                "续传分片被来源拒绝（HTTP 416），已重新下载".to_owned(),
+            ));
+        } else {
+            return Err(CoreError::Content(format!(
+                "下载安装包返回 HTTP {}",
+                status.as_u16()
+            )));
+        };
+        let mut file = if append {
+            std::fs::OpenOptions::new().append(true).open(partial)?
+        } else {
+            std::fs::File::create(partial)?
+        };
+        let mut stream = response.bytes_stream();
+        while let Some(chunk) = tokio::time::timeout(DOWNLOAD_STALL_TIMEOUT, stream.next())
+            .await
+            .map_err(|_| CoreError::Content("下载安装包停滞超时".to_owned()))?
+        {
+            let chunk =
+                chunk.map_err(|error| CoreError::Content(format!("下载安装包中断：{error}")))?;
+            file.write_all(&chunk)?;
+        }
+        file.flush()?;
+        Ok(())
     }
 }
 
@@ -205,6 +263,58 @@ impl AppService {
         )?;
         Ok(())
     }
+}
+
+/// 校验半成品的大小与 SHA-256；流式读取，不把安装包整体载入内存。
+fn verify_installer(asset: &UpdateAsset, partial: &Path) -> Result<()> {
+    let file = fs::File::open(partial)?;
+    let mut reader = std::io::BufReader::new(file);
+    let mut hasher = Sha256::new();
+    let mut total = 0_u64;
+    loop {
+        let buffer = reader.fill_buf()?;
+        if buffer.is_empty() {
+            break;
+        }
+        let length = buffer.len();
+        hasher.update(buffer);
+        total += length as u64;
+        reader.consume(length);
+    }
+    if total != asset.size {
+        return Err(CoreError::Content(format!(
+            "安装包大小不一致：期望 {} 字节，实际 {} 字节",
+            asset.size, total
+        )));
+    }
+    let actual = encode_hex(hasher.finalize());
+    if let Some(expected) = &asset.sha256
+        && !actual.eq_ignore_ascii_case(expected)
+    {
+        return Err(CoreError::Content(format!(
+            "安装包 SHA-256 校验失败：期望 {expected}，实际 {actual}"
+        )));
+    }
+    Ok(())
+}
+
+/// 206 续传响应必须携带与本地长度一致的 Content-Range 起点。
+fn validate_content_range_start(headers: &reqwest::header::HeaderMap, expected: u64) -> Result<()> {
+    let value = headers
+        .get(reqwest::header::CONTENT_RANGE)
+        .and_then(|value| value.to_str().ok())
+        .ok_or_else(|| CoreError::Content("续传响应缺少 Content-Range".to_owned()))?;
+    let start = value
+        .strip_prefix("bytes ")
+        .and_then(|rest| rest.split('-').next())
+        .and_then(|part| part.parse::<u64>().ok())
+        .ok_or_else(|| CoreError::Content(format!("Content-Range 格式无效：{value}")))?;
+    if start != expected {
+        return Err(CoreError::Content(format!(
+            "Content-Range 起点 {start} 与本地长度 {expected} 不一致"
+        )));
+    }
+    Ok(())
 }
 
 /// 数据兼容检查：当前版本低于发布声明的最低可升级版本时返回说明。

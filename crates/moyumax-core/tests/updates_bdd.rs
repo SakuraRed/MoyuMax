@@ -235,3 +235,170 @@ fn encode_hex(bytes: impl AsRef<[u8]>) -> String {
     }
     encoded
 }
+
+#[derive(Clone, Copy)]
+enum CutMode {
+    /// 首请求截断,之后按 Range 206 续传。
+    ResumeAfterCut,
+    /// 首请求截断,之后一律 200 整体重发(忽略 Range)。
+    IgnoreRange,
+    /// 每个请求都截断,永远无法完成。
+    AlwaysCut,
+}
+
+/// 断流夹具:声明完整 Content-Length 但只发前缀后断开,模拟中途断流。
+struct CutFixture {
+    address: std::net::SocketAddr,
+    _thread: thread::JoinHandle<()>,
+}
+
+impl CutFixture {
+    fn start(payload: Vec<u8>, cut_at: usize, mode: CutMode) -> Self {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let address = listener.local_addr().unwrap();
+        let connection_count = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let server_thread = thread::spawn(move || {
+            for stream in listener.incoming() {
+                let Ok(mut stream) = stream else { break };
+                let payload = payload.clone();
+                let connection_count = connection_count.clone();
+                thread::spawn(move || {
+                    let mut reader = BufReader::new(stream.try_clone().unwrap());
+                    let mut range_from: Option<usize> = None;
+                    let mut line = String::new();
+                    loop {
+                        line.clear();
+                        if reader.read_line(&mut line).unwrap_or(0) == 0 {
+                            return;
+                        }
+                        let trimmed = line.trim_end();
+                        if trimmed.is_empty() {
+                            break;
+                        }
+                        let lowered = trimmed.to_ascii_lowercase();
+                        if let Some(value) = lowered.strip_prefix("range: bytes=") {
+                            range_from = value.trim_end_matches('-').parse().ok();
+                        }
+                    }
+                    let count = connection_count.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                    let must_cut = match mode {
+                        CutMode::AlwaysCut => true,
+                        _ => count == 0,
+                    };
+                    if must_cut {
+                        let _ = write!(
+                            stream,
+                            "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                            payload.len()
+                        );
+                        let _ = stream.write_all(&payload[..cut_at]);
+                        let _ = stream.flush();
+                        return;
+                    }
+                    match (mode, range_from) {
+                        (CutMode::ResumeAfterCut, Some(from))
+                            if from > 0 && from < payload.len() =>
+                        {
+                            let body = &payload[from..];
+                            let _ = write!(
+                                stream,
+                                "HTTP/1.1 206 Partial Content\r\nContent-Range: bytes {}-{}/{}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                                from,
+                                payload.len() - 1,
+                                payload.len(),
+                                body.len()
+                            );
+                            let _ = stream.write_all(body);
+                        }
+                        _ => {
+                            let _ = write!(
+                                stream,
+                                "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                                payload.len()
+                            );
+                            let _ = stream.write_all(&payload);
+                        }
+                    }
+                    let _ = stream.flush();
+                });
+            }
+        });
+        Self {
+            address,
+            _thread: server_thread,
+        }
+    }
+
+    fn url(&self) -> String {
+        format!("http://{}/", self.address)
+    }
+}
+
+fn installer_asset(url: String, payload: &[u8]) -> moyumax_core::UpdateAsset {
+    moyumax_core::UpdateAsset {
+        name: "setup.exe".to_owned(),
+        url,
+        size: payload.len() as u64,
+        sha256: Some(encode_hex(Sha256::digest(payload))),
+    }
+}
+
+#[tokio::test]
+async fn m25_upd_006_download_resumes_after_mid_stream_cut() {
+    let payload: Vec<u8> = (0..200_000_u32).map(|index| (index % 251) as u8).collect();
+    let server = CutFixture::start(payload.clone(), 80_000, CutMode::ResumeAfterCut);
+    let directory = TempDir::new().unwrap();
+    let client = UpdateClient::with_base_url("http://127.0.0.1:1/").unwrap();
+    let asset = installer_asset(server.url(), &payload);
+
+    let path = client
+        .download_installer(&asset, directory.path())
+        .await
+        .expect("断流后必须带 Range 续传收敛");
+    assert_eq!(std::fs::read(&path).unwrap(), payload);
+    assert!(
+        !directory.path().join(".setup.exe.partial").exists(),
+        "成功后半成品必须已转正"
+    );
+}
+
+#[tokio::test]
+async fn m25_upd_007_download_restarts_when_range_is_ignored() {
+    let payload: Vec<u8> = (0..120_000_u32).map(|index| (index % 241) as u8).collect();
+    let server = CutFixture::start(payload.clone(), 50_000, CutMode::IgnoreRange);
+    let directory = TempDir::new().unwrap();
+    let client = UpdateClient::with_base_url("http://127.0.0.1:1/").unwrap();
+    let asset = installer_asset(server.url(), &payload);
+
+    let path = client
+        .download_installer(&asset, directory.path())
+        .await
+        .expect("来源忽略 Range 时必须丢弃半成品整体重下");
+    assert_eq!(
+        std::fs::read(&path).unwrap(),
+        payload,
+        "若把整体重发追加到半成品后,文件必然膨胀错乱"
+    );
+}
+
+#[tokio::test]
+async fn m25_upd_008_download_gives_up_after_bounded_attempts_and_cleans_partial() {
+    let payload: Vec<u8> = (0..90_000_u32).map(|index| (index % 233) as u8).collect();
+    let server = CutFixture::start(payload.clone(), 30_000, CutMode::AlwaysCut);
+    let directory = TempDir::new().unwrap();
+    let client = UpdateClient::with_base_url("http://127.0.0.1:1/").unwrap();
+    let asset = installer_asset(server.url(), &payload);
+
+    let error = client
+        .download_installer(&asset, directory.path())
+        .await
+        .expect_err("持续断流必须在有界次数内放弃");
+    assert!(
+        error.to_string().contains("已重试"),
+        "报错应说明已重试:{error}"
+    );
+    assert!(
+        !directory.path().join(".setup.exe.partial").exists(),
+        "放弃后不得留下半成品"
+    );
+}
