@@ -297,7 +297,7 @@
             <div class="field">
               <label for="netplay-name">{t("settings.network.room.nameLabel")}</label>
               <div class="row" style="flex-wrap:wrap">
-                <input id="netplay-name" class="input" style="flex:1;min-width:180px" bind:value={roomName} type="text" aria-label={t("settings.network.room.nameAria")} placeholder={t("settings.network.room.namePlaceholder")} />
+                <input id="netplay-name" class="input" style="flex:1;min-width:min(180px, 100%)" bind:value={roomName} type="text" aria-label={t("settings.network.room.nameAria")} placeholder={t("settings.network.room.namePlaceholder")} />
                 <button class="btn ghost" onclick={generateRoomName}>{t("settings.network.room.generate")}</button>
               </div>
             </div>

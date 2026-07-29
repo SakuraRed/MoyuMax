@@ -104,6 +104,7 @@
 <AppShell
   pageTitle={t("crash.title")}
   activeNavigation="home"
+  pageKey="crash"
   onBack={() => onNavigate("home")}
   {onNavigate}
   {runtime}
@@ -133,7 +134,7 @@
             <li>{recommendation}</li>
           {/each}
         </ol>
-        <div class="row" style="margin-top:14px">
+        <div class="row" style="margin-top:14px;flex-wrap:wrap">
           <button class="btn secondary" disabled={!instance || retrying} onclick={() => void retryInstance()}>
             {retrying ? t("crash.actions.retrying") : t("crash.actions.retry")}
           </button>

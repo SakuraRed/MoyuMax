@@ -20,10 +20,10 @@
     linear-gradient(160deg, var(--bg-1), var(--bg-0) 70%);
 
   /* 毛玻璃面板 */
-  --glass: rgba(255, 255, 255, 0.055);
-  --glass-strong: rgba(255, 255, 255, 0.09);
-  --glass-border: rgba(255, 255, 255, 0.10);
-  --glass-highlight: rgba(255, 255, 255, 0.14);
+  --glass: rgba(255, 255, 255, 0.05);
+  --glass-strong: rgba(255, 255, 255, 0.085);
+  --glass-border: rgba(255, 255, 255, 0.085);
+  --glass-highlight: rgba(255, 255, 255, 0.10);
   --glass-blur: blur(18px) saturate(150%);
 
   /* 文字 */
@@ -49,9 +49,9 @@
   /* 统一圆角 */
   --r: 12px;
 
-  /* 阴影(带背景色相) */
-  --shadow-1: 0 8px 28px rgba(2, 12, 18, 0.45);
-  --shadow-2: 0 16px 48px rgba(2, 12, 18, 0.55);
+  /* 阴影(带背景色相,类苹果的轻量层级) */
+  --shadow-1: 0 6px 22px rgba(2, 12, 18, 0.38);
+  --shadow-2: 0 14px 42px rgba(2, 12, 18, 0.50);
 
   --font: "Segoe UI", "Microsoft YaHei UI", "Microsoft YaHei", system-ui, sans-serif;
   --mono: "Cascadia Mono", Consolas, monospace;
@@ -69,7 +69,7 @@
 
 /* ============ 标题栏:返回+标题 / 全局工具+窗口控制 ============ */
 .titlebar {
-  height: 48px;
+  height: 46px;
   flex: none;
   display: flex;
   align-items: center;
@@ -140,7 +140,7 @@
 .nav-group { font-size: 11px; color: var(--text-3); padding: 12px 12px 4px; letter-spacing: 0.06em; }
 .nav-item {
   display: flex; align-items: center; gap: 10px;
-  padding: 8px 12px;
+  padding: 7px 12px;
   border-radius: var(--r);
   color: var(--text-2);
   font-size: 13.5px;
@@ -215,7 +215,7 @@
   flex: 1;
   min-width: 0;
   overflow: hidden auto;
-  padding: 24px 28px 40px;
+  padding: 26px 30px 44px;
 }
 
 /* ============ 面板与卡片 ============ */
@@ -227,8 +227,8 @@
   -webkit-backdrop-filter: var(--glass-blur);
   box-shadow: inset 0 1px 0 var(--glass-highlight), var(--shadow-1);
 }
-.panel.pad { padding: 18px 20px; }
-.panel-title { font-size: 15px; font-weight: 600; margin-bottom: 4px; }
+.panel.pad { padding: 20px 22px; }
+.panel-title { font-size: 15px; font-weight: 600; margin-bottom: 4px; letter-spacing: 0.01em; }
 .panel-desc { font-size: 12.5px; color: var(--text-2); }
 
 .grid { display: grid; gap: 16px; }
@@ -250,12 +250,12 @@
   font-size: 13.5px;
   font-weight: 600;
   cursor: pointer;
-  transition: transform 120ms ease, background 160ms ease, border-color 160ms ease;
+  transition: transform 120ms cubic-bezier(0.2, 0.8, 0.2, 1), background 160ms cubic-bezier(0.2, 0.8, 0.2, 1), border-color 160ms cubic-bezier(0.2, 0.8, 0.2, 1), filter 160ms cubic-bezier(0.2, 0.8, 0.2, 1);
   white-space: nowrap;
 }
 .btn:active { transform: translateY(1px) scale(0.99); }
 .btn.primary { background: var(--accent); color: var(--accent-ink); }
-.btn.primary:hover { filter: brightness(1.08); }
+.btn.primary:hover { filter: brightness(1.06); }
 .btn.secondary {
   background: var(--glass-strong);
   color: var(--text-1);
@@ -279,10 +279,10 @@
 /* ============ 状态标签(唯一胶囊形) ============ */
 .tag {
   display: inline-flex; align-items: center; gap: 6px;
-  height: 22px;
+  height: 21px;
   padding: 0 10px;
   border-radius: 999px;
-  font-size: 11.5px;
+  font-size: 11px;
   font-weight: 600;
   flex: none;
   white-space: nowrap;
@@ -303,7 +303,7 @@
   padding: 0 12px;
   border-radius: var(--r);
   border: 1px solid var(--glass-border);
-  background: rgba(0, 0, 0, 0.22);
+  background: rgba(0, 0, 0, 0.26);
   color: var(--text-1);
   font-family: var(--font);
   font-size: 13.5px;
@@ -440,8 +440,8 @@
 .modal-mask {
   position: fixed; inset: 0;
   background: rgba(4, 10, 14, 0.6);
-  backdrop-filter: blur(6px);
-  -webkit-backdrop-filter: blur(6px);
+  backdrop-filter: blur(8px);
+  -webkit-backdrop-filter: blur(8px);
   display: grid; place-items: center;
   padding: 24px;
   z-index: 40;
@@ -454,7 +454,7 @@
   border: 1px solid var(--glass-border);
   border-radius: var(--r);
   box-shadow: var(--shadow-2);
-  padding: 22px 24px;
+  padding: 24px 26px;
 }
 .modal h3 { font-size: 16px; margin-bottom: 8px; }
 .modal .m-body { font-size: 13px; color: var(--text-2); }
@@ -488,7 +488,7 @@
 /* ============ 页签(实例详情二级导航) ============ */
 .tabs { display: flex; gap: 4px; margin-bottom: 18px; }
 .tabs button {
-  height: 32px;
+  height: 30px;
   padding: 0 14px;
   border: none;
   border-radius: var(--r);

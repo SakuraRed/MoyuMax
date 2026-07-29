@@ -20,8 +20,11 @@
     versionGameTags,
   } from "../version-groups";
   import type {
+    CatalogProjectSummary,
     ContentInstallPreview,
     ContentUpdateInfo,
+    CurseforgeCategory,
+    CurseforgeSortField,
     InstalledContent,
     InstanceResource,
     InstanceResourceKind,
@@ -35,6 +38,7 @@
     NavigationKey,
     OnboardingSelection,
   } from "../runtime";
+  import { CURSEFORGE_CLASS_IDS } from "../runtime";
   import AppShell from "./AppShell.svelte";
   import Icon from "./Icon.svelte";
   import VersionPicker from "./VersionPicker.svelte";
@@ -89,6 +93,23 @@
     { value: "library", labelKey: "resources.catalog.category.library" },
     { value: "mobs", labelKey: "resources.catalog.category.mobs" },
   ];
+  type CatalogSource = "modrinth" | "curseforge";
+  const CATALOG_SOURCES: { key: CatalogSource; labelKey: string }[] = [
+    { key: "modrinth", labelKey: "resources.catalog.source.modrinth" },
+    { key: "curseforge", labelKey: "resources.catalog.source.curseforge" },
+  ];
+  /** 界面排序到 CurseForge sortField 的映射（关键词搜索时 featured 最接近相关度）。 */
+  const CURSEFORGE_SORT_FIELDS: Record<"relevance" | "downloads" | "updated", CurseforgeSortField> = {
+    relevance: "featured",
+    downloads: "popularity",
+    updated: "lastUpdated",
+  };
+  /** 版本摘要联合类型：CurseForgeFileSummary 在 ModrinthVersionSummary 之上附带校验信息。 */
+  type CatalogVersionSummary = ModrinthVersionSummary & {
+    sha1?: string | null;
+    fileName?: string;
+    size?: number;
+  };
   const eligibleInstances = $derived(
     instances.filter(
       (instance) => instance.state === "ready" && instance.loaderKind in LOADER_NAMES,
@@ -121,6 +142,8 @@
   let tab = $state<"catalog" | "instances" | "favorites">("catalog");
   let catalogView = $state<"list" | "detail">("list");
   let catalogType = $state<ModrinthProjectType>("mod");
+  let catalogSource = $state<CatalogSource>("modrinth");
+  let cfCategories = $state<CurseforgeCategory[]>([]);
   let catalogQuery = $state("");
   let catalogSearching = $state(false);
   let catalogError = $state("");
@@ -139,19 +162,19 @@
   let packInstalling = $state(false);
   let packDone = $state("");
   let packProjectRef = $state<ModrinthProjectSummary | null>(null);
-  let packVersions = $state<ModrinthVersionSummary[]>([]);
+  let packVersions = $state<CatalogVersionSummary[]>([]);
   let packVersionId = $state("");
   let resourceInstalling = $state("");
   let resourceInstallDone = $state("");
   let resourceInstallTarget = $state<ModrinthProjectSummary | null>(null);
-  let resourceVersions = $state<ModrinthVersionSummary[]>([]);
+  let resourceVersions = $state<CatalogVersionSummary[]>([]);
   let resourceVersionId = $state("");
   let resourceVersionsLoading = $state(false);
   let previewProjectRef = $state<ModrinthProjectSummary | null>(null);
-  let previewVersions = $state<ModrinthVersionSummary[]>([]);
+  let previewVersions = $state<CatalogVersionSummary[]>([]);
   let previewVersionId = $state("");
   let downloadTarget = $state<ModrinthProjectSummary | null>(null);
-  let downloadVersions = $state<ModrinthVersionSummary[]>([]);
+  let downloadVersions = $state<CatalogVersionSummary[]>([]);
   let downloadVersionId = $state("");
   let downloadFileName = $state("");
   let downloadDest = $state<"instance" | "custom">("instance");
@@ -169,7 +192,7 @@
   // ---- 资源详情副视图：简介卡 + 版本筛选 + 按 MC 版本分组的文件列表 ----
   let detailProject = $state<ModrinthProjectSummary | null>(null);
   let detailType = $state<ModrinthProjectType>("mod");
-  let detailVersions = $state<ModrinthVersionSummary[]>([]);
+  let detailVersions = $state<CatalogVersionSummary[]>([]);
   let detailVersionsLoading = $state(false);
   let detailVersionsError = $state("");
   let detailGameFilter = $state("");
@@ -181,7 +204,7 @@
   interface DetailVersionGroup {
     key: string;
     isSelected: boolean;
-    versions: ModrinthVersionSummary[];
+    versions: CatalogVersionSummary[];
   }
 
   /** 筛选 chip 命中规则：归并后的大版本 chip 以前缀匹配（1.21 覆盖 1.21.1）。 */
@@ -290,6 +313,13 @@
       .replace("{version}", filterVersion.trim() || instance.gameVersion);
   });
 
+  /** 按当前来源拉取项目文件列表（CurseForge 与 Modrinth 归一化为同一摘要）。 */
+  function listCatalogVersions(projectId: string): Promise<CatalogVersionSummary[]> {
+    return catalogSource === "curseforge"
+      ? runtime.listCurseforgeFiles(projectId)
+      : runtime.listModrinthVersions(projectId);
+  }
+
   async function openDetail(project: ModrinthProjectSummary, type: ModrinthProjectType): Promise<void> {
     detailProject = project;
     detailType = type;
@@ -306,7 +336,7 @@
     detailVersionsLoading = true;
     catalogError = "";
     try {
-      detailVersions = await runtime.listModrinthVersions(project.projectId);
+      detailVersions = await listCatalogVersions(project.projectId);
     } catch (error) {
       detailVersionsError = error instanceof Error ? error.message : String(error);
     } finally {
@@ -321,7 +351,7 @@
     detailVersionsLoading = true;
     detailVersionsError = "";
     try {
-      detailVersions = await runtime.listModrinthVersions(project.projectId);
+      detailVersions = await listCatalogVersions(project.projectId);
     } catch (error) {
       detailVersionsError = error instanceof Error ? error.message : String(error);
     } finally {
@@ -338,10 +368,23 @@
     return `https://modrinth.com/project/${project.slug}`;
   }
 
+  /** CurseForge 项目页地址：区块路径按内容类型（官方站点口径）。 */
+  function curseforgeProjectUrl(project: ModrinthProjectSummary): string {
+    const section =
+      detailType === "modpack"
+        ? "modpacks"
+        : detailType === "shader"
+          ? "shaders"
+          : detailType === "resourcepack"
+            ? "texture-packs"
+            : "mc-mods";
+    return `https://www.curseforge.com/minecraft/${section}/${project.slug}`;
+  }
+
   async function copyDetailText(kind: "name" | "link"): Promise<void> {
     const project = detailProject;
     if (!project) return;
-    const text = kind === "name" ? project.title : modrinthProjectUrl(project);
+    const text = kind === "name" ? project.title : catalogSource === "curseforge" ? curseforgeProjectUrl(project) : modrinthProjectUrl(project);
     try {
       await navigator.clipboard.writeText(text);
     } catch {
@@ -399,8 +442,9 @@
     );
   }
 
-  /** 详情文件行主操作：整合包走安装预览；模组走安装计划；光影/资源包直接装该版本；无实例则自由下载。 */
-  function runDetailVersionAction(version: ModrinthVersionSummary): void {
+  /** 详情文件行主操作：整合包走安装预览；模组 Modrinth 走安装计划、CurseForge 按
+   * 选定文件直接安装（本期不做依赖闭包解析）；光影/资源包直接装该版本；无实例则自由下载。 */
+  function runDetailVersionAction(version: CatalogVersionSummary): void {
     const project = detailProject;
     if (!project) return;
     if (detailType === "modpack") {
@@ -408,7 +452,7 @@
       return;
     }
     const instance = selectedInstance();
-    if (instance && detailType === "mod") {
+    if (instance && detailType === "mod" && catalogSource === "modrinth") {
       void createPreview(project);
       return;
     }
@@ -425,26 +469,36 @@
     return selectedInstance() ? t("resources.catalog.install") : t("resources.download.button");
   }
 
-  /** 详情右栏「安装到」按钮：模组进安装计划，光影/资源包进版本确认。 */
+  /** 详情右栏「安装到」按钮：Modrinth 模组进安装计划，CurseForge 模组与
+   * 光影/资源包一样进版本确认（选定文件直接安装）。 */
   function installDetailProject(): void {
     const project = detailProject;
     if (!project) return;
-    if (detailType === "mod") {
+    if (detailType === "mod" && catalogSource === "modrinth") {
       void createPreview(project);
     } else {
       void openResourceInstall(project);
     }
   }
 
-  /** 详情页已选定具体版本的直接安装（光影/资源包）。 */
+  /** 详情页已选定具体版本的直接安装（CurseForge 模组与光影/资源包）。 */
   async function installResourceVersion(project: ModrinthProjectSummary, versionId: string): Promise<void> {
     const instance = selectedInstance();
-    if (!instance || (detailType !== "shader" && detailType !== "resourcepack")) return;
+    const isCurseforge = catalogSource === "curseforge";
+    const allowed = isCurseforge
+      ? detailType !== "modpack"
+      : detailType === "shader" || detailType === "resourcepack";
+    if (!instance || !allowed) return;
     resourceInstalling = project.projectId;
     catalogError = "";
     resourceInstallDone = "";
+    const kind = detailType as InstanceResourceKind;
     try {
-      await runtime.installOnlineResource(instance.id, detailType, project.projectId, versionId);
+      if (isCurseforge) {
+        await runtime.installCurseforgeResource(instance.id, kind, project.projectId, versionId);
+      } else {
+        await runtime.installOnlineResource(instance.id, kind, project.projectId, versionId);
+      }
       resourceInstallDone = `${project.title} → ${instance.name}`;
       await loadInstalled();
     } catch (error) {
@@ -454,7 +508,7 @@
     }
   }
 
-  async function openDetailDownloadDialog(version: ModrinthVersionSummary): Promise<void> {
+  async function openDetailDownloadDialog(version: CatalogVersionSummary): Promise<void> {
     const project = detailProject;
     if (!project) return;
     downloadTarget = project;
@@ -624,12 +678,42 @@
     catalogPage = null;
     catalogHits = [];
     catalogError = "";
+    filterCategory = "";
     closePackPreview();
     resourceInstallDone = "";
     resourceInstallTarget = null;
     closePreview();
     queued = false;
+    if (catalogSource === "curseforge") void loadCfCategories();
     void runCatalogSearch(true);
+  }
+
+  /** 来源切换（Modrinth | CurseForge）：清空列表、详情与筛选后重新浏览。 */
+  function selectCatalogSource(source: CatalogSource): void {
+    if (catalogSource === source) return;
+    catalogSource = source;
+    catalogView = "list";
+    detailProject = null;
+    catalogPage = null;
+    catalogHits = [];
+    catalogError = "";
+    filterCategory = "";
+    closePackPreview();
+    resourceInstallDone = "";
+    resourceInstallTarget = null;
+    closePreview();
+    queued = false;
+    if (source === "curseforge") void loadCfCategories();
+    void runCatalogSearch(true);
+  }
+
+  /** CurseForge 分类由 API 下发（id 不硬编码）；失败时仅隐藏筛选项。 */
+  async function loadCfCategories(): Promise<void> {
+    try {
+      cfCategories = await runtime.listCurseforgeCategories(CURSEFORGE_CLASS_IDS[catalogType]);
+    } catch {
+      cfCategories = [];
+    }
   }
 
   function selectedInstance(): ManagedInstance | undefined {
@@ -637,6 +721,23 @@
   }
 
   const CATALOG_PAGE_SIZE = 20;
+
+  /** CurseForge 命中映射为目录展示摘要（卡片/详情复用同一结构）。 */
+  function cfHitToSummary(hit: CatalogProjectSummary): ModrinthProjectSummary {
+    return {
+      projectId: hit.projectId,
+      slug: hit.slug,
+      title: hit.title,
+      description: hit.description,
+      downloads: hit.downloads,
+      clientSide: "",
+      serverSide: "",
+      iconUrl: hit.iconUrl,
+      author: hit.author,
+      dateModified: hit.dateModified,
+      versions: hit.gameVersions,
+    };
+  }
 
   /** 目录查询：browse=true 为重载（搜索词可为空 = 热门浏览），false 为加载更多。 */
   async function runCatalogSearch(fresh: boolean): Promise<void> {
@@ -660,18 +761,42 @@
     const loader =
       filterLoader || (catalogType === "mod" ? (instance?.loaderKind ?? "") : "");
     try {
-      const page = await runtime.searchModrinthMods({
-        query: catalogQuery.trim(),
-        gameVersion: catalogType === "modpack" ? "" : gameVersion,
-        loader: catalogType === "mod" ? loader : "",
-        index: catalogQuery.trim() ? "relevance" : sortIndex,
-        offset: fresh ? 0 : catalogHits.length,
-        limit: CATALOG_PAGE_SIZE,
-        projectType: catalogType,
-        category: filterCategory,
-      });
-      catalogPage = page;
-      catalogHits = fresh ? page.hits : [...catalogHits, ...page.hits];
+      if (catalogSource === "curseforge") {
+        const page = await runtime.searchCurseforgeProjects({
+          query: catalogQuery.trim(),
+          classId: CURSEFORGE_CLASS_IDS[catalogType],
+          gameVersion: catalogType === "modpack" ? null : gameVersion || null,
+          categoryId: filterCategory ? Number(filterCategory) : null,
+          modLoader: catalogType === "mod" && loader ? loader : null,
+          sortField: catalogQuery.trim()
+            ? CURSEFORGE_SORT_FIELDS.relevance
+            : CURSEFORGE_SORT_FIELDS[sortIndex],
+          sortOrder: "desc",
+          index: fresh ? 0 : catalogHits.length,
+          pageSize: CATALOG_PAGE_SIZE,
+        });
+        const hits = page.hits.map(cfHitToSummary);
+        catalogPage = {
+          hits,
+          offset: page.index,
+          limit: page.pageSize,
+          totalHits: page.totalCount,
+        };
+        catalogHits = fresh ? hits : [...catalogHits, ...hits];
+      } else {
+        const page = await runtime.searchModrinthMods({
+          query: catalogQuery.trim(),
+          gameVersion: catalogType === "modpack" ? "" : gameVersion,
+          loader: catalogType === "mod" ? loader : "",
+          index: catalogQuery.trim() ? "relevance" : sortIndex,
+          offset: fresh ? 0 : catalogHits.length,
+          limit: CATALOG_PAGE_SIZE,
+          projectType: catalogType,
+          category: filterCategory,
+        });
+        catalogPage = page;
+        catalogHits = fresh ? page.hits : [...catalogHits, ...page.hits];
+      }
       catalogOffline = false;
     } catch (error) {
       catalogError = error instanceof Error ? error.message : String(error);
@@ -827,10 +952,13 @@
     packProjectRef = project;
     packVersions = [];
     packVersionId = "";
+    const isCurseforge = catalogSource === "curseforge";
     try {
       const [previewResult, versions] = await Promise.all([
-        runtime.previewOnlineModpack(project.projectId),
-        runtime.listModrinthVersions(project.projectId).catch(() => [] as ModrinthVersionSummary[]),
+        isCurseforge
+          ? runtime.previewCurseforgeModpack(project.projectId)
+          : runtime.previewOnlineModpack(project.projectId),
+        listCatalogVersions(project.projectId).catch(() => [] as CatalogVersionSummary[]),
       ]);
       packPreview = previewResult;
       packVersions = versions;
@@ -851,10 +979,15 @@
     packPreviewing = packProjectRef.projectId;
     catalogError = "";
     try {
-      packPreview = await runtime.previewOnlineModpack(
-        packProjectRef.projectId,
-        versionId || undefined,
-      );
+      packPreview = catalogSource === "curseforge"
+        ? await runtime.previewCurseforgeModpack(
+            packProjectRef.projectId,
+            versionId || undefined,
+          )
+        : await runtime.previewOnlineModpack(
+            packProjectRef.projectId,
+            versionId || undefined,
+          );
     } catch (error) {
       catalogError = error instanceof Error ? error.message : String(error);
     } finally {
@@ -894,11 +1027,15 @@
     }
   }
 
-  /** 打开光影/资源包安装确认：先取版本列表，用户选定版本后再安装。 */
+  /** 打开光影/资源包安装确认（CurseForge 源下模组同走此单文件安装）：先取版本列表，用户选定版本后再安装。 */
   async function openResourceInstall(project: ModrinthProjectSummary): Promise<void> {
     const instance = selectedInstance();
     const installType = catalogView === "detail" ? detailType : catalogType;
-    if (!instance || (installType !== "shader" && installType !== "resourcepack")) return;
+    const isCurseforge = catalogSource === "curseforge";
+    const allowed = isCurseforge
+      ? installType !== "modpack"
+      : installType === "shader" || installType === "resourcepack";
+    if (!instance || !allowed) return;
     resourceInstallTarget = project;
     resourceVersions = [];
     resourceVersionId = "";
@@ -907,7 +1044,7 @@
     resourceInstallDone = "";
     try {
       // 全量版本,按 MC 版本分组,与实例匹配的组置顶推荐。
-      const versions = await runtime.listModrinthVersions(project.projectId);
+      const versions = await listCatalogVersions(project.projectId);
       if (versions.length === 0) {
         catalogError = t("resources.download.noVersions");
         resourceInstallTarget = null;
@@ -933,12 +1070,21 @@
     const instance = selectedInstance();
     const project = resourceInstallTarget;
     const installType = catalogView === "detail" ? detailType : catalogType;
-    if (!instance || !project || !resourceVersionId || (installType !== "shader" && installType !== "resourcepack")) return;
+    const isCurseforge = catalogSource === "curseforge";
+    const allowed = isCurseforge
+      ? installType !== "modpack"
+      : installType === "shader" || installType === "resourcepack";
+    if (!instance || !project || !resourceVersionId || !allowed) return;
     resourceInstalling = project.projectId;
     catalogError = "";
     resourceInstallDone = "";
+    const kind = installType as InstanceResourceKind;
     try {
-      await runtime.installOnlineResource(instance.id, installType, project.projectId, resourceVersionId);
+      if (isCurseforge) {
+        await runtime.installCurseforgeResource(instance.id, kind, project.projectId, resourceVersionId);
+      } else {
+        await runtime.installOnlineResource(instance.id, kind, project.projectId, resourceVersionId);
+      }
       resourceInstallDone = `${project.title} → ${instance.name}`;
       resourceInstallTarget = null;
       await loadInstalled();
@@ -961,7 +1107,9 @@
   }
 
   function defaultFileExtension(): string {
-    return catalogType === "modpack" ? ".mrpack" : catalogType === "mod" ? ".jar" : ".zip";
+    // CurseForge 整合包主文件是 zip；Modrinth 整合包是 mrpack。
+    if (catalogType === "modpack") return catalogSource === "curseforge" ? ".zip" : ".mrpack";
+    return catalogType === "mod" ? ".jar" : ".zip";
   }
 
   async function openDownloadDialog(project: ModrinthProjectSummary): Promise<void> {
@@ -976,7 +1124,7 @@
     downloadDest = instance ? "instance" : "custom";
     try {
       // 全量版本,按 MC 版本分组展示,与实例匹配的组置顶推荐。
-      const versions = await runtime.listModrinthVersions(project.projectId);
+      const versions = await listCatalogVersions(project.projectId);
       if (versions.length === 0) {
         catalogError = t("resources.download.noVersions");
         downloadTarget = null;
@@ -997,6 +1145,11 @@
       downloadLoadingVersions = false;
     }
   }
+
+  /** 当前选中的下载版本（CurseForge 源用于「无校验值按大小校验」提示）。 */
+  const downloadSelectedVersion = $derived(
+    downloadVersions.find((candidate) => candidate.id === downloadVersionId),
+  );
 
   function selectDownloadVersion(versionId: string): void {
     downloadVersionId = versionId;
@@ -1036,11 +1189,19 @@
     catalogError = "";
     downloadDone = "";
     try {
-      const path = await runtime.downloadModrinthFile(
-        downloadVersionId,
-        targetDir,
-        downloadFileName.trim(),
-      );
+      const project = downloadTarget;
+      const path = catalogSource === "curseforge" && project
+        ? await runtime.downloadCurseforgeFile(
+            project.projectId,
+            downloadVersionId,
+            targetDir,
+            downloadFileName.trim(),
+          )
+        : await runtime.downloadModrinthFile(
+            downloadVersionId,
+            targetDir,
+            downloadFileName.trim(),
+          );
       downloadDone = path;
       downloadTarget = null;
     } catch (error) {
@@ -1096,17 +1257,28 @@
             placeholder={t("resources.catalog.searchPlaceholder")}
             oninput={() => { if (!catalogQuery.trim()) applyFilters(); }}
           />
-          <button class="btn primary search-submit" disabled={catalogSearching || (catalogType === "mod" && eligibleInstances.length === 0)}>{catalogSearching ? t("resources.catalog.searching") : t("resources.catalog.searchSubmit")}</button>
+          <button class="btn primary search-submit" disabled={catalogSearching || (catalogSource === "modrinth" && catalogType === "mod" && eligibleInstances.length === 0)}>{catalogSearching ? t("resources.catalog.searching") : t("resources.catalog.searchSubmit")}</button>
         </form>
         <div class="row spread">
-          <div class="seg" role="group" aria-label={t("resources.catalog.typeAria")}>
-            {#each CATALOG_TYPES as catalogTypeOption}
-              <button
-                class:on={catalogType === catalogTypeOption.key}
-                aria-pressed={catalogType === catalogTypeOption.key}
-                onclick={() => selectCatalogType(catalogTypeOption.key)}
-              >{t(catalogTypeOption.labelKey)}</button>
-            {/each}
+          <div class="row">
+            <div class="seg" role="group" aria-label={t("resources.catalog.sourceAria")}>
+              {#each CATALOG_SOURCES as sourceOption}
+                <button
+                  class:on={catalogSource === sourceOption.key}
+                  aria-pressed={catalogSource === sourceOption.key}
+                  onclick={() => selectCatalogSource(sourceOption.key)}
+                >{t(sourceOption.labelKey)}</button>
+              {/each}
+            </div>
+            <div class="seg" role="group" aria-label={t("resources.catalog.typeAria")}>
+              {#each CATALOG_TYPES as catalogTypeOption}
+                <button
+                  class:on={catalogType === catalogTypeOption.key}
+                  aria-pressed={catalogType === catalogTypeOption.key}
+                  onclick={() => selectCatalogType(catalogTypeOption.key)}
+                >{t(catalogTypeOption.labelKey)}</button>
+              {/each}
+            </div>
           </div>
           {#if catalogType !== "modpack" && eligibleInstances.length > 0}
             <div class="row">
@@ -1120,7 +1292,11 @@
           {/if}
         </div>
         <div class="row spread">
-          <span class="src-note">{t("resources.catalog.sourceNote")}</span>
+          {#if catalogSource === "curseforge"}
+            <span class="src-note">{t("resources.catalog.sourceNoteCurseforge")}</span>
+          {:else}
+            <span class="src-note">{t("resources.catalog.sourceNote")}</span>
+          {/if}
           {#if autoFilterNote}<span class="src-note">{autoFilterNote}</span>{/if}
         </div>
         <div class="res-filters" role="group" aria-label={t("resources.catalog.filtersAria")}>
@@ -1154,15 +1330,27 @@
               </select>
             </label>
           {/if}
-          <label class="res-filter">
-            <span>{t("resources.catalog.filterCategory")}</span>
-            <select class="input" value={filterCategory} onchange={(event) => { filterCategory = (event.currentTarget as HTMLSelectElement).value; applyFilters(); }} aria-label={t("resources.catalog.filterCategory")}>
-              <option value="">{t("resources.catalog.filterCategoryAll")}</option>
-              {#each CATALOG_CATEGORIES as category}
-                <option value={category.value}>{t(category.labelKey)}</option>
-              {/each}
-            </select>
-          </label>
+          {#if catalogSource === "modrinth"}
+            <label class="res-filter">
+              <span>{t("resources.catalog.filterCategory")}</span>
+              <select class="input" value={filterCategory} onchange={(event) => { filterCategory = (event.currentTarget as HTMLSelectElement).value; applyFilters(); }} aria-label={t("resources.catalog.filterCategory")}>
+                <option value="">{t("resources.catalog.filterCategoryAll")}</option>
+                {#each CATALOG_CATEGORIES as category}
+                  <option value={category.value}>{t(category.labelKey)}</option>
+                {/each}
+              </select>
+            </label>
+          {:else if catalogType === "mod" && cfCategories.length > 0}
+            <label class="res-filter">
+              <span>{t("resources.catalog.filterCategory")}</span>
+              <select class="input" value={filterCategory} onchange={(event) => { filterCategory = (event.currentTarget as HTMLSelectElement).value; applyFilters(); }} aria-label={t("resources.catalog.filterCategory")}>
+                <option value="">{t("resources.catalog.filterCategoryAll")}</option>
+                {#each cfCategories as category}
+                  <option value={String(category.id)}>{category.name}</option>
+                {/each}
+              </select>
+            </label>
+          {/if}
           <label class="res-filter">
             <span>{t("resources.catalog.filterSort")}</span>
             <select class="input" value={sortIndex} onchange={(event) => { sortIndex = (event.currentTarget as HTMLSelectElement).value as typeof sortIndex; applyFilters(); }} aria-label={t("resources.catalog.filterSort")}>
@@ -1171,7 +1359,7 @@
               <option value="relevance">{t("resources.catalog.sortRelevance")}</option>
             </select>
           </label>
-          {#if catalogType === "modpack"}
+          {#if catalogType === "modpack" && catalogSource === "modrinth"}
             <span class="src-note">
               {t("resources.catalog.cfHint")}
               <button class="inline-link" onclick={() => onNavigate("instances")}>{t("resources.catalog.cfImport")}</button>
@@ -1280,7 +1468,7 @@
                 {#if project.dateModified}<div class="dim">{formatDate(project.dateModified)}</div>{/if}
               </div>
               <div class="rr-actions">
-                {#if catalogType === "mod"}
+                {#if catalogType === "mod" && catalogSource === "modrinth"}
                   <button class="btn small primary" disabled={Boolean(previewingProject) || eligibleInstances.length === 0} onclick={() => void createPreview(project)}>
                     {previewingProject === project.projectId ? t("resources.catalog.parsing") : t("resources.catalog.install")}
                   </button>
@@ -1343,7 +1531,7 @@
                     {#if project.author}
                       <div class="kv"><span class="k">{t("resources.detail.kvAuthor")}</span><span>{project.author}</span></div>
                     {/if}
-                    <div class="kv"><span class="k">{t("resources.detail.kvSource")}</span><span>{t("resources.detail.sourceValue")}</span></div>
+                    <div class="kv"><span class="k">{t("resources.detail.kvSource")}</span><span>{catalogSource === "curseforge" ? t("resources.detail.sourceValueCurseforge") : t("resources.detail.sourceValue")}</span></div>
                     {#if project.description}
                       <div class="kv"><span class="k">{t("resources.detail.kvIntro")}</span><span>{project.description}</span></div>
                     {/if}
@@ -1357,7 +1545,11 @@
                       </div>
                     {/if}
                     <div class="detail-actions">
-                      <button class="btn small ghost" onclick={() => void runtime.openExternalUrl(modrinthProjectUrl(project))}>{t("resources.detail.openModrinth")}</button>
+                      {#if catalogSource === "curseforge"}
+                        <button class="btn small ghost" onclick={() => void runtime.openExternalUrl(curseforgeProjectUrl(project))}>{t("resources.detail.openCurseforge")}</button>
+                      {:else}
+                        <button class="btn small ghost" onclick={() => void runtime.openExternalUrl(modrinthProjectUrl(project))}>{t("resources.detail.openModrinth")}</button>
+                      {/if}
                       {#if zhRegion && detailMcmod}
                         <button class="btn small ghost" onclick={() => void runtime.openExternalUrl(detailMcmod.mcmodUrl)}>{t("resources.detail.openMcmod")}</button>
                       {/if}
@@ -1880,6 +2072,9 @@
             {#if selectedInstance()}
               <p class="dim" style="margin-top:12px">{t("resources.catalog.resourceTarget").replace("{name}", selectedInstance()!.name)}</p>
             {/if}
+            {#if catalogSource === "curseforge" && (catalogView === "detail" ? detailType : catalogType) === "mod"}
+              <p class="dim" style="margin-top:8px">{t("resources.catalog.cfNoDeps")}</p>
+            {/if}
             {#if catalogError}
               <div class="banner danger" style="margin-top:14px" role="alert"><span>{catalogError}</span></div>
             {/if}
@@ -1925,6 +2120,9 @@
                   onSelect={selectDownloadVersion}
                 />
               </div>
+              {#if catalogSource === "curseforge" && downloadSelectedVersion && !downloadSelectedVersion.sha1}
+                <p class="dim" style="margin:0">{t("resources.download.noChecksum")}</p>
+              {/if}
               <label class="field">
                 <span class="field-label">{t("resources.download.fileNameLabel")}</span>
                 <input class="input" bind:value={downloadFileName} type="text" aria-label={t("resources.download.fileNameAria")} />

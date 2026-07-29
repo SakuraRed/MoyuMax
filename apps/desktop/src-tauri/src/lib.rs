@@ -10,6 +10,7 @@ use std::{
 use moyumax_core::{
     AccountSummary, AppService, ArtifactDownloader, BootstrapState, ContentExecutor,
     ContentInstallPlan, ContentInstallTask, ContentUpdateInfo, CrashReportSummary,
+    CurseForgeClient, CurseforgeCategory, CurseforgeFileSummary, CurseforgeSearchQuery,
     DiagnosticExportPreview, DiagnosticExportResult, DownloadInterrupt, ExitImpactSummary,
     ExportModpackOptions, ExportModpackReport, FabricLoaderSummary, GlobalLaunchPreference,
     InstallExecutor, InstallSelection, InstallTask, InstalledContent, InstalledModpack,
@@ -1827,6 +1828,52 @@ fn read_background_image(
         .map_err(|error| error.to_string())
 }
 
+/// 主题包标准 v2 导入(v1 自动升级):校验后复制到受管 themes/ 目录。
+#[tauri::command]
+fn import_theme_pack_v2(
+    service: State<'_, AppService>,
+    source_path: String,
+) -> Result<moyumax_core::ThemePackMeta, String> {
+    service
+        .import_theme_pack(std::path::Path::new(&source_path))
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+fn list_imported_theme_packs(
+    service: State<'_, AppService>,
+) -> Result<Vec<moyumax_core::ThemePackMeta>, String> {
+    service
+        .list_imported_theme_packs()
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+fn read_theme_pack_v2(service: State<'_, AppService>, pack_id: String) -> Result<String, String> {
+    service
+        .read_theme_pack(&pack_id)
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+fn remove_theme_pack(service: State<'_, AppService>, pack_id: String) -> Result<(), String> {
+    service
+        .remove_theme_pack(&pack_id)
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+fn get_ui_theme_pack(service: State<'_, AppService>) -> Result<String, String> {
+    service.ui_theme_pack().map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+fn set_ui_theme_pack(service: State<'_, AppService>, pack_id: String) -> Result<(), String> {
+    service
+        .set_ui_theme_pack(&pack_id)
+        .map_err(|error| error.to_string())
+}
+
 #[tauri::command]
 fn import_modpack_preview(
     previews: State<'_, ModpackPreviewStore>,
@@ -2156,6 +2203,220 @@ async fn install_online_resource(
         .join(Uuid::new_v4().simple().to_string());
     let downloaded = client
         .download_project_file(&file, &staging_directory)
+        .await
+        .map_err(|error| error.to_string())?;
+    let result = service.import_instance_resource(&instance_id, kind, &downloaded, None);
+    let _ = std::fs::remove_dir_all(&staging_directory);
+    result.map_err(|error| error.to_string())
+}
+
+// ---- CurseForge 官方源（设置 → 来源 配置 API Key 后启用）----
+
+/// 用当前保存的 Key 构造 CurseForge 客户端；未配置时由 core 如实报错并给出去向。
+fn curseforge_client(service: &AppService) -> Result<CurseForgeClient, String> {
+    let key = service
+        .curseforge_api_key()
+        .map_err(|error| error.to_string())?;
+    CurseForgeClient::new(key).map_err(|error| error.to_string())
+}
+
+/// 读取本机保存的 CurseForge API Key（仅本机使用，界面打码展示）。
+#[tauri::command]
+fn get_curseforge_api_key(service: State<'_, AppService>) -> Result<Option<String>, String> {
+    service
+        .curseforge_api_key()
+        .map_err(|error| error.to_string())
+}
+
+/// 保存 Key；空白输入视为清除。
+#[tauri::command]
+fn set_curseforge_api_key(service: State<'_, AppService>, key: String) -> Result<(), String> {
+    service
+        .set_curseforge_api_key(&key)
+        .map_err(|error| error.to_string())
+}
+
+/// 调 GET /games/432 验证当前 Key 有效；成功返回游戏名。
+#[tauri::command]
+async fn test_curseforge_api_key(service: State<'_, AppService>) -> Result<String, String> {
+    service
+        .test_curseforge_key()
+        .await
+        .map_err(|error| error.to_string())
+}
+
+/// CurseForge 目录搜索（gameId=432 固定，classId 区分模组/整合包/光影/资源包）。
+#[tauri::command]
+async fn search_curseforge_projects(
+    service: State<'_, AppService>,
+    query: CurseforgeSearchQuery,
+) -> Result<moyumax_core::CatalogSearchPage, String> {
+    curseforge_client(&service)?
+        .search(&query)
+        .await
+        .map_err(|error| error.to_string())
+}
+
+/// 项目文件列表（资源详情与版本选择，归一化为统一版本摘要）。
+#[tauri::command]
+async fn list_curseforge_files(
+    service: State<'_, AppService>,
+    project_id: String,
+    game_version: Option<String>,
+    loader: Option<String>,
+) -> Result<Vec<CurseforgeFileSummary>, String> {
+    curseforge_client(&service)?
+        .project_files(&project_id, game_version.as_deref(), loader.as_deref())
+        .await
+        .map_err(|error| error.to_string())
+}
+
+/// 分类列表（id 由 API 下发，前端不硬编码）。
+#[tauri::command]
+async fn list_curseforge_categories(
+    service: State<'_, AppService>,
+    class_id: u32,
+) -> Result<Vec<CurseforgeCategory>, String> {
+    curseforge_client(&service)?
+        .categories(class_id)
+        .await
+        .map_err(|error| error.to_string())
+}
+
+/// 自由下载：指定文件下载到目标目录并按自定义文件名保存；
+/// 有 SHA-1 按 SHA-1 校验，来源未提供校验值时按大小校验。
+#[tauri::command]
+async fn download_curseforge_file(
+    service: State<'_, AppService>,
+    project_id: String,
+    file_id: String,
+    target_dir: String,
+    file_name: String,
+) -> Result<String, String> {
+    let target = PathBuf::from(&target_dir);
+    if target_dir.trim().is_empty() || !target.is_dir() {
+        return Err("保存目录不存在".to_owned());
+    }
+    let client = curseforge_client(&service)?;
+    let file = client
+        .file_summary(&project_id, &file_id)
+        .await
+        .map_err(|error| error.to_string())?;
+    let path = client
+        .download_file_as(&file, &target, &file_name)
+        .await
+        .map_err(|error| error.to_string())?;
+    Ok(path.to_string_lossy().into_owned())
+}
+
+/// 在线整合包预览（CurseForge 官方源）：下载主文件（指定版本或最新正式版）
+/// 并解析 manifest；确认安装复用 `install_modpack`，图标回填逻辑同 Modrinth。
+#[tauri::command]
+async fn preview_curseforge_modpack(
+    service: State<'_, AppService>,
+    previews: State<'_, ModpackPreviewStore>,
+    project_id: String,
+    file_id: Option<String>,
+) -> Result<ModpackPreviewResponse, String> {
+    let client = curseforge_client(&service)?;
+    let file = match file_id
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    {
+        Some(selected) => client
+            .file_summary(&project_id, selected)
+            .await
+            .map_err(|error| error.to_string())?,
+        None => client
+            .latest_project_file(&project_id, None, None)
+            .await
+            .map_err(|error| error.to_string())?,
+    };
+    let staging_directory = service
+        .selected_data_directory()
+        .map_err(|error| error.to_string())?
+        .join(".staging")
+        .join("online-modpacks")
+        .join(Uuid::new_v4().simple().to_string());
+    let archive_outcome = client.download_file(&file, &staging_directory).await;
+    let archive_path = match archive_outcome {
+        Ok(path) => path,
+        Err(error) => {
+            let _ = std::fs::remove_dir_all(&staging_directory);
+            return Err(error.to_string());
+        }
+    };
+    let plan = match moyumax_core::parse_modpack_archive(&archive_path) {
+        Ok(plan) => plan,
+        Err(error) => {
+            let _ = std::fs::remove_dir_all(&staging_directory);
+            return Err(error.to_string());
+        }
+    };
+    let preview = moyumax_core::modpack_preview(&plan);
+    let id = Uuid::new_v4().to_string();
+    let mut store = previews
+        .plans
+        .lock()
+        .map_err(|_| "整合包预览状态锁已损坏，请重启 MoyuMax".to_owned())?;
+    if store.len() >= 8 {
+        store.clear();
+    }
+    store.insert(id.clone(), (plan, archive_path));
+    Ok(ModpackPreviewResponse { id, preview })
+}
+
+/// 在线资源安装（CurseForge 官方源）：光影/资源包/模组按选定文件直接安装
+/// 到实例（本期不做依赖闭包解析，模组也不会自动带依赖）；下载校验后走
+/// M16 本地导入事务（同名拒绝、实例隔离、中断收敛）。
+#[tauri::command]
+async fn install_curseforge_resource(
+    service: State<'_, AppService>,
+    instance_id: String,
+    kind: InstanceResourceKind,
+    project_id: String,
+    file_id: Option<String>,
+) -> Result<InstanceResource, String> {
+    if matches!(kind, InstanceResourceKind::Datapack) {
+        return Err("数据包必须选择目标世界，请走本地导入".to_owned());
+    }
+    let instances = service
+        .list_instances()
+        .map_err(|error| error.to_string())?;
+    let instance = instances
+        .iter()
+        .find(|candidate| candidate.id == instance_id)
+        .ok_or_else(|| "目标实例不存在".to_owned())?;
+    let client = curseforge_client(&service)?;
+    let loader_filter = match kind {
+        InstanceResourceKind::Mod if instance.loader_kind != "vanilla" => {
+            Some(instance.loader_kind.as_str())
+        }
+        _ => None,
+    };
+    let file = match file_id
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    {
+        Some(selected) => client
+            .file_summary(&project_id, selected)
+            .await
+            .map_err(|error| error.to_string())?,
+        None => client
+            .latest_project_file(&project_id, Some(&instance.game_version), loader_filter)
+            .await
+            .map_err(|error| error.to_string())?,
+    };
+    let staging_directory = service
+        .selected_data_directory()
+        .map_err(|error| error.to_string())?
+        .join(".staging")
+        .join("online-resources")
+        .join(Uuid::new_v4().simple().to_string());
+    let downloaded = client
+        .download_file(&file, &staging_directory)
         .await
         .map_err(|error| error.to_string())?;
     let result = service.import_instance_resource(&instance_id, kind, &downloaded, None);
@@ -3223,6 +3484,12 @@ pub fn run() {
             import_background_image,
             import_theme_pack,
             read_background_image,
+            import_theme_pack_v2,
+            list_imported_theme_packs,
+            read_theme_pack_v2,
+            remove_theme_pack,
+            get_ui_theme_pack,
+            set_ui_theme_pack,
             import_modpack_preview,
             install_modpack,
             update_modpack,
@@ -3234,6 +3501,15 @@ pub fn run() {
             install_online_resource,
             list_modrinth_versions,
             download_modrinth_file,
+            get_curseforge_api_key,
+            set_curseforge_api_key,
+            test_curseforge_api_key,
+            search_curseforge_projects,
+            list_curseforge_files,
+            list_curseforge_categories,
+            download_curseforge_file,
+            preview_curseforge_modpack,
+            install_curseforge_resource,
             retry_content_task,
             resolve_content_task_recovery,
             list_instances,

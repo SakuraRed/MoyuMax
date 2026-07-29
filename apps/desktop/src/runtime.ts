@@ -253,6 +253,80 @@ export interface ModrinthSearchPage {
   totalHits: number;
 }
 
+export type CatalogProjectSource = "modrinth" | "curseforge";
+
+/** 统一目录项目摘要（CurseForge 数字 ID 转字符串，与 Modrinth 摘要同形）。 */
+export interface CatalogProjectSummary {
+  projectId: string;
+  title: string;
+  slug: string;
+  author: string | null;
+  description: string;
+  iconUrl: string | null;
+  downloads: number;
+  dateModified: string | null;
+  gameVersions: string[];
+  categories: string[];
+  source: CatalogProjectSource;
+}
+
+/** 统一目录搜索分页。 */
+export interface CatalogSearchPage {
+  hits: CatalogProjectSummary[];
+  index: number;
+  pageSize: number;
+  totalCount: number;
+}
+
+export type CurseforgeSortField = "featured" | "popularity" | "lastUpdated" | "name" | "totalDownloads";
+export type CurseforgeSortOrder = "asc" | "desc";
+
+/** CurseForge 目录搜索条件（gameId=432 由 core 固定）。 */
+export interface CurseforgeSearchQuery {
+  query: string;
+  classId: number;
+  gameVersion?: string | null;
+  categoryId?: number | null;
+  modLoader?: string | null;
+  sortField: CurseforgeSortField;
+  sortOrder: CurseforgeSortOrder;
+  index: number;
+  pageSize: number;
+}
+
+/** CurseForge 文件摘要（与 ModrinthVersionSummary 同形，另带下载与校验信息）。 */
+export interface CurseforgeFileSummary {
+  id: string;
+  versionNumber: string;
+  /** release / beta / alpha。 */
+  versionType: string;
+  datePublished: string;
+  gameVersions: string[];
+  loaders: string[];
+  downloads: number;
+  fileName: string;
+  size: number;
+  /** 来源未提供校验值时为 null，下载按大小校验。 */
+  sha1: string | null;
+  /** 官方返回的下载地址；为 null 时 core 按 ForgeCDN edge 规则兜底。 */
+  downloadUrl: string | null;
+}
+
+/** CurseForge 内容分类（id 由 API 下发，不硬编码）。 */
+export interface CurseforgeCategory {
+  id: number;
+  name: string;
+  slug: string;
+}
+
+/** CurseForge 内容分类 classId（官方 REST 文档口径：6/12/4471/6552）。 */
+export const CURSEFORGE_CLASS_IDS: Record<ModrinthProjectType, number> = {
+  mod: 6,
+  resourcepack: 12,
+  modpack: 4471,
+  shader: 6552,
+};
+
 export type ContentDependencyKind = "required" | "optional" | "incompatible" | "embedded";
 
 export interface ContentDependencyChoice {
@@ -355,6 +429,14 @@ export interface ContentUpdateInfo {
   latestVersionId: string;
   latestVersionNumber: string;
   file: ContentFilePlan;
+}
+
+/** 主题包元数据(v2 标准;builtin 为内置包)。 */
+export interface ThemePackMeta {
+  id: string;
+  name: string;
+  author: string;
+  builtin: boolean;
 }
 
 export type InstanceResourceKind = "resourcepack" | "shader" | "datapack" | "mod";
@@ -939,6 +1021,13 @@ export interface MoyuRuntime {
   importBackgroundImage(sourcePath: string): Promise<UiBackground>;
   importThemePack(sourcePath: string): Promise<ThemePack>;
   readBackgroundImage(): Promise<[string, number[]] | null>;
+  /** 主题包标准 v2:导入(v1 自动升级)/列表/读取/删除/当前启用。 */
+  importThemePackV2(sourcePath: string): Promise<ThemePackMeta>;
+  listImportedThemePacks(): Promise<ThemePackMeta[]>;
+  readThemePackV2(packId: string): Promise<string>;
+  removeThemePack(packId: string): Promise<void>;
+  getUiThemePack(): Promise<string>;
+  setUiThemePack(packId: string): Promise<void>;
   /** 打开原生文件选择器挑选背景图片；用户取消时返回 null。 */
   pickBackgroundImage(): Promise<string | null>;
   /** 打开原生文件选择器挑选主题包 JSON；用户取消时返回 null。 */
@@ -981,6 +1070,38 @@ export interface MoyuRuntime {
     kind: InstanceResourceKind,
     projectId: string,
     versionId?: string,
+  ): Promise<InstanceResource>;
+  /** 本机保存的 CurseForge API Key（仅本机使用；null 表示未配置）。 */
+  getCurseforgeApiKey(): Promise<string | null>;
+  /** 保存 CurseForge API Key；空白输入视为清除。 */
+  setCurseforgeApiKey(key: string): Promise<void>;
+  /** 用当前 Key 调官方接口验证有效性；成功返回游戏名。 */
+  testCurseforgeApiKey(): Promise<string>;
+  /** CurseForge 目录搜索（gameId=432 固定，classId 区分内容类型）。 */
+  searchCurseforgeProjects(query: CurseforgeSearchQuery): Promise<CatalogSearchPage>;
+  /** 项目文件列表（资源详情与版本选择，归一化为统一摘要）。 */
+  listCurseforgeFiles(
+    projectId: string,
+    gameVersion?: string,
+    loader?: string,
+  ): Promise<CurseforgeFileSummary[]>;
+  /** 分类列表（id 由 API 下发，前端不硬编码）。 */
+  listCurseforgeCategories(classId: number): Promise<CurseforgeCategory[]>;
+  /** 自由下载：指定文件下载到目标目录并按自定义文件名保存。 */
+  downloadCurseforgeFile(
+    projectId: string,
+    fileId: string,
+    targetDir: string,
+    fileName: string,
+  ): Promise<string>;
+  /** 在线整合包预览（CurseForge 官方源），确认走 installModpack；可指定版本。 */
+  previewCurseforgeModpack(projectId: string, fileId?: string): Promise<ModpackPreviewResponse>;
+  /** 在线光影/资源包/模组安装（CurseForge 官方源，按选定文件直接安装，不做依赖闭包解析）。 */
+  installCurseforgeResource(
+    instanceId: string,
+    kind: InstanceResourceKind,
+    projectId: string,
+    fileId?: string,
   ): Promise<InstanceResource>;
   /** 订阅整合包安装/更新进度事件，返回取消订阅函数。 */
   onModpackProgress(handler: (event: ModpackProgressEvent) => void): () => void;
@@ -1081,6 +1202,11 @@ const BROWSER_SCREENSHOTS_KEY = "moyumax.browser.screenshots";
 const BROWSER_BACKUP_SETTINGS_KEY = "moyumax.browser.backupSettings";
 const BROWSER_ACCOUNTS_KEY = "moyumax.browser.accounts";
 const BROWSER_MODPACKS_KEY = "moyumax.browser.modpacks";
+const BROWSER_CURSEFORGE_API_KEY = "moyumax.browser.curseforgeApiKey";
+const BROWSER_CURSEFORGE_CATALOG_KEY = "moyumax.browser.curseforgeCatalog";
+const BROWSER_CURSEFORGE_FILES_KEY = "moyumax.browser.curseforgeFiles";
+const BROWSER_CURSEFORGE_CATEGORIES_KEY = "moyumax.browser.curseforgeCategories";
+const BROWSER_CURSEFORGE_MODPACK_PREVIEW_KEY = "moyumax.browser.curseforgeModpackPreview";
 const browserModpackProgressHandlers = new Set<(event: ModpackProgressEvent) => void>();
 const browserMicrosoftLoginHandlers = new Set<(event: MicrosoftLoginEvent) => void>();
 let browserMicrosoftLoginTimer: number | undefined;
@@ -1118,6 +1244,8 @@ const BROWSER_CONCURRENCY_KEY = "moyumax.browser.downloadConcurrency";
 const browserPreviews = new Map<string, InstallSelection>();
 const browserContentPreviews = new Map<string, ContentInstallPlan>();
 const browserDiagnosticPreviews = new Map<string, string>();
+/** 在线整合包预览登记（Modrinth/CurseForge 共用，installModpack 按 id 取回）。 */
+const browserOnlineModpackPreviews = new Map<string, ModpackPreview>();
 const browserCloseHandlers = new Set<() => void>();
 const browserPendingIntentHandlers = new Set<() => void>();
 
@@ -1371,6 +1499,14 @@ function createTauriRuntime(): MoyuRuntime {
       invoke<UiBackground>("import_background_image", { sourcePath }),
     importThemePack: (sourcePath) =>
       invoke<ThemePack>("import_theme_pack", { sourcePath }),
+    importThemePackV2: (sourcePath) =>
+      invoke<ThemePackMeta>("import_theme_pack_v2", { sourcePath }),
+    listImportedThemePacks: () =>
+      invoke<ThemePackMeta[]>("list_imported_theme_packs"),
+    readThemePackV2: (packId) => invoke<string>("read_theme_pack_v2", { packId }),
+    removeThemePack: (packId) => invoke<void>("remove_theme_pack", { packId }),
+    getUiThemePack: () => invoke<string>("get_ui_theme_pack"),
+    setUiThemePack: (packId) => invoke<void>("set_ui_theme_pack", { packId }),
     readBackgroundImage: () =>
       invoke<[string, number[]] | null>("read_background_image"),
     pickBackgroundImage: async () => {
@@ -1430,6 +1566,33 @@ function createTauriRuntime(): MoyuRuntime {
       invoke<ModpackPreviewResponse>("preview_online_modpack", { projectId, versionId: versionId ?? null }),
     installOnlineResource: (instanceId, kind, projectId, versionId) =>
       invoke<InstanceResource>("install_online_resource", { instanceId, kind, projectId, versionId }),
+    getCurseforgeApiKey: () => invoke<string | null>("get_curseforge_api_key"),
+    setCurseforgeApiKey: (key) => invoke<void>("set_curseforge_api_key", { key }),
+    testCurseforgeApiKey: () => invoke<string>("test_curseforge_api_key"),
+    searchCurseforgeProjects: (query) =>
+      invoke<CatalogSearchPage>("search_curseforge_projects", { query }),
+    listCurseforgeFiles: (projectId, gameVersion, loader) =>
+      invoke<CurseforgeFileSummary[]>("list_curseforge_files", {
+        projectId,
+        gameVersion: gameVersion ?? null,
+        loader: loader ?? null,
+      }),
+    listCurseforgeCategories: (classId) =>
+      invoke<CurseforgeCategory[]>("list_curseforge_categories", { classId }),
+    downloadCurseforgeFile: (projectId, fileId, targetDir, fileName) =>
+      invoke<string>("download_curseforge_file", { projectId, fileId, targetDir, fileName }),
+    previewCurseforgeModpack: (projectId, fileId) =>
+      invoke<ModpackPreviewResponse>("preview_curseforge_modpack", {
+        projectId,
+        fileId: fileId ?? null,
+      }),
+    installCurseforgeResource: (instanceId, kind, projectId, fileId) =>
+      invoke<InstanceResource>("install_curseforge_resource", {
+        instanceId,
+        kind,
+        projectId,
+        fileId: fileId ?? null,
+      }),
     onModpackProgress: (handler) => {
       let unlisten: (() => void) | undefined;
       void listen<ModpackProgressEvent>("modpack-progress", (event) => {
@@ -2587,8 +2750,44 @@ function createBrowserRuntime(): MoyuRuntime {
       );
       return pack;
     },
-    async readBackgroundImage() {
-      const serialized = window.localStorage.getItem("moyumax.browser.uiBackground");
+    async importThemePackV2(_sourcePath) {
+      const raw = window.localStorage.getItem("moyumax.browser.themePackJson") ?? "";
+      let pack: { id?: string; name?: string; author?: string; formatVersion?: number };
+      try {
+        pack = JSON.parse(raw) as typeof pack;
+      } catch {
+        throw new Error("主题包不是有效的 JSON");
+      }
+      if (pack.formatVersion !== 2) throw new Error("不支持的主题包格式版本");
+      if (!pack.id) throw new Error("主题包缺少 id");
+      const packs = browserThemePacks();
+      packs[pack.id] = raw;
+      window.localStorage.setItem("moyumax.browser.themePacks", JSON.stringify(packs));
+      return { id: pack.id, name: pack.name ?? pack.id, author: pack.author ?? "", builtin: false };
+    },
+    async listImportedThemePacks() {
+      return Object.entries(browserThemePacks()).map(([id, raw]) => {
+        const pack = JSON.parse(raw) as { name?: string; author?: string };
+        return { id, name: pack.name ?? id, author: pack.author ?? "", builtin: false };
+      });
+    },
+    async readThemePackV2(packId) {
+      const source = browserThemePacks()[packId];
+      if (!source) throw new Error("主题包不存在或已被删除");
+      return source;
+    },
+    async removeThemePack(packId) {
+      const packs = browserThemePacks();
+      delete packs[packId];
+      window.localStorage.setItem("moyumax.browser.themePacks", JSON.stringify(packs));
+    },
+    async getUiThemePack() {
+      return window.localStorage.getItem("moyumax.browser.uiThemePack") ?? "default";
+    },
+    async setUiThemePack(packId) {
+      window.localStorage.setItem("moyumax.browser.uiThemePack", packId);
+    },
+    async readBackgroundImage() {      const serialized = window.localStorage.getItem("moyumax.browser.uiBackground");
       const background = serialized ? (JSON.parse(serialized) as UiBackground) : null;
       if (background?.type !== "image") return null;
       // 1x1 深色 PNG，供浏览器模拟图片渲染。
@@ -2616,7 +2815,9 @@ function createBrowserRuntime(): MoyuRuntime {
       const serialized = window.localStorage.getItem("moyumax.browser.modpackPreview");
       if (!serialized) throw new Error("整合包缺少 modrinth.index.json 或 manifest.json");
       const preview = JSON.parse(serialized) as ModpackPreview;
-      return { id: crypto.randomUUID(), preview };
+      const id = crypto.randomUUID();
+      browserOnlineModpackPreviews.set(id, preview);
+      return { id, preview };
     },
     async pickDirectory() {
       return window.localStorage.getItem("moyumax.browser.pickedDirectory");
@@ -2697,11 +2898,136 @@ function createBrowserRuntime(): MoyuRuntime {
       );
       return resource;
     },
+    async getCurseforgeApiKey() {
+      return window.localStorage.getItem(BROWSER_CURSEFORGE_API_KEY);
+    },
+    async setCurseforgeApiKey(key) {
+      const trimmed = key.trim();
+      if (!trimmed) {
+        window.localStorage.removeItem(BROWSER_CURSEFORGE_API_KEY);
+      } else {
+        window.localStorage.setItem(BROWSER_CURSEFORGE_API_KEY, trimmed);
+      }
+    },
+    async testCurseforgeApiKey() {
+      const key = window.localStorage.getItem(BROWSER_CURSEFORGE_API_KEY);
+      if (!key) {
+        throw new Error(
+          "未配置 CurseForge API Key：请在设置 → 来源 中配置；未配置时 CurseForge 内容经 MCI Mirror 内置镜像提供",
+        );
+      }
+      if (key === "invalid") {
+        throw new Error("CurseForge API Key 无效或已过期，请在设置 → 来源 中重新配置");
+      }
+      return "Minecraft";
+    },
+    async searchCurseforgeProjects(query) {
+      requireBrowserCurseforgeKey();
+      const catalog = browserCurseforgeCatalog();
+      const keyword = query.query.trim().toLocaleLowerCase();
+      const hits = keyword
+        ? catalog.filter((hit) =>
+            `${hit.title} ${hit.description}`.toLocaleLowerCase().includes(keyword),
+          )
+        : catalog;
+      return {
+        hits: hits.slice(query.index, query.index + query.pageSize),
+        index: query.index,
+        pageSize: query.pageSize,
+        totalCount: hits.length,
+      };
+    },
+    async listCurseforgeFiles(projectId) {
+      requireBrowserCurseforgeKey();
+      if (!projectId) throw new Error("CurseForge 项目 ID 必须是数字");
+      return browserCurseforgeFiles();
+    },
+    async listCurseforgeCategories() {
+      requireBrowserCurseforgeKey();
+      return browserCurseforgeCategories();
+    },
+    async downloadCurseforgeFile(projectId, fileId, targetDir, fileName) {
+      requireBrowserCurseforgeKey();
+      if (!projectId || !fileId) throw new Error("CurseForge 项目或文件 ID 必须是数字");
+      const trimmed = fileName.trim();
+      if (!trimmed || trimmed.includes("/") || trimmed.includes("\\")) {
+        throw new Error("保存文件名无效");
+      }
+      const downloaded = JSON.parse(
+        window.localStorage.getItem("moyumax.browser.downloadedFiles") ?? "[]",
+      ) as { path: string; versionId: string }[];
+      if (downloaded.some((entry) => entry.path === `${targetDir}/${trimmed}`)) {
+        throw new Error(`同名文件 ${trimmed} 已存在，已拒绝下载且未覆盖`);
+      }
+      const path = `${targetDir}/${trimmed}`;
+      downloaded.push({ path, versionId: fileId });
+      window.localStorage.setItem("moyumax.browser.downloadedFiles", JSON.stringify(downloaded));
+      return path;
+    },
+    async previewCurseforgeModpack(projectId) {
+      requireBrowserCurseforgeKey();
+      if (!projectId) throw new Error("CurseForge 项目 ID 必须是数字");
+      const serialized = window.localStorage.getItem(BROWSER_CURSEFORGE_MODPACK_PREVIEW_KEY);
+      const preview: ModpackPreview = serialized
+        ? (JSON.parse(serialized) as ModpackPreview)
+        : {
+            provider: "curseforge",
+            name: "All the Mods 10",
+            version: "3.2.1",
+            gameVersion: "26.2",
+            loaderKind: "neoforge",
+            loaderVersion: "21.8.54",
+            fileCount: 412,
+            totalBytes: 512 * 1024 * 1024,
+          };
+      const id = crypto.randomUUID();
+      browserOnlineModpackPreviews.set(id, preview);
+      return { id, preview };
+    },
+    async installCurseforgeResource(instanceId, kind, projectId, fileId) {
+      requireBrowserCurseforgeKey();
+      if (!projectId) throw new Error("CurseForge 项目 ID 必须是数字");
+      if (kind !== "resourcepack" && kind !== "shader" && kind !== "mod") {
+        throw new Error("在线安装仅支持资源包、光影与模组");
+      }
+      const instance = browserInstances().find((candidate) => candidate.id === instanceId);
+      if (!instance) throw new Error("目标实例不存在");
+      const file = browserCurseforgeFiles().find((candidate) => candidate.id === fileId);
+      const fileName = file?.fileName ?? (kind === "mod" ? `${projectId}.jar` : `${projectId}.zip`);
+      const resources = browserInstanceResources();
+      const resource: InstanceResource = {
+        id: crypto.randomUUID(),
+        instanceId,
+        kind,
+        displayName: projectId,
+        fileName,
+        relativePath:
+          kind === "shader"
+            ? `.minecraft/shaderpacks/${fileName}`
+            : kind === "mod"
+              ? `.minecraft/mods/${fileName}`
+              : `.minecraft/resourcepacks/${fileName}`,
+        size: file?.size ?? 1024,
+        sha256: "3".repeat(64),
+        enabled: true,
+        worldName: null,
+        importedAtUnixSeconds: Math.floor(Date.now() / 1000),
+      };
+      resources.push(resource);
+      window.localStorage.setItem(
+        BROWSER_INSTANCE_RESOURCES_KEY,
+        JSON.stringify(resources),
+      );
+      return resource;
+    },
     async installModpack(previewId) {
       if (!previewId) throw new Error("整合包预览已失效，请重新选择文件");
+      // 在线预览（Modrinth/CurseForge）按登记 id 取回；本地导入回退到种子键。
+      const registered = browserOnlineModpackPreviews.get(previewId);
+      browserOnlineModpackPreviews.delete(previewId);
       const serialized = window.localStorage.getItem("moyumax.browser.modpackPreview");
-      if (!serialized) throw new Error("整合包预览已失效，请重新选择文件");
-      const preview = JSON.parse(serialized) as ModpackPreview;
+      if (!registered && !serialized) throw new Error("整合包预览已失效，请重新选择文件");
+      const preview = registered ?? (JSON.parse(serialized ?? "null") as ModpackPreview);
       browserEmitModpackProgress({ stage: "game", current: 1, total: 1, item: "正在安装游戏" });
       browserEmitModpackProgress({
         stage: "files",
@@ -3628,6 +3954,11 @@ function browserInstalledContent(): InstalledContent[] {
   return serialized ? (JSON.parse(serialized) as InstalledContent[]) : [];
 }
 
+function browserThemePacks(): Record<string, string> {
+  const serialized = window.localStorage.getItem("moyumax.browser.themePacks");
+  return serialized ? (JSON.parse(serialized) as Record<string, string>) : {};
+}
+
 interface BrowserInstanceModFile {
   fileName: string;
   sizeBytes: number;
@@ -3771,6 +4102,93 @@ function browserAccounts(): AccountSummary[] {
 function browserModpacks(): Record<string, InstalledModpack> {
   const serialized = window.localStorage.getItem(BROWSER_MODPACKS_KEY);
   return serialized ? (JSON.parse(serialized) as Record<string, InstalledModpack>) : {};
+}
+
+/** CurseForge 调用前置检查：未配置 Key 时与 core 同一报错文案。 */
+function requireBrowserCurseforgeKey(): void {
+  if (!window.localStorage.getItem(BROWSER_CURSEFORGE_API_KEY)) {
+    throw new Error(
+      "未配置 CurseForge API Key：请在设置 → 来源 中配置；未配置时 CurseForge 内容经 MCI Mirror 内置镜像提供",
+    );
+  }
+}
+
+/** CurseForge mock 目录（独立种子键，默认返回与 Modrinth mock 同形数据）。 */
+function browserCurseforgeCatalog(): CatalogProjectSummary[] {
+  const serialized = window.localStorage.getItem(BROWSER_CURSEFORGE_CATALOG_KEY);
+  if (serialized) return JSON.parse(serialized) as CatalogProjectSummary[];
+  return [
+    {
+      projectId: "360438",
+      slug: "sodium",
+      title: "Sodium",
+      author: "jellysquid3",
+      description: "现代化渲染引擎，显著提升帧率。",
+      iconUrl: null,
+      downloads: 40_100_000,
+      dateModified: "2026-06-18T10:00:00Z",
+      gameVersions: ["26.1", "26.2"],
+      categories: ["Optimization"],
+      source: "curseforge",
+    },
+    {
+      projectId: "310111",
+      slug: "jei",
+      title: "Just Enough Items (JEI)",
+      author: "mezz",
+      description: "查看物品与配方。",
+      iconUrl: null,
+      downloads: 33_500_000,
+      dateModified: "2026-05-30T10:00:00Z",
+      gameVersions: ["26.2"],
+      categories: ["Map and Information"],
+      source: "curseforge",
+    },
+  ];
+}
+
+/** CurseForge mock 文件列表（独立种子键；第二条故意无 sha1 供大小校验提示测试）。 */
+function browserCurseforgeFiles(): CurseforgeFileSummary[] {
+  const serialized = window.localStorage.getItem(BROWSER_CURSEFORGE_FILES_KEY);
+  if (serialized) return JSON.parse(serialized) as CurseforgeFileSummary[];
+  return [
+    {
+      id: "5500002",
+      versionNumber: "0.6.2+26.2",
+      versionType: "release",
+      datePublished: "2026-06-18T10:00:00Z",
+      gameVersions: ["26.2"],
+      loaders: ["fabric"],
+      downloads: 402_000,
+      fileName: "sodium-fabric-0.6.2.jar",
+      size: 1_234_567,
+      sha1: "a".repeat(40),
+      downloadUrl: "https://edge.forgecdn.net/files/5500/2/sodium-fabric-0.6.2.jar",
+    },
+    {
+      id: "5500001",
+      versionNumber: "0.6.1+26.1",
+      versionType: "beta",
+      datePublished: "2026-05-30T10:00:00Z",
+      gameVersions: ["26.1", "26.2"],
+      loaders: ["fabric"],
+      downloads: 128_500,
+      fileName: "sodium-fabric-0.6.1.jar",
+      size: 1_200_000,
+      sha1: null,
+      downloadUrl: null,
+    },
+  ];
+}
+
+function browserCurseforgeCategories(): CurseforgeCategory[] {
+  const serialized = window.localStorage.getItem(BROWSER_CURSEFORGE_CATEGORIES_KEY);
+  if (serialized) return JSON.parse(serialized) as CurseforgeCategory[];
+  return [
+    { id: 420, name: "Storage", slug: "storage" },
+    { id: 424, name: "API and Library", slug: "library" },
+    { id: 425, name: "Adventure and RPG", slug: "adventure-rpg" },
+  ];
 }
 
 function browserPushRecycleEntry(input: {

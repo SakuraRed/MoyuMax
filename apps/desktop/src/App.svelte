@@ -37,6 +37,7 @@
   } from "./runtime";
   import { isRestorablePage, sanitizeShellState } from "./shell-state";
   import { globalSearchOpen, toggleGlobalSearch } from "./search.svelte";
+  import { applyThemePack } from "./theme-pack.svelte";
 
   type Phase = "loading" | "onboarding" | "home" | "instances" | "install" | "resources" | "netplay" | "tasks" | "data" | "backups" | "crash" | "accounts" | "settings" | "instanceDetail" | "fatal";
 
@@ -145,6 +146,7 @@
         background: await runtime.getUiBackground(),
       });
       await refreshBackgroundImage(runtime);
+      void applyThemePack(runtime, await runtime.getUiThemePack());
       void refreshShellAccount(runtime);
       startupLeaping = true;
       await new Promise((resolve) => setTimeout(resolve, 700));

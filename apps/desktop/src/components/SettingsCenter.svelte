@@ -20,6 +20,7 @@
     type UiTheme,
   } from "../i18n.svelte";
   import { formatBytes } from "../installation";
+  import { applyThemePack, themePackError as themePackErrorState } from "../theme-pack.svelte";
   import type {
     JavaDeleteOutcome,
     JavaEnvironment,
@@ -31,6 +32,7 @@
     ReferencingInstance,
     ReleaseInfo,
     SourcePolicy,
+    ThemePackMeta,
     UiBackground,
     WindowCloseBehavior,
   } from "../runtime";
@@ -170,6 +172,10 @@
   let backgroundColor = $state("#1b1b1f");
   let backgroundPackName = $state("");
   let backgroundBusy = $state(false);
+  let themePackId = $state("default");
+  let importedPacks = $state<ThemePackMeta[]>([]);
+  let themePackBusy = $state(false);
+  let themePackError = $state("");
   let uiPreferencesLoaded = $state(false);
   let memoryMode = $state<"auto" | "custom">("auto");
   let memoryMin = $state("");
@@ -183,6 +189,11 @@
   let sourcePolicyKind = $state<"mirrorFirst" | "officialFirst" | "custom">("mirrorFirst");
   let customMinecraftBase = $state("");
   let customModrinthBase = $state("");
+  let curseforgeKeyConfigured = $state(false);
+  let curseforgeKeyInput = $state("");
+  let curseforgeKeyBusy = $state(false);
+  let curseforgeKeyStatus = $state<"ok" | "err" | "">("");
+  let curseforgeKeyMessage = $state("");
   let proxyMode = $state<"system" | "direct" | "custom">("system");
   let proxyUrl = $state("");
   let searchQuery = $state("");
@@ -234,7 +245,7 @@
         runtime.listInstances(),
       ]);
       if (!staticSettingsLoaded) {
-        const [backupSettings, cliState, updateChecksState, storedBackground, concurrency, speedLimit, closeBehaviorState, sourcePolicy, proxyPreference] = await Promise.all([
+        const [backupSettings, cliState, updateChecksState, storedBackground, concurrency, speedLimit, closeBehaviorState, sourcePolicy, proxyPreference, curseforgeKey] = await Promise.all([
           runtime.getWorldBackupSettings(),
           runtime.getCliEnabled(),
           runtime.getUpdateChecksEnabled(),
@@ -244,6 +255,7 @@
           runtime.getWindowCloseBehavior(),
           runtime.getDownloadSourcePolicy(),
           runtime.getProxyPreference(),
+          runtime.getCurseforgeApiKey(),
         ]);
         backupInterval = backupSettings.intervalMinutes;
         backupKeep = backupSettings.keepCount;
@@ -262,10 +274,17 @@
         if (proxyPreference.mode === "custom") {
           proxyUrl = proxyPreference.url;
         }
+        curseforgeKeyConfigured = Boolean(curseforgeKey);
         if (storedBackground.type === "color") backgroundColor = storedBackground.color;
         if (storedBackground.type === "themePack") {
           backgroundPackName = `${storedBackground.pack.name}（${storedBackground.pack.author}）`;
         }
+        const [storedPackId, imported] = await Promise.all([
+          runtime.getUiThemePack(),
+          runtime.listImportedThemePacks(),
+        ]);
+        themePackId = storedPackId;
+        importedPacks = imported;
         staticSettingsLoaded = true;
       }
       if (!memoryLoaded) {
@@ -310,8 +329,54 @@
     });
   }
 
-  async function selectTheme(value: UiTheme): Promise<void> {
+  async function selectThemePack(packId: string): Promise<void> {
     errorMessage = "";
+    themePackBusy = true;
+    try {
+      await runtime.setUiThemePack(packId);
+      await applyThemePack(runtime, packId);
+      themePackId = packId;
+      themePackError = themePackErrorState();
+    } catch (error) {
+      errorMessage = error instanceof Error ? error.message : String(error);
+    } finally {
+      themePackBusy = false;
+    }
+  }
+
+  async function importThemePackFlow(): Promise<void> {
+    errorMessage = "";
+    themePackBusy = true;
+    try {
+      const path = await runtime.pickThemePackFile();
+      if (!path) return;
+      const meta = await runtime.importThemePackV2(path);
+      importedPacks = await runtime.listImportedThemePacks();
+      await selectThemePack(meta.id);
+      notice = t("appearance.pack.imported").replace("{name}", meta.name);
+    } catch (error) {
+      errorMessage = error instanceof Error ? error.message : String(error);
+    } finally {
+      themePackBusy = false;
+    }
+  }
+
+  async function removeThemePackFlow(): Promise<void> {
+    if (themePackId === "default" || themePackId === "animal-island") return;
+    errorMessage = "";
+    themePackBusy = true;
+    try {
+      await runtime.removeThemePack(themePackId);
+      importedPacks = await runtime.listImportedThemePacks();
+      await selectThemePack("default");
+    } catch (error) {
+      errorMessage = error instanceof Error ? error.message : String(error);
+    } finally {
+      themePackBusy = false;
+    }
+  }
+
+  async function selectTheme(value: UiTheme): Promise<void> {    errorMessage = "";
     try {
       await runtime.setUiTheme(value);
       applyUiPreferences({ theme: value });
@@ -499,6 +564,62 @@
       notice = t("appearance.background.packApplied").replace("{name}", pack.name);
     } catch (error) {
       errorMessage = error instanceof Error ? error.message : String(error);
+    }
+  }
+
+  /** 保存 CurseForge API Key（只写本机 app_settings，界面不回显明文）。 */
+  async function saveCurseforgeKey(): Promise<void> {
+    const key = curseforgeKeyInput.trim();
+    if (!key || curseforgeKeyBusy) return;
+    curseforgeKeyBusy = true;
+    curseforgeKeyStatus = "";
+    curseforgeKeyMessage = "";
+    try {
+      await runtime.setCurseforgeApiKey(key);
+      curseforgeKeyInput = "";
+      curseforgeKeyConfigured = true;
+      curseforgeKeyStatus = "ok";
+      curseforgeKeyMessage = t("settings.source.curseforge.apiKey.saved");
+    } catch (error) {
+      curseforgeKeyStatus = "err";
+      curseforgeKeyMessage = error instanceof Error ? error.message : String(error);
+    } finally {
+      curseforgeKeyBusy = false;
+    }
+  }
+
+  async function clearCurseforgeKey(): Promise<void> {
+    if (curseforgeKeyBusy) return;
+    curseforgeKeyBusy = true;
+    curseforgeKeyStatus = "";
+    curseforgeKeyMessage = "";
+    try {
+      await runtime.setCurseforgeApiKey("");
+      curseforgeKeyConfigured = false;
+      curseforgeKeyStatus = "ok";
+      curseforgeKeyMessage = t("settings.source.curseforge.apiKey.cleared");
+    } catch (error) {
+      curseforgeKeyStatus = "err";
+      curseforgeKeyMessage = error instanceof Error ? error.message : String(error);
+    } finally {
+      curseforgeKeyBusy = false;
+    }
+  }
+
+  async function testCurseforgeKey(): Promise<void> {
+    if (curseforgeKeyBusy) return;
+    curseforgeKeyBusy = true;
+    curseforgeKeyStatus = "";
+    curseforgeKeyMessage = "";
+    try {
+      const game = await runtime.testCurseforgeApiKey();
+      curseforgeKeyStatus = "ok";
+      curseforgeKeyMessage = t("settings.source.curseforge.apiKey.testOk").replace("{game}", game);
+    } catch (error) {
+      curseforgeKeyStatus = "err";
+      curseforgeKeyMessage = error instanceof Error ? error.message : String(error);
+    } finally {
+      curseforgeKeyBusy = false;
     }
   }
 
@@ -1022,13 +1143,44 @@
               <div class="panel-title" style="font-size:13.5px">{t("settings.source.platformTitle")}</div>
               <div class="row" style="margin-top:8px;flex-wrap:wrap">
                 <span style="font-size:13px;font-weight:600">CurseForge</span>
-                <span class="tag neutral">{t("settings.source.curseforge.tag")}</span>
+                {#if curseforgeKeyConfigured}
+                  <span class="tag ok">{t("settings.source.curseforge.tagEnabled")}</span>
+                {:else}
+                  <span class="tag neutral">{t("settings.source.curseforge.tag")}</span>
+                {/if}
                 <span class="dim">{t("settings.source.curseforge.desc")}</span>
               </div>
               <div class="row" style="margin-top:8px;flex-wrap:wrap">
                 <span style="font-size:13px;font-weight:600">Modrinth</span>
                 <span class="tag ok">{t("settings.source.modrinth.tag")}</span>
                 <span class="dim">{t("settings.source.modrinth.desc")}</span>
+              </div>
+              <div class="set-row" style="margin-top:14px" data-setting-id="curseforgeApiKey">
+                <div class="sr-main">
+                  <div class="sr-name">{t("settings.source.curseforge.apiKey.name")}</div>
+                  <div class="sr-desc">{t("settings.source.curseforge.apiKey.desc")}</div>
+                </div>
+                <div class="col" style="gap:8px;align-items:flex-end">
+                  <div class="row" style="gap:8px;flex-wrap:wrap;justify-content:flex-end">
+                    <input
+                      class="input"
+                      style="width:240px"
+                      type="password"
+                      autocomplete="off"
+                      placeholder={curseforgeKeyConfigured ? t("settings.source.curseforge.apiKey.configuredPlaceholder") : t("settings.source.curseforge.apiKey.placeholder")}
+                      aria-label={t("settings.source.curseforge.apiKey.aria")}
+                      bind:value={curseforgeKeyInput}
+                    />
+                    <button type="button" class="btn small primary" disabled={curseforgeKeyBusy || !curseforgeKeyInput.trim()} onclick={() => void saveCurseforgeKey()}>{t("settings.source.curseforge.apiKey.save")}</button>
+                    {#if curseforgeKeyConfigured}
+                      <button type="button" class="btn small ghost" disabled={curseforgeKeyBusy} onclick={() => void clearCurseforgeKey()}>{t("settings.source.curseforge.apiKey.clear")}</button>
+                      <button type="button" class="btn small secondary" disabled={curseforgeKeyBusy} onclick={() => void testCurseforgeKey()}>{curseforgeKeyBusy ? t("settings.source.curseforge.apiKey.testing") : t("settings.source.curseforge.apiKey.test")}</button>
+                    {/if}
+                  </div>
+                  {#if curseforgeKeyMessage}
+                    <span class="cf-key-status" class:err={curseforgeKeyStatus === "err"} role="status">{curseforgeKeyMessage}</span>
+                  {/if}
+                </div>
               </div>
             </div>
           </section>
@@ -1206,6 +1358,32 @@
                   {/each}
                 </div>
               </div>
+              <div class="set-row" class:hl={highlightId === "themePack"} data-setting-id="themePack">
+                <div class="sr-main">
+                  <div class="sr-name">{t("appearance.pack.label")}</div>
+                  <div class="sr-desc">{t("appearance.pack.desc")}</div>
+                  {#if themePackError}<div class="field err" style="margin-top:4px">{themePackError}</div>{/if}
+                </div>
+                <div class="bg-controls">
+                  <select
+                    class="input"
+                    aria-label={t("appearance.pack.aria")}
+                    value={themePackId}
+                    disabled={themePackBusy}
+                    onchange={(event) => void selectThemePack((event.currentTarget as HTMLSelectElement).value)}
+                  >
+                    <option value="default">{t("appearance.pack.default")}</option>
+                    <option value="animal-island">{t("appearance.pack.animalIsland")}</option>
+                    {#each importedPacks as pack}
+                      <option value={pack.id}>{pack.name}</option>
+                    {/each}
+                  </select>
+                  <button type="button" class="btn small ghost" disabled={themePackBusy} onclick={() => void importThemePackFlow()}>{t("appearance.pack.import")}</button>
+                  {#if themePackId !== "default" && themePackId !== "animal-island"}
+                    <button type="button" class="btn small danger-soft" disabled={themePackBusy} onclick={() => void removeThemePackFlow()}>{t("appearance.pack.remove")}</button>
+                  {/if}
+                </div>
+              </div>
               <div class="set-row" class:hl={highlightId === "background"} data-setting-id="background">
                 <div class="sr-main">
                   <div class="sr-name">{t("appearance.background.label")}</div>
@@ -1367,6 +1545,7 @@
                   <button
                     type="button"
                     class="btn small primary"
+                    style="white-space:normal;height:auto;min-height:28px;line-height:1.3;padding-top:4px;padding-bottom:4px"
                     disabled={downloading || !updateResult.installer}
                     onclick={() => void downloadUpdate()}
                   >{downloading ? t("settings.update.downloading") : t("settings.update.download")}</button>
@@ -1507,6 +1686,13 @@
 </AppShell>
 
 <style>
+  .cf-key-status {
+    font-size: 12px;
+    color: var(--text-3);
+  }
+  .cf-key-status.err {
+    color: var(--danger);
+  }
   .set-search {
     position: relative;
     margin-bottom: 16px;

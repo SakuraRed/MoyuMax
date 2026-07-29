@@ -4,6 +4,7 @@
   import { markAvatarFailed, shellAccount, skinAvatarUrl } from "../accounts.svelte";
   import { netplayRoom, refreshNetplayRoom, setNetplayRoom } from "../netplay.svelte";
   import { openGlobalSearch } from "../search.svelte";
+  import { activeThemePackId } from "../theme-pack.svelte";
   import { t, uiBackground, uiBackgroundImageUrl, uiContrast, uiMotion, uiTheme } from "../i18n.svelte";
   import type { MoyuRuntime, NavigationKey } from "../runtime";
   import Fish from "./Fish.svelte";
@@ -20,6 +21,8 @@
     searchVisible?: boolean;
     navigationDisabled?: boolean;
     activeNavigation?: NavigationKey;
+    /** 主题包页面键(data-page),缺省取 activeNavigation */
+    pageKey?: string;
     /** 在线状态:false 时标题栏网络点变灰黄 */
     online?: boolean;
     connectionStatus?: string;
@@ -42,6 +45,7 @@
     onBack = undefined,
     navigationDisabled = false,
     activeNavigation = "home",
+    pageKey = undefined,
     online = true,
     connectionStatus = t("shell.status.defaultConnection"),
     taskCount = 0,
@@ -112,6 +116,8 @@
   data-motion={uiMotion()}
   data-contrast={uiContrast()}
   data-background={uiBackground().type}
+  data-page={pageKey ?? activeNavigation}
+  data-tp={activeThemePackId()}
   style={backgroundStyle}
 >
   <header class="titlebar" data-tauri-drag-region="deep">

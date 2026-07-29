@@ -1251,6 +1251,7 @@
   titleSuffix={instance?.name ?? ""}
   dataDirectory={settings.dataDirectory}
   activeNavigation="instances"
+  pageKey="instanceDetail"
   onBack={onExit}
   {onNavigate}
   {runtime}
